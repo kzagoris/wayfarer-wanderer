@@ -1,0 +1,24 @@
+{
+  "symbol": "example.message",
+  "coordinateBase": 1,
+  "locations": [
+    {
+      "path": "app/src/main/java/example/Main.java",
+      "line": 5,
+      "column": 39,
+      "role": "reference"
+    },
+    {
+      "path": "library/src/main/kotlin/example/Greeting.kt",
+      "line": 3,
+      "column": 5,
+      "role": "declaration"
+    },
+    {
+      "path": "service/src/main/java/example/Service.java",
+      "line": 18,
+      "column": 27,
+      "role": "reference"
+    }
+  ]
+}

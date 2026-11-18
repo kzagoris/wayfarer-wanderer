@@ -1,0 +1,7 @@
+plugins { id 'application' }
+dependencies {
+    implementation project(':library')
+    implementation project(':app')
+    implementation 'org.springframework.boot:spring-boot-starter-web:4.0.6'
+}
+application { mainClass = 'example.Service' }

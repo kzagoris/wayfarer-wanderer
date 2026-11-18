@@ -1,0 +1,17 @@
+<?xml version="1.0" ?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>example</groupId>
+  <artifactId>mixed-fixture</artifactId>
+  <version>1</version>
+  <packaging>pom</packaging>
+  <modules>
+    <module>library</module>
+    <module>app</module>
+    <module>service</module>
+  </modules>
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <kotlin.version>2.2.20</kotlin.version>
+  </properties>
+</project>
