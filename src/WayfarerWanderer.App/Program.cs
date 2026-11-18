@@ -1,5 +1,7 @@
 using Avalonia;
 using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
+using Passenger.Core;
 using Avalonia.Controls.ApplicationLifetimes;
 using Passenger.Editor;
 using Passenger.Text;
@@ -10,6 +12,7 @@ public partial class EditorApplication : Application
 {
     public override void Initialize()
     {
+        BackgroundWork.Install(work => Dispatcher.UIThread.Post(work));
         FallbackFonts.Install(Passenger.App.PlatformFallback.Named, _ => { });
         AvaloniaXamlLoader.Load(this);
     }

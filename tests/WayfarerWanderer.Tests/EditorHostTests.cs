@@ -3,7 +3,7 @@ using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Input.Raw;
-using Passenger.Editor;
+using Avalonia.Input.Platform;
 using Passenger.Text;
 using WayfarerWanderer.App;
 
@@ -39,6 +39,26 @@ public class EditorHostTests
                 PhysicalKey.Z, "z");
             Assert.Equal("class Main", document.Snapshot.ToString());
             Assert.Equal(before, editor.CaretPosition);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task PasteShortcutUsesWindowClipboard()
+    {
+        var document = new TextDocument();
+        var window = EditorApplication.CreateWindow(document);
+        window.Show();
+        try
+        {
+            Assert.True(window.Editor.Focus());
+            await window.Clipboard!.SetTextAsync("pasted");
+            window.KeyPress(Key.V, OperatingSystem.IsMacOS() ? RawInputModifiers.Meta : RawInputModifiers.Control,
+                PhysicalKey.V, "v");
+            Assert.Equal("pasted", document.Snapshot.ToString());
         }
         finally
         {
