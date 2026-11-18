@@ -1,24 +1,20 @@
 using Avalonia;
-using Avalonia.Controls;
+using Avalonia.Markup.Xaml;
 using Avalonia.Controls.ApplicationLifetimes;
 using Passenger.Editor;
 using Passenger.Text;
 
 namespace WayfarerWanderer.App;
 
-public class EditorApplication : Application
+public partial class EditorApplication : Application
 {
     public override void Initialize()
     {
         FallbackFonts.Install(Passenger.App.PlatformFallback.Named, _ => { });
-        Styles.Add(new Avalonia.Themes.Fluent.FluentTheme());
+        AvaloniaXamlLoader.Load(this);
     }
 
-    public static Window CreateWindow(TextDocument document) => new()
-    {
-        Title = "Wayfarer Wanderer",
-        Content = new CodeEditor { Document = document, Keymap = DefaultKeymaps.ForPlatform() }
-    };
+    public static EditorWindow CreateWindow(TextDocument? document) => new(document);
 
     public override void OnFrameworkInitializationCompleted()
     {

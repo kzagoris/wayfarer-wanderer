@@ -27,7 +27,7 @@ public class EditorHostTests
         window.Show();
         try
         {
-            var editor = Assert.IsType<CodeEditor>(window.Content);
+            var editor = window.Editor;
             Assert.True(editor.Focus());
             window.KeyPress(Key.End, RawInputModifiers.None, PhysicalKey.End, null);
             var before = editor.CaretPosition;
