@@ -187,6 +187,29 @@ public class EditorWindowTests
         }
     }
 
+    [AvaloniaFact]
+    public void FindActionShortcutSearchesAndRunsTheSelectedAction()
+    {
+        var window = EditorApplication.CreateWindow(new TextDocument("class Main {}"));
+        window.Show();
+        try
+        {
+            var modifier = OperatingSystem.IsMacOS() ? RawInputModifiers.Meta : RawInputModifiers.Control;
+            window.KeyPress(Key.A, modifier | RawInputModifiers.Shift, PhysicalKey.A, null);
+            var query = Assert.Single(window.GetVisualDescendants().OfType<TextBox>(), box => box.IsEffectivelyVisible);
+            Assert.True(query.IsFocused);
+            window.KeyTextInput("breakpoint");
+            window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+            Assert.True(window.Breakpoints.IsMarked(0));
+            Assert.False(query.IsEffectivelyVisible);
+            Assert.True(window.Editor.IsFocused);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     private static MenuItem ToggleMenuItem(Window window)
     {
         var menu = window.GetVisualDescendants().OfType<Menu>().Single();
