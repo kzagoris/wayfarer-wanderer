@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "templateVersion": "1",
+  "templates": [
+    "application/java/maven",
+    "application/java/gradle",
+    "application/kotlin/maven",
+    "application/kotlin/gradle",
+    "boot/java/maven",
+    "boot/java/gradle",
+    "boot/kotlin/maven",
+    "boot/kotlin/gradle"
+  ],
+  "versions": {
+    "maven": "3.9.11",
+    "mavenWrapper": "3.3.4",
+    "gradle": "9.7.1",
+    "kotlin": "2.4.20",
+    "springBoot": "3.5.7",
+    "junit": "5.12.2"
+  },
+  "wrapperSha256": {
+    "gradle/gradlew": "a5a5c199ba02189ae8c46a334223371a20599d9c298ef65e7540ede4a3f72d59",
+    "gradle/gradlew.bat": "e6cdfd84532b9d55752e1bc09113b02a9550a1abf022125639b4d3fa283d125f",
+    "gradle/gradle/wrapper/gradle-wrapper.jar": "7a9ce74cff467ca1bf60a4fcd9f05185acceda4d0f382434d393e17864262c5d",
+    "maven/mvnw": "cae96cef89ebea3531221f4ae17c23cf8edf67d00eae8306d4186ae1bbed4d02",
+    "maven/mvnw.cmd": "677b5d04e388b8f91ee246fde9ae579b6fe78f09b6cf793bc459a7c137ba9d1f"
+  }
+}

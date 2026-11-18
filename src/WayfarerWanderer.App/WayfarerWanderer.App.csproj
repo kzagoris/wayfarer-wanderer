@@ -5,10 +5,14 @@
   <ItemGroup>
     <AvaloniaResource Include="../../vendor/passenger/src/Passenger.App/Theme/Tokens.axaml" Link="Theme/Tokens.axaml" />
     <AvaloniaResource Include="../../vendor/passenger/src/Passenger.App/Theme/Icons.axaml" Link="Theme/Icons.axaml" />
+    <Content Include="../../templates/jvm/**/*" Link="templates/jvm/%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="../../vendor/passenger/THIRD_PARTY_NOTICES.md;../../vendor/passenger/LICENSE;../../vendor/passenger/src/Passenger.Editor/Fonts/OFL.txt"
           Link="notices/Passenger/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="../../vendor/passenger/src/Passenger.App/Theme/PlatformFallback.cs" Link="PlatformFallback.cs" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Avalonia.Headless" />
+    <PackageReference Include="Velopack" />
     <ProjectReference Include="../WayfarerWanderer.Jvm/WayfarerWanderer.Jvm.csproj" />
     <ProjectReference Include="../../vendor/passenger/src/Passenger.Editor/Passenger.Editor.csproj" />
     <PackageReference Include="Avalonia.Desktop" />

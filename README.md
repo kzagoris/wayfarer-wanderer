@@ -48,4 +48,26 @@ The inventory includes the file tree and the dependency manifest's libraries
 and runtime assets. Passenger's build-time analyzers generate the editor keys.
 Passenger.Core uses Microsoft.Diagnostics.NETCore.Client for process diagnostics.
 
-Continue with the [Milestone 2 handoff](docs/milestone-2-handoff.md).
+## JVM workflows and release validation
+
+The JVM session imports a trusted Maven or Gradle workspace before it exposes
+build, test and launch targets. Builds and tests use the workspace wrapper, and
+each test invocation owns a fresh report directory so a failed build cannot
+inherit older successful reports. Window close cancels the session's operations.
+
+The `--acceptance <case-file> --results <directory>` application mode runs the
+normal host through Avalonia's headless Skia platform and writes a PNG plus
+structured observations. Trust remains disabled unless a case explicitly
+exercises and accepts the prompt. Run the complete selector matrix with:
+
+```sh
+python3 tools/acceptance.py --results artifacts/test-results/acceptance
+```
+
+New Project generates application or Spring Boot starters for Java or Kotlin on
+Maven or Gradle. Projects are staged beside the destination and published only
+after every file has landed. The generated wrapper, source, test, launch
+configuration and notices form one complete project.
+
+See [release validation](docs/validation/release.md) for packaged application
+checks and the required platform evidence.

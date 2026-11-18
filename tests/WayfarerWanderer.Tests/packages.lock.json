@@ -292,17 +292,22 @@
         "dependencies": {
           "Avalonia.Desktop": "[12.1.6, )",
           "Avalonia.HarfBuzz": "[12.1.6, )",
+          "Avalonia.Headless": "[12.1.6, )",
           "Avalonia.Themes.Fluent": "[12.1.6, )",
           "HarfBuzzSharp": "[14.4.0.100, )",
           "HarfBuzzSharp.NativeAssets.Linux": "[14.4.0.100, )",
           "Passenger.Editor": "[0.4.0, )",
           "SkiaSharp": "[4.156.0, )",
           "SkiaSharp.NativeAssets.Linux": "[4.156.0, )",
+          "Velopack": "[1.2.161, )",
           "WayfarerWanderer.Jvm": "[1.0.0, )"
         }
       },
       "wayfarerwanderer.jvm": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "Passenger.Core": "[0.4.0, )"
+        }
       },
       "Avalonia": {
         "type": "CentralTransitive",
@@ -422,6 +427,12 @@
         "requested": "[4.156.0, )",
         "resolved": "4.156.0",
         "contentHash": "H+s60e8mNUO8jiRuQQpMXQjcPnFTYb168t59mB/UAewSHNv5hXLfP8xiKeSDc4jAF/aMusjamXx9Di2FIurl/w=="
+      },
+      "Velopack": {
+        "type": "CentralTransitive",
+        "requested": "[1.2.161, )",
+        "resolved": "1.2.161",
+        "contentHash": "OpHNacIumnkhaaX3ZlQ/TCR4YPOJvud2/PAOoWb6o+mIrLwIVA275I5wAgt4q/1O2VrJeDwR1qFQyqzG4lUArg=="
       }
     },
     "net11.0/linux-arm64": {

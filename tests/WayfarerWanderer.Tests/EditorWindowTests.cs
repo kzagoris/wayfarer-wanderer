@@ -210,10 +210,57 @@ public class EditorWindowTests
         }
     }
 
+    [AvaloniaFact]
+    public async Task OpenWorkspaceConnectsBuildTestRunAndDebugActionsToOneSession()
+    {
+        string source = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../tests/fixtures/jvm/maven"));
+        string root = Directory.CreateTempSubdirectory("wayfarer-editor-workspace-").FullName;
+        CopyTree(source, root);
+        string trust = WorkspaceTrust.FolderToTrust(root) ?? root;
+        WorkspaceTrust.Trust(root);
+        var window = EditorApplication.CreateWindow(new TextDocument("class Main {}"));
+        window.Show();
+        try
+        {
+            await window.OpenWorkspaceAsync(root, TestContext.Current.CancellationToken);
+            Assert.NotNull(window.Session);
+            Assert.Equal(root, window.Session.Root);
+            Assert.Equal(3, window.Session.Snapshot!.Modules.Count);
+            Assert.All(
+                new[]
+                {
+                    WayfarerWanderer.App.EditorActions.Build,
+                    WayfarerWanderer.App.EditorActions.RunTests,
+                    WayfarerWanderer.App.EditorActions.Run,
+                    WayfarerWanderer.App.EditorActions.Debug,
+                    WayfarerWanderer.App.EditorActions.NewProject
+                },
+                id => Assert.True(window.Actions[id].Available(), id));
+            Assert.True(window.GetVisualDescendants().OfType<TabControl>().Single().IsVisible);
+        }
+        finally
+        {
+            window.Close();
+            WorkspaceTrust.TakeBack(trust);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static void CopyTree(string source, string destination)
+    {
+        foreach (string file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            string target = Path.Combine(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
+        }
+    }
+
     private static MenuItem ToggleMenuItem(Window window)
     {
         var menu = window.GetVisualDescendants().OfType<Menu>().Single();
-        var run = Assert.IsType<MenuItem>(Assert.Single(menu.Items));
-        return Assert.IsType<MenuItem>(Assert.Single(run.Items));
+        var run = Assert.IsType<MenuItem>(menu.Items.Cast<MenuItem>().Single(item => item.Header?.ToString() == "_Run"));
+        return Assert.IsType<MenuItem>(run.Items.Cast<MenuItem>().Single(item =>
+            item.Header?.ToString() == "Toggle Breakpoint"));
     }
 }

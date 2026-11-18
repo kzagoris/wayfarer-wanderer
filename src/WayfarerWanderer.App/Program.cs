@@ -1,4 +1,6 @@
 using Avalonia;
+using Avalonia.Headless;
+using Velopack;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Passenger.Core;
@@ -30,7 +32,31 @@ public partial class EditorApplication : Application
 
 internal static class Program
 {
+    public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<EditorApplication>()
+        .UseSkia().UseHarfBuzz();
+
     [STAThread]
-    private static void Main(string[] args) => AppBuilder.Configure<EditorApplication>()
-        .UsePlatformDetect().UseHarfBuzz().StartWithClassicDesktopLifetime(args);
+    private static int Main(string[] args)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            VelopackApp.Build().SetArgs(args).SetAutoApplyOnStartup(false).Run();
+        }
+        AcceptanceOptions? acceptance;
+        try
+        {
+            acceptance = AcceptanceOptions.Parse(args);
+        }
+        catch (FormatException error)
+        {
+            Console.Error.WriteLine($"wayfarer: {error.Message}");
+            return 2;
+        }
+        if (acceptance is not null)
+        {
+            return AcceptanceRunner.Run(acceptance);
+        }
+
+        return BuildAvaloniaApp().UsePlatformDetect().StartWithClassicDesktopLifetime(args);
+    }
 }

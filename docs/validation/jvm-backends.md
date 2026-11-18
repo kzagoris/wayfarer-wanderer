@@ -17,4 +17,17 @@ A directly launched Gradle service returned HTTP 200 and `Hello, Wayfarer` from 
 
 ## Release decision
 
-Backend selection remains open. The observations above exercise command-line tools. Wayfarer still needs trusted import and model comparison, language-server reference and rename results, and debugger and process-lifecycle verification through its own session.
+The release now uses the selected wrapper for every build, test and launch. All
+eight generated starters were built with their own wrapper, their JUnit tests
+ran, command-line applications printed the expected greeting, and both Boot
+flavours on both build tools served their handler and stopped without an
+orphaned application child. Maven 3.9.11 and Gradle 9.7.1 are the recorded
+wrapper versions. Every generated Gradle build uses Kotlin DSL; imported
+Groovy and Kotlin settings are both recognized.
+
+Semantic-language and debugger backend selection remains open. The checked-in
+session has conservative JVM process/import and debug-adapter boundaries, but
+it does **not** claim JDT LS/Kotlin language-server parity or a Java DAP backend
+has passed the cross-language completion, reference, atomic rename, Kotlin
+breakpoint, step-into-Java and local-inspection matrix. Under the release plan,
+those are blocking prerequisites for a supported semantic/debug release.
