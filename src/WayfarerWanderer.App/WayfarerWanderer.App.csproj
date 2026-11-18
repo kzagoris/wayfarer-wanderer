@@ -9,6 +9,7 @@
           Link="notices/Passenger/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="../../vendor/passenger/src/Passenger.App/Theme/PlatformFallback.cs" Link="PlatformFallback.cs" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
+    <ProjectReference Include="../WayfarerWanderer.Jvm/WayfarerWanderer.Jvm.csproj" />
     <ProjectReference Include="../../vendor/passenger/src/Passenger.Editor/Passenger.Editor.csproj" />
     <PackageReference Include="Avalonia.Desktop" />
     <PackageReference Include="Avalonia.HarfBuzz" />

@@ -297,8 +297,12 @@
           "HarfBuzzSharp.NativeAssets.Linux": "[14.4.0.100, )",
           "Passenger.Editor": "[0.4.0, )",
           "SkiaSharp": "[4.156.0, )",
-          "SkiaSharp.NativeAssets.Linux": "[4.156.0, )"
+          "SkiaSharp.NativeAssets.Linux": "[4.156.0, )",
+          "WayfarerWanderer.Jvm": "[1.0.0, )"
         }
+      },
+      "wayfarerwanderer.jvm": {
+        "type": "Project"
       },
       "Avalonia": {
         "type": "CentralTransitive",

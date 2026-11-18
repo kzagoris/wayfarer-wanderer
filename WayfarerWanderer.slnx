@@ -1,4 +1,5 @@
 <Solution>
   <Project Path="src/WayfarerWanderer.App/WayfarerWanderer.App.csproj" />
+  <Project Path="src/WayfarerWanderer.Jvm/WayfarerWanderer.Jvm.csproj" />
   <Project Path="tests/WayfarerWanderer.Tests/WayfarerWanderer.Tests.csproj" />
 </Solution>
