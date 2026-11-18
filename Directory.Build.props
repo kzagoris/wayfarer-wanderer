@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>11.0</AnalysisLevel>
+    <UseArtifactsOutput>true</UseArtifactsOutput>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(CI)' == 'true'">true</RestoreLockedMode>
+    <RuntimeIdentifiers>osx-arm64;osx-x64;win-x64;win-arm64;linux-x64;linux-arm64;linux-musl-x64;linux-musl-arm64</RuntimeIdentifiers>
+    <EnableRuntimePackDownload Condition="'$(RuntimeIdentifier)' == ''">false</EnableRuntimePackDownload>
+    <EnableAppHostPackDownload Condition="'$(RuntimeIdentifier)' == ''">false</EnableAppHostPackDownload>
+    <DisableTransitiveFrameworkReferenceDownloads>true</DisableTransitiveFrameworkReferenceDownloads>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../vendor/passenger/src/Passenger.App/Theme/PlatformFallback.cs" Link="PlatformFallback.cs" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <ProjectReference Include="../../vendor/passenger/src/Passenger.Editor/Passenger.Editor.csproj" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.HarfBuzz" />
+    <PackageReference Include="SkiaSharp" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux" />
+    <PackageReference Include="HarfBuzzSharp" />
+    <PackageReference Include="HarfBuzzSharp.NativeAssets.Linux" />
+  </ItemGroup>
+</Project>
