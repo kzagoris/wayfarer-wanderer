@@ -24,4 +24,28 @@ public class DevelopmentLoopTests
         Assert.Equal("setup failed", results[3].Detail);
         Assert.Equal(TestOutcome.Failed, results[3].Outcome);
     }
+
+    [Fact]
+    public void CompileFailureKeepsEarlierPassOutOfCurrentRun()
+    {
+        var parent = Directory.CreateTempSubdirectory();
+        try
+        {
+            var first = new TestInvocation(parent.FullName);
+            File.WriteAllText(Path.Combine(first.ReportDirectory, "TEST-example.xml"),
+                """<testsuite><testcase classname="Example" name="passes"/></testsuite>""");
+            Assert.Single(first.Complete(0).Cases);
+
+            var next = new TestInvocation(parent.FullName);
+            var failed = next.Complete(1);
+            Assert.NotEqual(first.Id, failed.InvocationId);
+            Assert.Equal(1, failed.ExitCode);
+            Assert.Empty(failed.Cases);
+            Assert.Single(Directory.GetFiles(first.ReportDirectory));
+        }
+        finally
+        {
+            parent.Delete(true);
+        }
+    }
 }

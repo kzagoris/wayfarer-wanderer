@@ -1,0 +1,9 @@
+// The wrapper caller supplies a fresh directory for each invocation.
+def reportsRoot = new File(System.getProperty('wayfarer.testReports'))
+gradle.beforeProject { project ->
+    project.tasks.withType(org.gradle.api.tasks.testing.Test).configureEach { task ->
+        def taskDirectory = task.path.substring(1).replace(':', '/')
+        task.reports.junitXml.required.set(true)
+        task.reports.junitXml.outputLocation.set(new File(reportsRoot, taskDirectory))
+    }
+}

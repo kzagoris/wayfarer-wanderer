@@ -1,1 +1,5 @@
-<Project Sdk="Microsoft.NET.Sdk" />
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <None Update="Gradle/test-reports.gradle" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
