@@ -13,7 +13,9 @@ dotnet build WayfarerWanderer.slnx -c Debug --no-restore
 rm -f artifacts/test-results/editorhost.trx
 dotnet test tests/WayfarerWanderer.Tests -c Debug --no-build --filter FullyQualifiedName~EditorHostTests \
   --logger 'trx;LogFileName=editorhost.trx' --results-directory artifacts/test-results
-python3 tools/check-trx.py artifacts/test-results/editorhost.trx WayfarerWanderer.Tests.EditorHostTests.TypingThenUndoRestoresTextAndCaret
+python3 tools/check-trx.py artifacts/test-results/editorhost.trx \
+  WayfarerWanderer.Tests.EditorHostTests.TypingThenUndoRestoresTextAndCaret \
+  WayfarerWanderer.Tests.EditorHostTests.PasteShortcutUsesWindowClipboard
 ```
 
 After switching revisions, run `git submodule update --init --recursive` before restore.
@@ -45,3 +47,5 @@ python3 tools/check-publish.py artifacts/publish/WayfarerWanderer.App/release_li
 The inventory includes the file tree and the dependency manifest's libraries
 and runtime assets. Passenger's build-time analyzers generate the editor keys.
 Passenger.Core uses Microsoft.Diagnostics.NETCore.Client for process diagnostics.
+
+Continue with the [Milestone 2 handoff](docs/milestone-2-handoff.md).

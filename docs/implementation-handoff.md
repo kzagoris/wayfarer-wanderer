@@ -1,5 +1,7 @@
 # Implementation handoff
 
+Continue from the [Milestone 2 handoff](milestone-2-handoff.md). The original Milestone 1 brief follows.
+
 Implement Wayfarer Wanderer, a standalone .NET and Avalonia IDE for Java and Kotlin/JVM that shares components with Passenger. Start in `/home/kzagoris/Projects/wayfarer-wanderer`. The GitHub repository is https://github.com/kzagoris/wayfarer-wanderer. The existing Passenger checkout is at `/home/kzagoris/Projects/passenger`.
 
 Read these first:
