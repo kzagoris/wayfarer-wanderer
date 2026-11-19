@@ -61,11 +61,11 @@ public sealed partial class EditorWindow : Window
         MenuItem newProject = MenuAction(EditorActions.NewProject);
         MenuItem runMenu = new()
         {
-            Header = "_Run",
+            Header = "Run",
             Items = { build, test, run, debug, toggle, MenuAction(EditorActions.Continue),
                 MenuAction(EditorActions.StepInto), MenuAction(EditorActions.StepOver), MenuAction(EditorActions.StepOut), stop }
         };
-        MenuItem fileMenu = new() { Header = "_File", Items = { newProject, MenuAction(EditorActions.OpenWorkspace),
+        MenuItem fileMenu = new() { Header = "File", Items = { newProject, MenuAction(EditorActions.OpenWorkspace),
             MenuAction(EditorActions.OpenSource), MenuAction(EditorActions.SaveSource) } };
         fileMenu.SubmenuOpened += (_, _) => RefreshActions(fileMenu);
         runMenu.SubmenuOpened += (_, _) => RefreshActions(runMenu);

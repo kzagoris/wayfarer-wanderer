@@ -119,6 +119,35 @@
     <Style Selector="MenuItem /template/ Popup#PART_Popup">
         <Setter Property="VerticalOffset" Value="-16" />
     </Style>
+    <!-- A menu bar's item opens its menu right below it: its frame takes no shadow room to move back by, so a submenu's
+         -16 above would lay the menu over the bar's names. -->
+    <Style Selector="Menu > MenuItem /template/ Popup#PART_Popup">
+        <Setter Property="VerticalOffset" Value="0" />
+    </Style>
+    <!-- A menu bar's title as Passenger's bar draws one (Button.widget, Button.menuBarItem): its words on no ground, a
+         widget's height centred in the bar, the hover's ground under the pointer and the pressed one while its menu is
+         open, in the text's own colour rather than a chosen menu item's. -->
+    <Style Selector="Menu > MenuItem">
+        <Setter Property="Margin" Value="2,0" />
+        <Setter Property="Padding" Value="8,0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="Height" Value="{DynamicResource Passenger.ControlHeight}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="CornerRadius" Value="{DynamicResource Passenger.ToolRadius}" />
+        <Setter Property="Foreground" Value="{DynamicResource Passenger.Text}" />
+    </Style>
+    <Style Selector="Menu > MenuItem:selected /template/ Border#PART_LayoutRoot">
+        <Setter Property="Background" Value="{DynamicResource Passenger.Hover}" />
+    </Style>
+    <Style Selector="Menu > MenuItem:open /template/ Border#PART_LayoutRoot">
+        <Setter Property="Background" Value="{DynamicResource Passenger.Selected}" />
+    </Style>
+    <Style Selector="Menu > MenuItem:pressed /template/ Border#PART_LayoutRoot">
+        <Setter Property="Background" Value="{DynamicResource Passenger.Selected}" />
+    </Style>
+    <Style Selector="Menu > MenuItem /template/ ContentPresenter#PART_HeaderPresenter">
+        <Setter Property="Foreground" Value="{DynamicResource Passenger.Text}" />
+    </Style>
     <!-- A rule between a menu's groups in the colour of its edge. -->
     <Style Selector="ContextMenu Separator">
         <Setter Property="Background" Value="{DynamicResource Passenger.PopupBorder}" />

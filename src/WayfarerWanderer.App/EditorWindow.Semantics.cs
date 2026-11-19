@@ -41,7 +41,7 @@ public sealed partial class EditorWindow
 
     private MenuItem SemanticMenu()
     {
-        MenuItem menu = new() { Header = "_Code", Items = { MenuAction(CompleteAction), MenuAction(RenameAction), MenuAction(UndoRenameAction) } };
+        MenuItem menu = new() { Header = "Code", Items = { MenuAction(CompleteAction), MenuAction(RenameAction), MenuAction(UndoRenameAction) } };
         menu.SubmenuOpened += (_, _) => RefreshActions(menu);
         return menu;
     }
