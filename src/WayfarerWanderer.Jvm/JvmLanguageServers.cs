@@ -4,23 +4,26 @@ using Passenger.Core;
 namespace WayfarerWanderer.Jvm;
 
 /// <summary>Uses user-installed servers. No language-server binary or license is redistributed.</summary>
-internal static class JvmLanguageServers
+public static class JvmLanguageServers
 {
-    public static ProcessStartInfo Command(string language, string root, string state)
+    private static string Installation(string variable, string prefix, string? folder = null)
     {
         string extensions = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".vscode", "extensions");
-        string Installation(string variable, string prefix, string? folder = null)
-        {
-            string? configured = Environment.GetEnvironmentVariable(variable);
-            if (!string.IsNullOrEmpty(configured)) return Path.GetFullPath(configured);
-            string? extension = Directory.Exists(extensions)
-                ? Directory.GetDirectories(extensions, prefix + "-*").OrderDescending(StringComparer.Ordinal).FirstOrDefault()
-                : null;
-            return extension is null ? throw new InvalidOperationException(folder is null
-                ? $"Set {variable} to your installed language server directory."
-                : $"Unpack the language server into {Path.Combine(folder, "<version>")}, or set {variable} to its directory.") : Path.Combine(extension, "server");
-        }
+        string? configured = Environment.GetEnvironmentVariable(variable);
+        if (!string.IsNullOrEmpty(configured)) return Path.GetFullPath(configured);
+        string? extension = Directory.Exists(extensions)
+            ? Directory.GetDirectories(extensions, prefix + "-*").OrderDescending(StringComparer.Ordinal).FirstOrDefault()
+            : null;
+        return extension is null ? throw new InvalidOperationException(folder is null
+            ? $"Set {variable} to your installed language server directory."
+            : $"Unpack the language server into {Path.Combine(folder, "<version>")}, or set {variable} to its directory.") : Path.Combine(extension, "server");
+    }
 
+    /// <summary>The JDT LS directory that holds <c>plugins/</c>.</summary>
+    public static string JdtHome() => Installation("WAYFARER_JDTLS_HOME", "redhat.java");
+
+    public static ProcessStartInfo Command(string language, string root, string state)
+    {
         if (language == "kotlin")
         {
             string? configured = Environment.GetEnvironmentVariable(KotlinServerInstalls.Variable);
@@ -30,7 +33,7 @@ internal static class JvmLanguageServers
             return ChildProcesses.Command(KotlinServerInstalls.Launcher(home), ["--stdio", "--system-path", state], root);
         }
 
-        string jdt = Installation("WAYFARER_JDTLS_HOME", "redhat.java");
+        string jdt = JdtHome();
         string java = OperatingSystem.IsWindows() ? "java.exe" : "java";
         string bundled = Path.Combine(Path.GetDirectoryName(jdt)!, "jre");
         string? runtime = Directory.Exists(bundled)
@@ -43,6 +46,8 @@ internal static class JvmLanguageServers
             ["-Declipse.application=org.eclipse.jdt.ls.core.id1", "-Dosgi.bundles.defaultStartLevel=4",
              "-Declipse.product=org.eclipse.jdt.ls.core.product", "-Dosgi.sharedConfiguration.area=" + config,
              "-Dosgi.sharedConfiguration.area.readOnly=true", "-Dosgi.configuration.cascaded=true",
+             // Eclipse metadata (.project, .classpath, .settings) stays in the server's data folder, not the user's tree.
+             "-Djava.import.generatesMetadataFilesAtProjectRoot=false",
              "--add-modules=ALL-SYSTEM", "--add-opens=java.base/java.util=ALL-UNNAMED", "--add-opens=java.base/java.lang=ALL-UNNAMED",
              "-jar", jar, "-configuration", Path.Combine(state, "configuration"), "-data", Path.Combine(state, "workspace")], root);
     }

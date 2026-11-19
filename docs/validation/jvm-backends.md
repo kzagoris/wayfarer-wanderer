@@ -93,53 +93,62 @@ which depends on JDK launcher internals.
 
 `JvmMeasurementTests` runs under `WAYFARER_MEASURE=1` and writes
 `artifacts/test-results/jvm-measurements-<tool>.json`. It used a fresh project copy, with
-the user's Gradle and Maven caches and the Gradle daemon left warm. The servers
-were JDT LS 1.57.0 (redhat.java 1.53.0) and the JetBrains Kotlin server 0.0.12.
+the user's Gradle and Maven caches and the Gradle daemon left warm. Both
+language servers run together, so the memory peak covers the pair.
+
+Recorded 2026-11-19 on an Intel Core i5-6600 (4 cores) with 39 GiB of RAM,
+Omarchy (Arch Linux), linux-x64. The tools ran on OpenJDK 27 (2026-09-15) from
+`PATH`, with `JAVA_HOME` unset. The servers were JDT LS 1.49.0 (redhat.java
+1.44.0, the only installed Java extension) and the JetBrains Kotlin server
+2027.1 EAP build 271.2085.0, found under
+`~/.local/share/wayfarer/kotlin-lsp/271.2085.0/`. The static import reads only
+build files, so the snapshot's JDK fields stay empty and the record carries an
+`environmentJdk` field instead.
 
 | | Gradle | Maven |
 | --- | --- | --- |
-| Cold import (static build-file import, no wrapper) | 17 ms | 21 ms |
-| Warm reopen | 3 ms | 3 ms |
-| Java completion, first useful result | 26.2 s (indexing) | not obtained |
-| Java completion, warm median of 5 | 16 ms | — |
-| Kotlin completion | server refused to start | server refused to start |
-| Peak working set, language-server processes | 1,650 MiB | 1,172 MiB |
+| Cold import (static build-file import, no wrapper) | 32 ms | 5 ms |
+| Warm reopen | 0 ms | 0 ms |
+| Kotlin classes handed to JDT LS (wrapper compile and attach) | not needed | 13.1 s |
+| Java completion of a Kotlin member, first useful result | 4.4 s | 0.4 s after the hand-over |
+| Java completion, warm median of 5 | 27 ms | 13 ms |
+| Kotlin completion of a Java member, first useful result | 8.2 s | 9.4 s |
+| Kotlin completion, warm median of 5 | 258 ms | 235 ms |
+| Peak working set, both language servers | 2,234 MiB | 2,655 MiB |
 
-The Kotlin server 0.0.12 exits at start with "Please download a new build".
-This build has expired, and the Kotlin numbers need a current kotlin-lsp. On
-Maven, JDT LS did not offer the Kotlin top-level `message` through `GreetingKt`
-from Java. The Kotlin library is not compiled into JDT LS's view, so
-Java-to-Kotlin completion on Maven depends on the Kotlin side of the semantic
-backend. The memory peak covers JDT LS, the launcher of the expired Kotlin
-server and a Gradle process that JDT LS started on Gradle.
-Do not take these numbers as the both-servers budget until the Kotlin server
-runs. Under the plan, the release integrations remain unselected until then.
+Earlier runs the same day, before the Maven hand-over existed, gave similar
+Gradle and Kotlin figures and memory peaks between 2,307 and 2,860 MiB.
 
-## Kotlin server distribution terms
+## Kotlin classes for Java on Maven
 
-Checked 2026-11-19 against the GitHub repositories and the installed build.
+Buildship puts Kotlin's class output on JDT LS's classpath for Gradle. m2e has
+no equivalent, so on Maven JDT LS could not see any Kotlin declaration.
+`KotlinClassBridge` closes the gap. It compiles the Kotlin modules with the
+project's wrapper and copies only classes carrying `kotlin.Metadata` into a
+folder Wayfarer owns. It then calls the `wayfarer.kotlinClassFolders` command,
+which attaches that folder to each Kotlin module as an exported library, so the
+module and its dependents both see it. The editor refreshes when the Java server
+starts and after each Kotlin save, coalescing saves made during a refresh. Each
+refresh uses a new folder, so JDT LS reindexes it. Java sees saved Kotlin
+changes after the wrapper compile, not unsaved edits.
 
-**JetBrains Kotlin server ([Kotlin/kotlin-lsp](https://github.com/Kotlin/kotlin-lsp)).**
-It is free to download and use. Its README describes it as Alpha and built on
-IntelliJ IDEA and "proprietary parts of JetBrains Air and Fleet products",
-which makes it partly closed source. The repository's `LICENSE.txt` is
-Apache 2.0, but that can cover only the published parts. The standalone build
-271.2085.0 has a `license/` folder for third-party components such as YourKit
-and Javolution. Nothing in it licenses JetBrains' own code. Release
-v262.7569.0 (2026-06-09) moved the VS Code extension from Apache 2.0 to the
-JetBrains Free Plugin License. No published terms permit bundling the server
-with Wayfarer.
+The command lives in a small JDT LS extension under `src/WayfarerWanderer.Jvm/Jdtls/`.
+It is compiled with `javac` against the installed server's plugins and cached
+under `~/.local/share/wayfarer/jdtls-bundles/`, so no Eclipse binary is
+redistributed. It implements JDT LS's internal `IDelegateCommandHandler`, the
+same mechanism fwcd/vscode-java-kotlin uses. A Java extension update can change
+that interface. `JdtlsKotlinBundleTests` runs in the default suite whenever JDT
+LS is installed. It builds and loads the extension and calls its command, and it
+was checked to fail when the command is not registered. In the product, a broken
+extension appears in the Build tool window instead of failing silently.
+`KotlinClassBridgeTests` (`WAYFARER_LANGUAGE_ACCEPTANCE=1`) proves Java
+completes a Kotlin function on Maven and sees a newly added one after a refresh.
 
-**fwcd Kotlin language server ([fwcd/kotlin-language-server](https://github.com/fwcd/kotlin-language-server)).**
-It is MIT-licensed and could be redistributed. Its README now says that with
-an official server available, "this project can be considered deprecated".
-The last release is 1.3.13 (2025-01-18), and nothing has been pushed since
-2025-06-02. It is not a candidate for the mixed-language fixtures above.
+JDT LS now starts with `-Djava.import.generatesMetadataFilesAtProjectRoot=false`.
+Before, it wrote `.project`, `.classpath` and `.settings` into every module of the
+user's tree; the bridge test asserts none appear.
 
-**Decision.** Wayfarer does not ship a Kotlin server. Users install the
-JetBrains build themselves. Wayfarer looks for it in this order:
-`WAYFARER_KOTLIN_LSP_HOME`, then the newest version under
-`~/.local/share/wayfarer/kotlin-lsp/<version>/`, then the VS Code extension.
-A first-run download straight from JetBrains, with the user's consent, would
-also avoid redistribution. Bundling needs written redistribution terms from
-JetBrains (see `docs/initial-spec.md`, Language backends).
+The alternative was the JetBrains server, which can serve Java and Kotlin from
+one model. The installed, unlicensed 271.2085.0 build did not complete Java on
+Maven within five minutes, and Java support there needs a paid licence, so it was
+not selected.

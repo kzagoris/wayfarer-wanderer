@@ -19,6 +19,7 @@ public sealed class JvmLanguageClient : IAsyncDisposable
     private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonElement>> pending = new();
     private readonly Task reader;
     private readonly Task errors;
+    private readonly TaskCompletionSource ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private string lastError = "";
     private int nextId;
 
@@ -29,6 +30,8 @@ public sealed class JvmLanguageClient : IAsyncDisposable
         folders = [new { uri = new Uri(root).AbsoluteUri, name = Path.GetFileName(root) }];
         input = process.StandardInput.BaseStream;
         output = new BufferedStream(process.StandardOutput.BaseStream);
+        // Servers that never wait for readiness must not leave its failure unobserved.
+        ready.Task.ContinueWith(task => _ = task.Exception, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
         errors = ReadErrorsAsync();
         reader = ReadAsync();
     }
@@ -42,14 +45,26 @@ public sealed class JvmLanguageClient : IAsyncDisposable
         try
         {
             ProcessStartInfo start = JvmLanguageServers.Command(language, root, state);
+            // JDT LS loads Wayfarer's extension for Kotlin class folders. Without it Java still works; Kotlin stays invisible on Maven.
+            string[] bundles = [];
+            string? bundleProblem = null;
+            if (language == "java")
+            {
+                try { bundles = [await JdtlsKotlinBundle.EnsureAsync(JvmLanguageServers.JdtHome(), cancel).ConfigureAwait(false)]; }
+                catch (Exception error) when (error is not OperationCanceledException)
+                {
+                    bundleProblem = "Java cannot see Kotlin classes on Maven: " + error.Message;
+                }
+            }
             start.RedirectStandardInput = start.RedirectStandardOutput = start.RedirectStandardError = true;
             Process process = await ChildProcesses.StartAsync(start).ConfigureAwait(false);
             ChildProcesses.HoldFamily(process);
-            client = new(process, state, root);
+            client = new(process, state, root) { BundleProblem = bundleProblem };
             await client.RequestAsync("initialize", new
             {
                 processId = Environment.ProcessId, rootUri = new Uri(root).AbsoluteUri, rootPath = root,
                 workspaceFolders = client.folders,
+                initializationOptions = new { bundles },
                 capabilities = new { workspace = new { configuration = true, workspaceFolders = true, workspaceEdit = new { documentChanges = true } },
                     textDocument = new { completion = new { completionItem = new { snippetSupport = false } } } }
             }, cancel).ConfigureAwait(false);
@@ -65,6 +80,12 @@ public sealed class JvmLanguageClient : IAsyncDisposable
     }
 
     public bool HasExited => reader.IsCompleted;
+
+    /// <summary>Why the JDT LS Kotlin class extension is unavailable, or null.</summary>
+    public string? BundleProblem { get; private init; }
+
+    /// <summary>Completes when the server reports that its import finished.</summary>
+    public Task WaitUntilReadyAsync(CancellationToken cancel) => ready.Task.WaitAsync(TimeSpan.FromMinutes(5), cancel);
 
     public Task NotifyAsync(string method, object parameters, CancellationToken cancel) =>
         SendAsync(new { jsonrpc = "2.0", method, @params = parameters }, cancel);
@@ -126,7 +147,13 @@ public sealed class JvmLanguageClient : IAsyncDisposable
                 await output.ReadExactlyAsync(body).ConfigureAwait(false);
                 using JsonDocument doc = JsonDocument.Parse(body);
                 JsonElement message = doc.RootElement;
-                if (!message.TryGetProperty("id", out var id)) continue;
+                if (!message.TryGetProperty("id", out var id))
+                {
+                    if (message.TryGetProperty("method", out var notice) && notice.GetString() == "language/status" &&
+                        message.GetProperty("params").TryGetProperty("type", out var status) && status.GetString() is "ServiceReady" or "Started")
+                        ready.TrySetResult();
+                    continue;
+                }
                 if (message.TryGetProperty("method", out var method))
                 {
                     await RespondAsync(id, method.GetString(), message).ConfigureAwait(false);
@@ -139,6 +166,7 @@ public sealed class JvmLanguageClient : IAsyncDisposable
         }
         catch (Exception error)
         {
+            ready.TrySetException(new IOException("Language server connection ended. " + lastError, error));
             foreach (var answer in pending.Values)
                 answer.TrySetException(new IOException("Language server connection ended. " + lastError, error));
         }

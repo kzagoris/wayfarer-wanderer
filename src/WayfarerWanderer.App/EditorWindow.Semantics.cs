@@ -16,6 +16,9 @@ public sealed partial class EditorWindow
     private readonly Dictionary<string, (int Version, TextSnapshot Text)> sentSources = new(PathNames.Comparer);
     private CancellationTokenSource semanticLifetime = new();
     private IReadOnlyList<SemanticFileChange>? lastRename;
+    private KotlinClassBridge? kotlinClasses;
+    private Task kotlinRefresh = Task.CompletedTask;
+    private bool kotlinRefreshQueued;
     private bool semanticBusy;
 
     private static string? Language(string path) => Path.GetExtension(path) switch { ".kt" => "kotlin", ".java" => "java", _ => null };
@@ -54,6 +57,9 @@ public sealed partial class EditorWindow
         foreach (var server in languageClients.Values) UnawaitedWork.Observe(server.DisposeAsync().AsTask());
         languageClients.Clear();
         sentSources.Clear();
+        kotlinClasses?.Dispose();
+        kotlinClasses = null;
+        kotlinRefreshQueued = false;
         lastRename = null;
     }
 
@@ -88,6 +94,7 @@ public sealed partial class EditorWindow
                 token.ThrowIfCancellationRequested();
             }
             languageClients.Add(language, client);
+            if (language == "java") RefreshKotlinClasses();
         }
         foreach (string source in OpenSourcePaths.Where(p => Language(p) == language))
         {
@@ -111,6 +118,30 @@ public sealed partial class EditorWindow
             sentSources[source] = (version, snapshot);
         }
         return client;
+    }
+
+    /// <summary>On Maven, recompiles Kotlin and hands its classes to the Java server, so Java sees Kotlin declarations.
+    /// Saves during a refresh coalesce into one more refresh.</summary>
+    private void RefreshKotlinClasses()
+    {
+        if (Session is not { IsTrusted: true, Snapshot: { } snapshot } || !KotlinClassBridge.Applies(snapshot) ||
+            !languageClients.TryGetValue("java", out var java) || kotlinRefreshQueued) return;
+        kotlinRefreshQueued = true;
+        kotlinClasses ??= new();
+        KotlinClassBridge bridge = kotlinClasses;
+        CancellationToken token = semanticLifetime.Token;
+        kotlinRefresh = RunAsync(kotlinRefresh);
+        UnawaitedWork.Observe(kotlinRefresh);
+
+        async Task RunAsync(Task previous)
+        {
+            try { await previous; } catch (Exception) { /* reported by the earlier refresh */ }
+            if (token.IsCancellationRequested) return;
+            kotlinRefreshQueued = false;
+            try { await bridge.RefreshAsync(java, snapshot, cancel: token); }
+            catch (OperationCanceledException) { }
+            catch (Exception error) when (!token.IsCancellationRequested) { BuildTool.Append(error.Message); }
+        }
     }
 
     private static object Point(TextPosition p) => new { line = p.Line, character = p.Column };

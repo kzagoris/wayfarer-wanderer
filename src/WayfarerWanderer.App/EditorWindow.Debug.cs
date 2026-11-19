@@ -39,6 +39,7 @@ public sealed partial class EditorWindow
         var saved = FileText.SaveOver(path, file, document.Snapshot.ToString());
         documents[path] = (document, saved.Written);
         document.MarkSaved();
+        if (Language(path) == "kotlin") RefreshKotlinClasses();
     }
 
     private async Task PickWorkspaceAsync()

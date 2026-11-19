@@ -41,6 +41,8 @@ public sealed class JvmMeasurementTests
             Dictionary<string, object?> completion = [];
             List<string> failures = [];
             List<JvmLanguageClient> clients = [];
+            using var kotlinClasses = new KotlinClassBridge();
+            long? kotlinClassesMs = null;
             try
             {
                 // Both servers run together, so the memory peak covers the pair.
@@ -54,6 +56,13 @@ public sealed class JvmMeasurementTests
                     {
                         JvmLanguageClient client = await JvmLanguageClient.StartAsync(root, language, cancel);
                         clients.Add(client);
+                        if (language == "java" && KotlinClassBridge.Applies(snapshot))
+                        {
+                            // As in the product: Maven needs Kotlin's classes before Java can see Kotlin declarations.
+                            var refresh = Stopwatch.StartNew();
+                            await kotlinClasses.RefreshAsync(client, snapshot, cancel: cancel);
+                            kotlinClassesMs = (long)refresh.Elapsed.TotalMilliseconds;
+                        }
                         completion[language] = await CompleteAsync(client, language, Path.Combine(root, file), line, column, expected, cancel);
                     }
                     catch (Exception error) when (error is IOException or TimeoutException or InvalidOperationException)
@@ -78,12 +87,15 @@ public sealed class JvmMeasurementTests
                 ["os"] = RuntimeInformation.OSDescription,
                 ["rid"] = RuntimeInformation.RuntimeIdentifier,
                 ["processors"] = Environment.ProcessorCount,
+                // The static import reads build files only, so it leaves JDK homes unresolved; record the JDK the tools ran on.
+                ["environmentJdk"] = EnvironmentJdk(),
                 ["toolingJdk"] = snapshot.ToolingToolchain,
                 ["moduleJdks"] = snapshot.Modules.Select(m => new { m.Name, Runtime = m.RuntimeToolchain }).ToArray(),
                 ["languageServers"] = ServerVersions(),
                 ["cacheState"] = "Fresh project copy; user Gradle/Maven caches and any running Gradle daemon kept warm.",
                 ["coldImportMs"] = (long)cold.TotalMilliseconds,
                 ["warmReopenMs"] = (long)warm.TotalMilliseconds,
+                ["kotlinClassesForJavaMs"] = kotlinClassesMs,
                 ["completion"] = completion,
                 ["peakServerWorkingSetMiB"] = peak / (1024 * 1024),
                 ["serverProcesses"] = processes,
@@ -103,7 +115,7 @@ public sealed class JvmMeasurementTests
         }
     }
 
-    private static async Task<object> CompleteAsync(JvmLanguageClient client, string language, string path,
+    internal static async Task<object> CompleteAsync(JvmLanguageClient client, string language, string path,
         int line, int column, string expected, CancellationToken cancel)
     {
         string uri = new Uri(path).AbsoluteUri;
@@ -132,7 +144,7 @@ public sealed class JvmMeasurementTests
         return new { firstUsefulMs = (long)first.TotalMilliseconds, attempts, warmMedianMs = warm[warm.Count / 2], warmMs = warm };
     }
 
-    private static IEnumerable<string> Labels(JsonElement result)
+    internal static IEnumerable<string> Labels(JsonElement result)
     {
         JsonElement items = result.ValueKind == JsonValueKind.Object ? result.GetProperty("items") : result;
         return items.ValueKind == JsonValueKind.Array
@@ -163,6 +175,23 @@ public sealed class JvmMeasurementTests
             peak = Math.Max(peak, total);
             try { await Task.Delay(250, stop); }
             catch (OperationCanceledException) { return (peak, [.. seen]); }
+        }
+    }
+
+    private static object EnvironmentJdk()
+    {
+        string? home = Environment.GetEnvironmentVariable("JAVA_HOME");
+        string java = string.IsNullOrEmpty(home) ? "java" : Path.Combine(home, "bin", "java");
+        try
+        {
+            using Process process = Process.Start(new ProcessStartInfo(java, "-version") { RedirectStandardError = true, RedirectStandardOutput = true })!;
+            string version = process.StandardError.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? string.Empty;
+            process.WaitForExit();
+            return new { javaHome = home, version };
+        }
+        catch (System.ComponentModel.Win32Exception error)
+        {
+            return new { javaHome = home, version = $"unavailable: {error.Message}" };
         }
     }
 
