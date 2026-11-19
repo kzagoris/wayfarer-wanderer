@@ -75,12 +75,33 @@ public sealed class DirectJvmLaunchAdapter : IJvmLaunchAdapter
         return ChildProcesses.Command(java, arguments, workingDirectory, configuration.Environment);
     }
 
+    /// <summary>Builds with the project wrapper, asks it for the module's runtime classpath and launches the main class directly.</summary>
+    public static async Task<ProcessStartInfo> ResolvedCommandAsync(
+        WorkspaceSnapshot snapshot, JvmLaunchConfiguration configuration, CancellationToken cancellationToken = default)
+    {
+        JvmModule module = snapshot.Module(configuration.Module)
+            ?? throw new InvalidDataException($"Unknown module '{configuration.Module}'.");
+        IReadOnlyList<string> runtime = await JvmDebugClasspath.ResolveAsync(snapshot, configuration, cancellationToken).ConfigureAwait(false);
+        JvmModule resolved = module with { Classpath = new JvmClasspath(module.Classpath.Compile, module.Classpath.Test, runtime) };
+        WorkspaceSnapshot launch = snapshot with { Modules = [.. snapshot.Modules.Select(m => m == module ? resolved : m)] };
+        return new DirectJvmLaunchAdapter().Command(launch, configuration);
+    }
+
     private static string FirstNotEmpty(params string?[] values) =>
         values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
 }
 
 public sealed class WrapperJvmLaunchAdapter : IJvmLaunchAdapter
 {
+    /// <summary>
+    /// Maven 3 runs a CLI goal on every project in the reactor, so with <c>-pl module -am</c> it also runs
+    /// <c>exec:java</c> or <c>spring-boot:run</c> on the aggregator and libraries. Without <c>-am</c>, sibling
+    /// modules do not resolve. A reactor module without an explicit build task is therefore launched directly.
+    /// </summary>
+    public static bool LaunchesDirectly(WorkspaceSnapshot snapshot, JvmLaunchConfiguration configuration) =>
+        snapshot.BuildSystem == JvmBuildSystem.Maven && configuration.BuildTask.Length == 0 &&
+        snapshot.Module(configuration.Module) is { } module && !Passenger.Core.PathNames.Same(module.Root, snapshot.Root);
+
     public ProcessStartInfo Command(WorkspaceSnapshot snapshot, JvmLaunchConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -178,6 +199,9 @@ public sealed class JvmLaunch
         CancellationToken cancellationToken = default)
     {
         WorkspaceTrust.Check(snapshot.Root);
-        return await runner.RunAsync(adapter.Command(snapshot, configuration), output, cancellationToken).ConfigureAwait(false);
+        ProcessStartInfo start = adapter is WrapperJvmLaunchAdapter && WrapperJvmLaunchAdapter.LaunchesDirectly(snapshot, configuration)
+            ? await DirectJvmLaunchAdapter.ResolvedCommandAsync(snapshot, configuration, cancellationToken).ConfigureAwait(false)
+            : adapter.Command(snapshot, configuration);
+        return await runner.RunAsync(start, output, cancellationToken).ConfigureAwait(false);
     }
 }

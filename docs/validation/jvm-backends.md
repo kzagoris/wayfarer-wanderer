@@ -42,3 +42,69 @@ On Windows x64 with Temurin 24.0.2 the following cases ran through the adapter.
 | Gradle application | F9 in the headless editor marked Main.kt line 4. Debug stopped there. Step Into entered Greeting.java line 5, Locals showed `name = "Wayfarer"`, and Step Out returned to Kotlin. Continue printed the greeting. |
 | Maven application | The Java main called Kotlin. A breakpoint in Greeting.kt line 3 exposed `name = "Wayfarer"`; Step Into reached Prefix.java line 5. Continue printed the greeting. |
 | Gradle and Maven Boot services | A breakpoint set after startup stopped each HTTP request at Service.java line 18. Step Into reached Greeting.java on Gradle and Greeting.kt on Maven. Both returned HTTP 200 with `Hello, Wayfarer`, stopped and served the same request after restarting on the same port. |
+
+## Launch fidelity and process ownership (task 6)
+
+`JvmProcessOwnershipTests` runs under `WAYFARER_DEBUG_ACCEPTANCE=1`. On
+2026-11-19, on Windows x64 (Intel i7-8700K, 12 threads, 32 GB, Temurin 24.0.2
+for the tooling JVM and every module, Gradle 9.7.1, Maven 3.9.11), all eleven
+debug acceptance cases passed. These are the Kotlin-to-Java editor stepping, both Boot handlers,
+five ownership cases and two launch comparisons.
+
+**Launch.** A direct launch builds with the project wrapper, takes the module's
+runtime classpath from the wrapper, and starts `java -cp … main` in the module
+directory. On Gradle it printed the same `Hello, Wayfarer` as `:app:run`, with
+the same classpath source (`sourceSets.main.runtimeClasspath`) and working
+directory. On the Maven reactor, the build task cannot launch a module. With
+`-pl app -am exec:java`, Maven 3 runs the goal on the aggregator first and fails
+with `ClassNotFoundException: example.Main`. Without `-am` the sibling library
+does not resolve. Run therefore launches a Maven reactor module directly unless
+the launch configuration names a build task. The debugger uses the same
+resolved command, so Run and Debug start the same process. Direct launch is the
+selected mode. The IDE owns exactly that application child, and no build tool
+sits between them.
+
+**Ownership.** Each case started an unrelated JVM, debugged the Boot service on
+an ephemeral port, sent HTTP and then ended the session. It ended by Stop on
+Gradle, by closing the window on Gradle and Maven, or by switching the window to
+another folder on Gradle and Maven. In every case the service and adapter JVMs
+exited and the port refused connections. The unrelated JVM and every Gradle
+daemon survived. A new session then bound the same port and served
+`Hello, Wayfarer`.
+
+**Debug adapter.** The adapter is Wayfarer's own `WayfarerDebugAdapter.java`,
+run from source on the tooling JDK's `jdk.jdi` module. Wayfarer ships the
+source and redistributes no adapter binary. JDI is part of the user's JDK
+(GPLv2 with the Classpath Exception). It needs no JDT LS plug-in, so the
+debugger does not depend on the semantic backend.
+
+**Known limit.** The target listens for JDWP on an ephemeral loopback port
+with no authentication until the adapter attaches. Any local process can
+connect during that window. Moving the listener into the adapter (`server=n`)
+is still open.
+
+## Measurements
+
+`JvmMeasurementTests` runs under `WAYFARER_MEASURE=1` and writes
+`artifacts/test-results/jvm-measurements-<tool>.json`. It used a fresh project copy, with
+the user's Gradle and Maven caches and the Gradle daemon left warm. The servers
+were JDT LS 1.57.0 (redhat.java 1.53.0) and the JetBrains Kotlin server 0.0.12.
+
+| | Gradle | Maven |
+| --- | --- | --- |
+| Cold import (static build-file import, no wrapper) | 17 ms | 21 ms |
+| Warm reopen | 3 ms | 3 ms |
+| Java completion, first useful result | 26.2 s (indexing) | not obtained |
+| Java completion, warm median of 5 | 16 ms | — |
+| Kotlin completion | server refused to start | server refused to start |
+| Peak working set, language-server processes | 1,650 MiB | 1,172 MiB |
+
+The Kotlin server 0.0.12 exits at start with "Please download a new build".
+This build has expired, and the Kotlin numbers need a current kotlin-lsp. On
+Maven, JDT LS did not offer the Kotlin top-level `message` through `GreetingKt`
+from Java. The Kotlin library is not compiled into JDT LS's view, so
+Java-to-Kotlin completion on Maven depends on the Kotlin side of the semantic
+backend. The memory peak covers JDT LS, the launcher of the expired Kotlin
+server and a Gradle process that JDT LS started on Gradle.
+Do not take these numbers as the both-servers budget until the Kotlin server
+runs. Under the plan, the release integrations remain unselected until then.

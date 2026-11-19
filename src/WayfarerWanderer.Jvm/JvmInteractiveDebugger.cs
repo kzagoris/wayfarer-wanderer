@@ -40,10 +40,7 @@ public sealed class JvmInteractiveDebugger : IAsyncDisposable
         {
             JvmModule module = snapshot.Module(configuration.Module)
                 ?? throw new InvalidDataException($"Unknown module '{configuration.Module}'.");
-            var paths = await JvmDebugClasspath.ResolveAsync(snapshot, configuration, cancel).ConfigureAwait(false);
-            var resolved = module with { Classpath = new JvmClasspath(module.Classpath.Compile, module.Classpath.Test, paths) };
-            var launchSnapshot = snapshot with { Modules = [.. snapshot.Modules.Select(m => m == module ? resolved : m)] };
-            ProcessStartInfo launch = new DirectJvmLaunchAdapter().Command(launchSnapshot, configuration);
+            ProcessStartInfo launch = await DirectJvmLaunchAdapter.ResolvedCommandAsync(snapshot, configuration, cancel).ConfigureAwait(false);
             launch.ArgumentList.Insert(0, "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:0");
             launch.RedirectStandardOutput = launch.RedirectStandardError = true;
             target = await ChildProcesses.StartAsync(launch).ConfigureAwait(false);
