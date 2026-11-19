@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Passenger.Core;
 using WayfarerWanderer.Jvm;
 
@@ -217,6 +218,53 @@ public sealed class JvmRuntimeFoundationTests
     }
 
     [Fact]
+    public async Task BuildAndRunUseTheProjectJdkOverTheEnvironments()
+    {
+        string root = TestDirectory();
+        string jdk = Directory.CreateDirectory(Path.Combine(root, "chosen-jdk")).FullName;
+        File.WriteAllText(Path.Combine(root, "pom.xml"), "<project xmlns=\"http://maven.apache.org/POM/4.0.0\"><modelVersion>4.0.0</modelVersion><groupId>example</groupId><artifactId>app</artifactId><version>1</version></project>");
+        Directory.CreateDirectory(Path.Combine(root, ".wayfarer"));
+        File.WriteAllText(ProjectJdk.FileOf(root), ProjectJdk.Serialize(jdk));
+        if (OperatingSystem.IsWindows())
+        {
+            File.WriteAllText(Path.Combine(root, "mvnw.cmd"), "@echo off\r\necho JAVA_HOME=%JAVA_HOME%\r\n");
+        }
+        else
+        {
+            string wrapper = Path.Combine(root, "mvnw");
+            File.WriteAllText(wrapper, "#!/bin/sh\necho \"JAVA_HOME=$JAVA_HOME\"\n");
+            File.SetUnixFileMode(wrapper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        WorkspaceTrust.Trust(root);
+        try
+        {
+            WorkspaceSnapshot snapshot = await new WorkspaceImporter().ImportAsync(root, 1, TestContext.Current.CancellationToken);
+            Assert.Equal(jdk, snapshot.ToolingToolchain.Home);
+            Assert.All(snapshot.Modules, module => Assert.Equal(jdk, module.RuntimeToolchain.Home));
+
+            ProcessResult built = await new JvmBuild().RunAsync(
+                snapshot,
+                new JvmBuildRequest(root, ".", "compile", []),
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(0, built.ExitCode);
+            Assert.Contains(built.Output, line => line.Line == "JAVA_HOME=" + jdk);
+            ProcessStartInfo run = new WrapperJvmLaunchAdapter().Command(
+                snapshot,
+                new JvmLaunchConfiguration { Name = "Run", Module = ".", MainClass = "example.Main" });
+            Assert.Equal(jdk, run.Environment["JAVA_HOME"]);
+
+            File.Delete(ProjectJdk.FileOf(root));
+            WorkspaceSnapshot unrecorded = await new WorkspaceImporter().ImportAsync(root, 2, TestContext.Current.CancellationToken);
+            string? environment = Environment.GetEnvironmentVariable("JAVA_HOME");
+            Assert.Equal(string.IsNullOrEmpty(environment) ? null : environment, unrecorded.ToolingToolchain.Home);
+        }
+        finally
+        {
+            WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root) ?? root);
+        }
+    }
+
+    [Fact]
     public async Task CancellationKillsRunnerProcessTree()
     {
         ProcessStartInfo start = OperatingSystem.IsWindows()
@@ -237,13 +285,42 @@ public sealed class JvmRuntimeFoundationTests
             await Assert.ThrowsAnyAsync<OperationCanceledException>(
                 async () => await runner.RunAsync(start, cancellationToken: cancellation.Token));
             Assert.True(startedId > 0);
-            Assert.False(ChildProcesses.Leaves(startedId));
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.False(ChildProcesses.Leaves(startedId));
+            }
+            else
+            {
+                // Leaves stays true off Windows until Passenger's 10 s prune finds the group empty, so ask the system.
+                Assert.True(
+                    await GroupEndsAsync(startedId, TimeSpan.FromSeconds(5)),
+                    $"Process group {startedId} still had a process 5 s after cancellation: the runner left part of its tree running.");
+            }
         }
         finally
         {
             ChildProcesses.Started -= started;
         }
     }
+
+    private static async Task<bool> GroupEndsAsync(int group, TimeSpan limit)
+    {
+        Stopwatch waited = Stopwatch.StartNew();
+        while (waited.Elapsed < limit)
+        {
+            if (kill(-group, 0) != 0 && Marshal.GetLastPInvokeError() == NoSuchProcess)
+            {
+                return true;
+            }
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+        return false;
+    }
+
+    private const int NoSuchProcess = 3;
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int kill(int pid, int signal);
 
     private static WorkspaceSnapshot Snapshot(string root)
     {

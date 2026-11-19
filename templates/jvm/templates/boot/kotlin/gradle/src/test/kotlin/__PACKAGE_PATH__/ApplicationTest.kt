@@ -1,11 +1,12 @@
 package {{PACKAGE}}
-import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureRestTestClient
 import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.boot.test.web.client.TestRestTemplate
-import org.springframework.boot.test.web.server.LocalServerPort
+import org.springframework.test.web.servlet.client.RestTestClient
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@AutoConfigureRestTestClient
 class ApplicationTest {
- @LocalServerPort private var port: Int = 0
- @Test fun servesGreeting() { assertEquals("Hello from {{NAME}}!", TestRestTemplate().getForObject("http://localhost:$port/", String::class.java)) }
+    @Autowired private lateinit var client: RestTestClient
+    @Test fun servesGreeting() { client.get().uri("/").exchange().expectStatus().isOk().expectBody(String::class.java).isEqualTo("Hello from {{NAME}}!") }
 }

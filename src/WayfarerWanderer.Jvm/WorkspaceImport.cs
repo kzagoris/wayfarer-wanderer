@@ -53,12 +53,13 @@ public sealed class MavenWorkspaceImportAdapter : IWorkspaceImportAdapter
         XElement project = document.Root ?? throw new InvalidDataException($"'{pomPath}' has no project element.");
         XNamespace ns = project.Name.Namespace;
         int? release = IntegerProperty(project, ns, "maven.compiler.release");
+        string? jdk = ProjectJdk.HomeOf(workspaceRoot);
         List<JvmModule> modules = [];
         string parentName = Text(project, ns, "artifactId") ?? new DirectoryInfo(workspaceRoot).Name;
         List<string> names = [.. project.Element(ns + "modules")?.Elements(ns + "module").Select(element => element.Value.Trim()) ?? []];
         if (names.Count == 0)
         {
-            modules.Add(ReadMavenModule(workspaceRoot, parentName, project, ns, release));
+            modules.Add(ReadMavenModule(workspaceRoot, parentName, project, ns, release, jdk));
         }
         else
         {
@@ -74,18 +75,18 @@ public sealed class MavenWorkspaceImportAdapter : IWorkspaceImportAdapter
                 XDocument moduleDocument = XDocument.Load(modulePom, LoadOptions.PreserveWhitespace);
                 XElement moduleProject = moduleDocument.Root ?? throw new InvalidDataException($"'{modulePom}' has no project element.");
                 int? moduleRelease = IntegerProperty(moduleProject, moduleProject.Name.Namespace, "maven.compiler.release") ?? release;
-                modules.Add(ReadMavenModule(moduleRoot, name, moduleProject, moduleProject.Name.Namespace, moduleRelease));
+                modules.Add(ReadMavenModule(moduleRoot, name, moduleProject, moduleProject.Name.Namespace, moduleRelease, jdk));
             }
         }
-        JvmToolchain toolchain = new(Environment.GetEnvironmentVariable("JAVA_HOME"), release, null);
+        JvmToolchain toolchain = new(jdk, release, null);
         WorkspaceSnapshot snapshot = new(generation, workspaceRoot, JvmBuildSystem.Maven, pomPath, toolchain, modules);
         return Task.FromResult(snapshot);
     }
 
-    private static JvmModule ReadMavenModule(string root, string fallbackName, XElement project, XNamespace ns, int? release)
+    private static JvmModule ReadMavenModule(string root, string fallbackName, XElement project, XNamespace ns, int? release, string? jdk)
     {
         string name = Text(project, ns, "artifactId") ?? fallbackName;
-        JvmToolchain toolchain = new(Environment.GetEnvironmentVariable("JAVA_HOME"), release, null);
+        JvmToolchain toolchain = new(jdk, release, null);
         return new JvmModule(
             fallbackName,
             name,
@@ -146,6 +147,7 @@ public sealed class GradleWorkspaceImportAdapter : IWorkspaceImportAdapter
                 }
             }
         }
+        string? jdk = ProjectJdk.HomeOf(workspaceRoot);
         List<JvmModule> modules = [];
         if (names.Count == 0)
         {
@@ -159,17 +161,17 @@ public sealed class GradleWorkspaceImportAdapter : IWorkspaceImportAdapter
             {
                 throw new InvalidDataException($"Gradle module '{name}' does not exist.");
             }
-            modules.Add(await ReadGradleModuleAsync(root, name, cancellationToken).ConfigureAwait(false));
+            modules.Add(await ReadGradleModuleAsync(root, name, jdk, cancellationToken).ConfigureAwait(false));
         }
-        JvmToolchain toolchain = new(Environment.GetEnvironmentVariable("JAVA_HOME"), null, null);
+        JvmToolchain toolchain = new(jdk, null, null);
         return new WorkspaceSnapshot(generation, workspaceRoot, JvmBuildSystem.Gradle, settings, toolchain, modules);
     }
 
-    private static async Task<JvmModule> ReadGradleModuleAsync(string root, string name, CancellationToken cancellationToken)
+    private static async Task<JvmModule> ReadGradleModuleAsync(string root, string name, string? jdk, CancellationToken cancellationToken)
     {
         string? buildFile = FirstFile(root, "build.gradle.kts", "build.gradle");
         string script = buildFile is null ? string.Empty : await File.ReadAllTextAsync(buildFile, cancellationToken).ConfigureAwait(false);
-        JvmToolchain toolchain = new(Environment.GetEnvironmentVariable("JAVA_HOME"), null, null);
+        JvmToolchain toolchain = new(jdk, null, null);
         List<JvmMainClass> mains = [.. WorkspaceLayouts.MainClasses(root)];
         foreach (Match match in Regex.Matches(script, @"mainClass(?:\.set)?\s*(?:=|\()\s*[""']([^""']+)[""']"))
         {

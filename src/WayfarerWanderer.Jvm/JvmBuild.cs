@@ -129,6 +129,8 @@ public sealed class JvmBuild
         }
         IJvmBuildAdapter adapter = adapters.FirstOrDefault(candidate => candidate.BuildSystem == snapshot.BuildSystem && candidate.CanBuild(request.WorkspaceRoot))
             ?? throw new FileNotFoundException($"No {snapshot.BuildSystem} wrapper was found in '{request.WorkspaceRoot}'.");
-        return await runner.RunAsync(adapter.Command(request), output, cancellationToken).ConfigureAwait(false);
+        ProcessStartInfo start = adapter.Command(request);
+        ProjectJdk.Apply(start, snapshot.ToolingToolchain.Home);
+        return await runner.RunAsync(start, output, cancellationToken).ConfigureAwait(false);
     }
 }

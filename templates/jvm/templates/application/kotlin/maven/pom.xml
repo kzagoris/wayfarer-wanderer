@@ -1,7 +1,7 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0">
   <modelVersion>4.0.0</modelVersion>
   <groupId>{{GROUP}}</groupId><artifactId>{{ARTIFACT}}</artifactId><version>1.0.0</version>
-  <properties><kotlin.version>2.4.20</kotlin.version><maven.compiler.release>{{JDK_VERSION}}</maven.compiler.release><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties>
+  <properties><kotlin.version>{{KOTLIN_VERSION}}</kotlin.version><maven.compiler.release>{{JDK_VERSION}}</maven.compiler.release><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties>
   <dependencies>
     <dependency><groupId>org.jetbrains.kotlin</groupId><artifactId>kotlin-stdlib</artifactId><version>${kotlin.version}</version></dependency>
     <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>5.12.2</version><scope>test</scope></dependency>

@@ -1,4 +1,4 @@
-plugins { application; kotlin("jvm") version "2.4.20" }
+plugins { application; kotlin("jvm") version "{{KOTLIN_VERSION}}" }
 group = "{{GROUP}}"
 version = "1.0.0"
 repositories { mavenCentral() }

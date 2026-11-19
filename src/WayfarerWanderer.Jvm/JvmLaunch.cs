@@ -167,10 +167,7 @@ public sealed class WrapperJvmLaunchAdapter : IJvmLaunchAdapter
         {
             start.Environment[variable.Key] = variable.Value;
         }
-        if (configuration.JavaHome.Length > 0)
-        {
-            start.Environment["JAVA_HOME"] = configuration.JavaHome;
-        }
+        ProjectJdk.Apply(start, configuration.JavaHome.Length > 0 ? configuration.JavaHome : module.RuntimeToolchain.Home);
         return start;
     }
 

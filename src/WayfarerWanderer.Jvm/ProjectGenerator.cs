@@ -61,9 +61,19 @@ public sealed class ProjectGenerationException : InvalidOperationException
 public static class ProjectGenerator
 {
     public const int MinimumJdk = 21;
-    public const string TemplateVersion = "1";
+    public const string TemplateVersion = "2";
     public const string GradleVersion = "9.7.1";
     public const string MavenVersion = "3.9.11";
+    public const string KotlinVersion = "2.4.21";
+    public const string SpringBootVersion = "4.1.2";
+
+    /// <summary>The newest JDK a Kotlin starter accepts: KotlinVersion's JvmTarget stops at JVM_26, and a starter
+    /// targets its JDK's own release, so a newer JDK is refused rather than compiled down.</summary>
+    public const int KotlinHighestJdk = 26;
+
+    /// <summary>The newest JDK a starter in this language accepts, or null for no limit.</summary>
+    public static int? HighestJdk(NewProjectLanguage language) =>
+        language == NewProjectLanguage.Kotlin ? KotlinHighestJdk : null;
 
     public static async Task<ProjectGenerationResult> GenerateAsync(
         ProjectGenerationOptions options,
@@ -92,6 +102,7 @@ public static class ProjectGenerator
 
             WriteTemplateAsync(staging, values, cancellationToken);
             WriteTemplateProvenance(staging, values, cancellationToken);
+            WriteNew(ProjectJdk.FileOf(staging), ProjectJdk.Serialize(values.Jdk), cancellationToken);
             WriteLaunchConfiguration(staging, values, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             options.BeforePublish?.Invoke(staging);
@@ -170,6 +181,11 @@ public static class ProjectGenerator
         string artifact = RequireArtifact(options.ArtifactId);
         string package = RequirePackage(options.PackageName, options.Language);
         string jdk = ValidateJdk(options.JdkHome);
+        if (HighestJdk(options.Language) is int highest && JdkVersion(jdk) is int selected && selected > highest)
+        {
+            throw new ProjectGenerationException(
+                $"Kotlin {KotlinVersion} supports JDK {MinimumJdk} to {highest}; the selected JDK is version {selected}. Choose JDK {highest} or older for a Kotlin project.");
+        }
         string destination;
         try
         {
@@ -343,6 +359,8 @@ public static class ProjectGenerator
             .Replace("{{PACKAGE_PATH}}", values.Package.Replace('.', Path.DirectorySeparatorChar), StringComparison.Ordinal)
             .Replace("{{JDK}}", values.Jdk.Replace('\\', '/'), StringComparison.Ordinal)
             .Replace("{{JDK_VERSION}}", values.JdkVersion.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+            .Replace("{{KOTLIN_VERSION}}", KotlinVersion, StringComparison.Ordinal)
+            .Replace("{{SPRING_BOOT_VERSION}}", SpringBootVersion, StringComparison.Ordinal)
             .Replace("{{MAVEN_VERSION}}", MavenVersion, StringComparison.Ordinal)
             .Replace("{{GRADLE_VERSION}}", GradleVersion, StringComparison.Ordinal)
             .Replace("{{LAUNCH}}", values.Options.LaunchName, StringComparison.Ordinal);
@@ -368,8 +386,8 @@ public static class ProjectGenerator
             build = values.Options.Build.ToString(),
             gradle = values.Options.Build == NewProjectBuild.Gradle ? GradleVersion : null,
             maven = values.Options.Build == NewProjectBuild.Maven ? MavenVersion : null,
-            kotlin = values.Options.Language == NewProjectLanguage.Kotlin ? "2.4.20" : null,
-            springBoot = values.Options.Kind == NewProjectKind.SpringBoot ? "3.5.7" : null,
+            kotlin = values.Options.Language == NewProjectLanguage.Kotlin ? KotlinVersion : null,
+            springBoot = values.Options.Kind == NewProjectKind.SpringBoot ? SpringBootVersion : null,
             junit = "5.12.2",
             wrappers = Checksums(staging, values.Options.Build),
             source = "Bundled with Wayfarer Wanderer; see THIRD_PARTY_NOTICES.md"

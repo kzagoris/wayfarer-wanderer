@@ -49,13 +49,16 @@ public sealed class NewProjectTests
         Assert.True(File.Exists(Path.Combine(destination, "README.md")));
         Assert.True(File.Exists(Path.Combine(destination, "THIRD_PARTY_NOTICES.md")));
         Assert.False(Directory.Exists(Path.Combine(destination, ".git")));
+        Assert.Equal(Path.TrimEndingDirectorySeparator(Path.GetFullPath(options.JdkHome)), ProjectJdk.Recorded(destination));
+        Assert.Contains(".wayfarer/", File.ReadAllLines(Path.Combine(destination, ".gitignore")));
 
         string descriptor = File.ReadAllText(Path.Combine(destination,
             build == NewProjectBuild.Maven ? "pom.xml" : "build.gradle.kts"));
-        Assert.Contains(language == NewProjectLanguage.Java ? JdkMajor().ToString() : "2.4.20", descriptor);
+        Assert.Contains(language == NewProjectLanguage.Java ? JdkMajor(options.JdkHome)!.Value.ToString() : ProjectGenerator.KotlinVersion, descriptor);
         if (build == NewProjectBuild.Gradle)
         {
             Assert.True(File.Exists(Path.Combine(destination, "settings.gradle.kts")));
+            Assert.False(File.Exists(Path.Combine(destination, "gradle.properties")));
             Assert.True(File.Exists(Path.Combine(destination, "gradle", "wrapper", "gradle-wrapper.jar")));
             Assert.True(File.Exists(Path.Combine(destination, "gradle", "wrapper", "gradle-wrapper.properties")));
             Assert.True(File.Exists(Path.Combine(destination, OperatingSystem.IsWindows() ? "gradlew.bat" : "gradlew")));
@@ -70,7 +73,7 @@ public sealed class NewProjectTests
         }
         if (kind == NewProjectKind.SpringBoot)
         {
-            Assert.Contains("3.5.7", descriptor);
+            Assert.Contains(ProjectGenerator.SpringBootVersion, descriptor);
             Assert.Contains("@GetMapping", File.ReadAllText(Path.Combine(destination, sourceRoot,
                 "com", "example", "wanderer", $"Application.{extension}")));
         }
@@ -161,7 +164,7 @@ public sealed class NewProjectTests
                 Module = module.Id,
                 MainClass = module.MainClasses[0].ClassName,
                 WorkingDirectory = module.Root,
-                JavaHome = JdkHome(),
+                JavaHome = JdkHome(language),
                 BuildArguments = build == NewProjectBuild.Gradle ? ["--no-daemon"] : [],
                 Arguments = kind == NewProjectKind.SpringBoot ? ["--server.port=0"] : []
             };
@@ -243,13 +246,32 @@ public sealed class NewProjectTests
     }
 
     [Fact]
+    public void KotlinStarterRefusesJdkNewerThanKotlinTargets()
+    {
+        using TestFolder folder = new();
+        string jdk = Path.Combine(folder.Path, "newer-jdk");
+        Directory.CreateDirectory(Path.Combine(jdk, "bin"));
+        File.WriteAllText(Path.Combine(jdk, "bin", OperatingSystem.IsWindows() ? "java.exe" : "java"), "");
+        File.WriteAllText(Path.Combine(jdk, "bin", OperatingSystem.IsWindows() ? "javac.exe" : "javac"), "");
+        File.WriteAllText(Path.Combine(jdk, "release"), $"JAVA_VERSION=\"{ProjectGenerator.KotlinHighestJdk + 1}\"");
+        string parent = Path.Combine(folder.Path, "projects");
+        ProjectGenerationOptions kotlin = Options(parent, language: NewProjectLanguage.Kotlin, jdk: jdk);
+        ProjectGenerationOptions java = Options(parent, language: NewProjectLanguage.Java, jdk: jdk);
+
+        ProjectGenerationException refused = Assert.Throws<ProjectGenerationException>(() => ProjectGenerator.Validate(kotlin));
+        Assert.Contains($"Choose JDK {ProjectGenerator.KotlinHighestJdk} or older", refused.Message);
+        ProjectGenerator.Validate(java);
+        Assert.False(Directory.Exists(parent));
+    }
+
+    [Fact]
     public void RejectsJreAndOldJdkWithoutStartingAnything()
     {
         using TestFolder folder = new();
         string jdk = Path.Combine(folder.Path, "not-a-jdk");
         Directory.CreateDirectory(jdk);
         ProjectGenerationException missing = Assert.Throws<ProjectGenerationException>(
-            () => ProjectGenerator.Validate(Options(folder.Path) with { JdkHome = jdk }));
+            () => ProjectGenerator.Validate(Options(folder.Path, jdk: jdk)));
         Assert.Contains("complete JDK", missing.Message);
 
         Directory.CreateDirectory(Path.Combine(jdk, "bin"));
@@ -257,7 +279,7 @@ public sealed class NewProjectTests
         File.WriteAllText(Path.Combine(jdk, "bin", OperatingSystem.IsWindows() ? "javac.exe" : "javac"), "");
         File.WriteAllText(Path.Combine(jdk, "release"), "JAVA_VERSION=\"17.0.10\"");
         ProjectGenerationException old = Assert.Throws<ProjectGenerationException>(
-            () => ProjectGenerator.Validate(Options(folder.Path) with { JdkHome = jdk }));
+            () => ProjectGenerator.Validate(Options(folder.Path, jdk: jdk)));
         Assert.Contains("21 or newer", old.Message);
     }
 
@@ -425,26 +447,43 @@ public sealed class NewProjectTests
         string parent,
         NewProjectKind kind = NewProjectKind.Application,
         NewProjectLanguage language = NewProjectLanguage.Kotlin,
-        NewProjectBuild build = NewProjectBuild.Gradle) => new()
+        NewProjectBuild build = NewProjectBuild.Gradle,
+        string? jdk = null) => new()
     {
         ProjectName = "Wanderer Starter",
         Destination = Path.Combine(parent, $"{kind}-{language}-{build}".ToLowerInvariant()),
         GroupId = "com.example",
         ArtifactId = "wanderer-starter",
         PackageName = "com.example.wanderer",
-        JdkHome = JdkHome(),
+        JdkHome = jdk ?? JdkHome(language),
         Kind = kind,
         Language = language,
         Build = build,
         LaunchName = "Run starter"
     };
 
-    internal static string JdkHome()
+    /// <summary>A local JDK a starter in <paramref name="language"/> accepts: JAVA_HOME's, then PATH's, then the newest
+    /// in range among the usual install folders. Without one the test skips, saying which JDK it needs.</summary>
+    internal static string JdkHome(NewProjectLanguage language = NewProjectLanguage.Java)
     {
-        string? home = Environment.GetEnvironmentVariable("JAVA_HOME");
-        if (!string.IsNullOrWhiteSpace(home))
+        int? highest = ProjectGenerator.HighestJdk(language);
+        bool Accepted(string home) => JdkMajor(home) is int major && major >= ProjectGenerator.MinimumJdk &&
+                                      (highest is null || major <= highest);
+        string? found = PreferredJdks().FirstOrDefault(Accepted) ??
+                        InstalledJdks().Where(Accepted).OrderByDescending(home => JdkMajor(home)).FirstOrDefault();
+        if (found is null)
         {
-            return home;
+            string range = highest is int top ? $"{ProjectGenerator.MinimumJdk} to {top}" : $"{ProjectGenerator.MinimumJdk} or newer";
+            Assert.Skip($"A {language} starter needs a local JDK {range}; none was found in JAVA_HOME, on PATH or in the usual JDK install folders.");
+        }
+        return found;
+    }
+
+    private static IEnumerable<string> PreferredJdks()
+    {
+        if (Environment.GetEnvironmentVariable("JAVA_HOME") is { Length: > 0 } javaHome)
+        {
+            yield return javaHome;
         }
         foreach (string folder in (Environment.GetEnvironmentVariable("PATH") ?? "")
                      .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
@@ -452,17 +491,57 @@ public sealed class NewProjectTests
             string javac = Path.Combine(folder, OperatingSystem.IsWindows() ? "javac.exe" : "javac");
             if (File.Exists(javac))
             {
-                return Path.GetDirectoryName(Path.GetDirectoryName(javac)!)!;
+                // A distribution's /usr/bin/javac (Arch's archlinux-java, Debian's alternatives) links into the JDK's own bin.
+                string real = File.ResolveLinkTarget(javac, returnFinalTarget: true)?.FullName ?? javac;
+                yield return Path.GetDirectoryName(Path.GetDirectoryName(real)!)!;
             }
         }
-        throw new InvalidOperationException("The New Project tests require a local JDK 21 or newer in JAVA_HOME or on PATH.");
     }
 
-    private static int JdkMajor()
+    private static IEnumerable<string> InstalledJdks()
     {
-        string? java = File.ReadLines(Path.Combine(JdkHome(), "release"))
-            .FirstOrDefault(line => line.StartsWith("JAVA_VERSION=", StringComparison.Ordinal));
-        return int.Parse(java![14..].Trim().Trim('"').Split('.')[0], System.Globalization.CultureInfo.InvariantCulture);
+        string user = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        List<string> roots = [Path.Combine(user, ".jdks")];
+        if (OperatingSystem.IsWindows())
+        {
+            string programs = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            roots.AddRange(new[] { "Java", "Eclipse Adoptium", "Microsoft", "Zulu", "Amazon Corretto", "BellSoft" }
+                .Select(vendor => Path.Combine(programs, vendor)));
+        }
+        else
+        {
+            roots.AddRange([
+                "/usr/lib/jvm", "/usr/lib64/jvm", "/Library/Java/JavaVirtualMachines",
+                Path.Combine(user, "Library", "Java", "JavaVirtualMachines"),
+                Path.Combine(user, ".local", "share", "mise", "installs", "java"),
+                Path.Combine(user, ".sdkman", "candidates", "java"),
+                Path.Combine(user, ".asdf", "installs", "java")
+            ]);
+        }
+        foreach (string root in roots.Where(Directory.Exists))
+        {
+            foreach (string folder in Directory.EnumerateDirectories(root))
+            {
+                yield return folder;
+                yield return Path.Combine(folder, "Contents", "Home");
+            }
+        }
+    }
+
+    private static int? JdkMajor(string home)
+    {
+        string release = Path.Combine(home, "release");
+        if (!File.Exists(release) ||
+            !File.Exists(Path.Combine(home, "bin", OperatingSystem.IsWindows() ? "javac.exe" : "javac")))
+        {
+            return null;
+        }
+        string? java = File.ReadLines(release).FirstOrDefault(line => line.StartsWith("JAVA_VERSION=", StringComparison.Ordinal));
+        return java is not null &&
+               int.TryParse(java[13..].Trim().Trim('"').Split('.')[0].Split('-', 2)[0],
+                   System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int major)
+            ? major
+            : null;
     }
 
     private sealed class TestFolder : IDisposable

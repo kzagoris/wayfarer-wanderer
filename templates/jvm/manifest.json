@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "templateVersion": "1",
+  "templateVersion": "2",
   "templates": [
     "application/java/maven",
     "application/java/gradle",
@@ -15,8 +15,8 @@
     "maven": "3.9.11",
     "mavenWrapper": "3.3.4",
     "gradle": "9.7.1",
-    "kotlin": "2.4.20",
-    "springBoot": "3.5.7",
+    "kotlin": "2.4.21",
+    "springBoot": "4.1.2",
     "junit": "5.12.2"
   },
   "wrapperSha256": {
