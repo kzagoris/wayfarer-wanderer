@@ -19,6 +19,13 @@ public sealed class EditorActions
     public const string RunTests = "app.tests.run";
     public const string Run = "app.run";
     public const string Debug = "app.debug";
+    public const string Continue = "app.debug.continue";
+    public const string StepInto = "app.debug.stepInto";
+    public const string StepOver = "app.debug.stepOver";
+    public const string StepOut = "app.debug.stepOut";
+    public const string OpenWorkspace = "app.workspace.open";
+    public const string OpenSource = "app.file.open";
+    public const string SaveSource = "app.file.save";
     public const string Stop = "app.stop";
     public const string NewProject = "app.project.new";
     private readonly Dictionary<string, EditorAction> actions;

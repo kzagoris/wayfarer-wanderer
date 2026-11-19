@@ -6,7 +6,31 @@ namespace WayfarerWanderer.App;
 
 public sealed class BreakpointColumn(Action<int> clickLine) : IGutterColumn
 {
-    private readonly HashSet<int> lines = [];
+    private readonly Dictionary<string, HashSet<int>> sources = new(Passenger.Core.PathNames.Comparer);
+    private HashSet<int> lines = [];
+
+    internal void Select(string path)
+    {
+        if (!sources.TryGetValue(path, out var selected))
+            sources[path] = selected = [];
+        lines = selected;
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    internal int[] DebugLines() => [.. lines.Order().Select(line => line + 1)];
+
+    internal IReadOnlyDictionary<string, int[]> Snapshot() => sources
+        .Where(pair => pair.Value.Count > 0)
+        .ToDictionary(pair => pair.Key, pair => pair.Value.Order().Select(line => line + 1).ToArray(),
+            Passenger.Core.PathNames.Comparer);
+
+    internal void Reset()
+    {
+        sources.Clear();
+        lines = [];
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+
     public event EventHandler? Changed;
     public bool IsMarked(int line) => lines.Contains(line);
 

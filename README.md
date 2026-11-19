@@ -69,5 +69,14 @@ Maven or Gradle. Projects are staged beside the destination and published only
 after every file has landed. The generated wrapper, source, test, launch
 configuration and notices form one complete project.
 
+To debug, open a workspace from **File > Open Workspace**, trust it, and open a
+Java or Kotlin source file. Save edits before launching. Press **F9** on an
+executable line and choose **Run > Debug**. The Debug tab shows the paused
+stack and the top frame's locals. Use the Run menu to step into, over or out,
+continue, or stop. Set `JAVA_HOME` to a full JDK compatible with the build.
+
+See [JVM backend validation](docs/validation/jvm-backends.md) for the
+mixed-language fixture results.
+
 See [release validation](docs/validation/release.md) for packaged application
 checks and the required platform evidence.

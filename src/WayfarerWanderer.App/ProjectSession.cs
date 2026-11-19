@@ -4,10 +4,11 @@ using WayfarerWanderer.Jvm;
 
 namespace WayfarerWanderer.App;
 
-public sealed class ProjectSession : IAsyncDisposable
+public sealed partial class ProjectSession : IAsyncDisposable
 {
     private readonly CancellationTokenSource lifetime = new();
     private CancellationTokenSource? operation;
+    private Task? disposal;
     private readonly WorkspaceImportSession importer = new();
     private readonly JvmBuild build = new();
     private readonly JvmLaunch launch = new();
@@ -34,7 +35,7 @@ public sealed class ProjectSession : IAsyncDisposable
 
     public ILaunchConfigurationStore Launches => launches;
 
-    public bool IsRunning => operation is { IsCancellationRequested: false };
+    public bool IsRunning => operation is not null;
 
     public bool IsTrusted => WorkspaceTrust.Trusts(Root);
 
@@ -131,15 +132,17 @@ public sealed class ProjectSession : IAsyncDisposable
         {
             await current.CancelAsync();
         }
+        if (debugWork is { } cleanup) await cleanup;
     }
 
     public void Trust() => WorkspaceTrust.Trust(Root);
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync() => new(disposal ??= DisposeSessionAsync());
+
+    private async Task DisposeSessionAsync()
     {
         await lifetime.CancelAsync();
         await CancelAsync();
-        operation?.Dispose();
         lifetime.Dispose();
     }
 
@@ -152,20 +155,14 @@ public sealed class ProjectSession : IAsyncDisposable
         CancellationTokenSource next = CancellationTokenSource.CreateLinkedTokenSource(
             lifetime.Token, cancellationToken);
         CancellationTokenSource? previous = Interlocked.Exchange(ref operation, next);
-        if (previous is not null)
-        {
-            previous.Cancel();
-            previous.Dispose();
-        }
+        previous?.Cancel();
         return next;
     }
 
     private void EndOperation(CancellationTokenSource ended)
     {
-        if (Interlocked.CompareExchange(ref operation, null, ended) == ended)
-        {
-            ended.Dispose();
-        }
+        Interlocked.CompareExchange(ref operation, null, ended);
+        ended.Dispose();
     }
 
     private static void OnUi(Action action)

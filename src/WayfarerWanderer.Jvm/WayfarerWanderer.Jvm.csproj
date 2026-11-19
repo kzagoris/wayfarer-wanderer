@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <None Update="Gradle/test-reports.gradle" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Gradle/*.gradle" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Debug/*.java" CopyToOutputDirectory="PreserveNewest" />
+    <ProjectReference Include="../../vendor/passenger/src/Passenger.Dap/Passenger.Dap.csproj" />
     <ProjectReference Include="../../vendor/passenger/src/Passenger.Core/Passenger.Core.csproj" />
   </ItemGroup>
 </Project>

@@ -9,8 +9,10 @@ using WayfarerWanderer.Jvm;
 
 namespace WayfarerWanderer.App;
 
-public sealed class EditorWindow : Window
+public sealed partial class EditorWindow : Window
 {
+    private readonly TabControl tools;
+    private int workspaceRequest;
     public CodeEditor Editor { get; } = new();
     public BreakpointColumn Breakpoints { get; }
     public EditorActions Actions { get; }
@@ -32,7 +34,7 @@ public sealed class EditorWindow : Window
         Editor.IsVisible = document != null;
 
         Breakpoints = new BreakpointColumn(ToggleClickedLine);
-        Actions = new EditorActions(() => document != null, () => Breakpoints.Toggle(Editor.CaretPosition.Line));
+        Actions = new EditorActions(() => Editor.IsVisible, ToggleCurrentBreakpoint);
         Editor.SetGutterColumns([Breakpoints], []);
 
         var action = Actions[EditorActions.ToggleBreakpoint];
@@ -46,19 +48,29 @@ public sealed class EditorWindow : Window
         };
         toggle.Click += (_, _) => action.TryExecute();
         AddProjectActions();
+        AddSemanticActions();
         MenuItem build = MenuAction(EditorActions.Build);
         MenuItem test = MenuAction(EditorActions.RunTests);
         MenuItem run = MenuAction(EditorActions.Run);
         MenuItem debug = MenuAction(EditorActions.Debug);
         MenuItem stop = MenuAction(EditorActions.Stop);
         MenuItem newProject = MenuAction(EditorActions.NewProject);
-        MenuItem runMenu = new() { Header = "_Run", Items = { build, test, run, debug, toggle, stop } };
+        MenuItem runMenu = new()
+        {
+            Header = "_Run",
+            Items = { build, test, run, debug, toggle, MenuAction(EditorActions.Continue),
+                MenuAction(EditorActions.StepInto), MenuAction(EditorActions.StepOver), MenuAction(EditorActions.StepOut), stop }
+        };
+        MenuItem fileMenu = new() { Header = "_File", Items = { newProject, MenuAction(EditorActions.OpenWorkspace),
+            MenuAction(EditorActions.OpenSource), MenuAction(EditorActions.SaveSource) } };
+        fileMenu.SubmenuOpened += (_, _) => RefreshActions(fileMenu);
         runMenu.SubmenuOpened += (_, _) => RefreshActions(runMenu);
         Menu menu = new()
         {
             Items =
             {
-                new MenuItem { Header = "_File", Items = { newProject } },
+                fileMenu,
+                SemanticMenu(),
                 runMenu
             }
         };
@@ -127,7 +139,7 @@ public sealed class EditorWindow : Window
                 return;
             e.Handled = true;
         }, RoutingStrategies.Tunnel);
-        TabControl tools = new()
+        tools = new TabControl()
         {
             Height = 170,
             IsVisible = false,
@@ -144,25 +156,35 @@ public sealed class EditorWindow : Window
         Content = new DockPanel { Children = { menu, TrustBanner, tools, new Grid { Children = { Editor, palette } } } };
         KeyDown += (_, e) => e.Handled = Actions.TryExecute(keys.ActionFor(new Shortcut(Keystroke.From(e))));
         Opened += (_, _) => Editor.Focus();
-        Closing += (_, _) => UnawaitedWork.Observe(Session?.DisposeAsync().AsTask() ?? Task.CompletedTask);
+        Closing += CloseSession;
     }
 
     public async Task OpenWorkspaceAsync(string root, CancellationToken cancellationToken = default)
     {
+        int request = ++workspaceRequest;
+        ResetSemanticSession();
         if (Session is not null)
         {
             await Session.DisposeAsync();
         }
+        if (request != workspaceRequest || closing) return;
+        Breakpoints.Reset();
+        if (SourcePath != null)
+        {
+            SourcePath = null;
+            Editor.Document = new TextDocument();
+        }
+        DebugTool.Reset();
         Session = new ProjectSession(root, BuildTool, TestsTool, DebugTool);
+        Session.PausedAt += OpenFrame;
         TrustBanner.IsVisible = !Session.IsTrusted;
         if (Session.IsTrusted)
         {
-            await Session.ImportAsync(cancellationToken);
+            try { await Session.ImportAsync(cancellationToken); }
+            catch (OperationCanceledException) when (request != workspaceRequest || closing) { return; }
         }
-        if (Content is DockPanel panel && panel.Children.OfType<TabControl>().FirstOrDefault() is { } tools)
-        {
-            tools.IsVisible = true;
-        }
+        if (request != workspaceRequest || closing) return;
+        tools.IsVisible = true;
         Title = $"Wayfarer Wanderer - {Path.GetFileName(Path.TrimEndingDirectorySeparator(root))}";
     }
 
@@ -174,13 +196,14 @@ public sealed class EditorWindow : Window
 
     private void AddProjectActions()
     {
-        Actions.Add(new EditorAction(EditorActions.Build, "Build Current Module", () => Session?.IsTrusted == true, BuildCurrent));
-        Actions.Add(new EditorAction(EditorActions.RunTests, "Run Module Tests", () => Session?.IsTrusted == true, TestCurrent));
-        Actions.Add(new EditorAction(EditorActions.Run, "Run", () => Session?.IsTrusted == true, RunCurrent));
-        Actions.Add(new EditorAction(EditorActions.Debug, "Debug", () => Session?.IsTrusted == true, DebugCurrent));
+        Actions.Add(new EditorAction(EditorActions.Build, "Build Current Module", () => Session is { IsTrusted: true, IsRunning: false }, BuildCurrent));
+        Actions.Add(new EditorAction(EditorActions.RunTests, "Run Module Tests", () => Session is { IsTrusted: true, IsRunning: false }, TestCurrent));
+        Actions.Add(new EditorAction(EditorActions.Run, "Run", () => Session is { IsTrusted: true, IsRunning: false }, RunCurrent));
+        Actions.Add(new EditorAction(EditorActions.Debug, "Debug", () => Session is { IsTrusted: true, IsRunning: false }, DebugCurrent));
         Actions.Add(new EditorAction(EditorActions.Stop, "Stop", () => Session?.IsRunning == true, () =>
             UnawaitedWork.Observe(Session!.CancelAsync())));
-        Actions.Add(new EditorAction(EditorActions.NewProject, "New Project…", () => true, () =>
+        AddDebugAndFileActions();
+        Actions.Add(new EditorAction(EditorActions.NewProject, "New ProjectÃ¢â‚¬Â¦", () => true, () =>
             UnawaitedWork.Observe(new NewProjectAction().RunAsync(this))));
     }
 
@@ -225,26 +248,8 @@ public sealed class EditorWindow : Window
 
     private void RunCurrent()
     {
-        WorkspaceSnapshot? snapshot = Session?.Snapshot;
-        JvmModule? module = snapshot?.Modules.FirstOrDefault(candidate => candidate.MainClasses.Count > 0);
-        if (module is not null)
-        {
-            JvmLaunchConfiguration configuration = new()
-            {
-                Name = "Current",
-                Module = module.Id,
-                MainClass = module.MainClasses[0].ClassName,
-                WorkingDirectory = module.Root,
-                JavaHome = module.RuntimeToolchain.Home ?? Environment.GetEnvironmentVariable("JAVA_HOME") ?? string.Empty
-            };
+        if (CurrentLaunch() is { } configuration)
             UnawaitedWork.Observe(Session!.RunAsync(configuration));
-        }
-    }
-
-    private void DebugCurrent()
-    {
-        DebugTool.Frames.Add("Debug adapter is not configured for this workspace.");
-        DebugTool.Variables.Add("Choose a supported JVM adapter before starting a debug session.");
     }
 
     private async Task TrustWorkspaceAsync()
