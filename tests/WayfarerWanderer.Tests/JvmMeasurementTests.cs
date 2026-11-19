@@ -174,6 +174,7 @@ public sealed class JvmMeasurementTests
             ? Directory.GetDirectories(extensions).Select(Path.GetFileName).OfType<string>()
                 .Where(name => name.StartsWith("redhat.java-", StringComparison.Ordinal) || name.StartsWith("jetbrains.kotlin-server-", StringComparison.Ordinal))
             : [];
-        return [.. configured.OfType<string>(), .. installed];
+        string? managed = KotlinServerInstalls.Newest(KotlinServerInstalls.Folder);
+        return [.. configured.OfType<string>(), .. managed is null ? [] : new[] { managed }, .. installed];
     }
 }

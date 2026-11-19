@@ -75,6 +75,14 @@ executable line and choose **Run > Debug**. The Debug tab shows the paused
 stack and the top frame's locals. Use the Run menu to step into, over or out,
 continue, or stop. Set `JAVA_HOME` to a full JDK compatible with the build.
 
+Wayfarer ships no language server. For Kotlin, download the standalone build
+from [kotlin-lsp releases](https://github.com/Kotlin/kotlin-lsp/releases). Unpack it into
+`~/.local/share/wayfarer/kotlin-lsp/<version>/` (`%LOCALAPPDATA%\wayfarer\kotlin-lsp\<version>\`
+on Windows). Wayfarer uses the highest version there that contains
+`bin/intellij-server`. `WAYFARER_KOTLIN_LSP_HOME` overrides that folder, and an
+installed VS Code Kotlin extension is the last resort. For Java, Wayfarer uses
+`WAYFARER_JDTLS_HOME` or the VS Code `redhat.java` extension.
+
 See [JVM backend validation](docs/validation/jvm-backends.md) for the
 mixed-language fixture results.
 
