@@ -114,3 +114,32 @@ backend. The memory peak covers JDT LS, the launcher of the expired Kotlin
 server and a Gradle process that JDT LS started on Gradle.
 Do not take these numbers as the both-servers budget until the Kotlin server
 runs. Under the plan, the release integrations remain unselected until then.
+
+## Kotlin server distribution terms
+
+Checked 2026-11-19 against the GitHub repositories and the installed build.
+
+**JetBrains Kotlin server ([Kotlin/kotlin-lsp](https://github.com/Kotlin/kotlin-lsp)).**
+It is free to download and use. Its README describes it as Alpha and built on
+IntelliJ IDEA and "proprietary parts of JetBrains Air and Fleet products",
+which makes it partly closed source. The repository's `LICENSE.txt` is
+Apache 2.0, but that can cover only the published parts. The standalone build
+271.2085.0 has a `license/` folder for third-party components such as YourKit
+and Javolution. Nothing in it licenses JetBrains' own code. Release
+v262.7569.0 (2026-06-09) moved the VS Code extension from Apache 2.0 to the
+JetBrains Free Plugin License. No published terms permit bundling the server
+with Wayfarer.
+
+**fwcd Kotlin language server ([fwcd/kotlin-language-server](https://github.com/fwcd/kotlin-language-server)).**
+It is MIT-licensed and could be redistributed. Its README now says that with
+an official server available, "this project can be considered deprecated".
+The last release is 1.3.13 (2025-01-18), and nothing has been pushed since
+2025-06-02. It is not a candidate for the mixed-language fixtures above.
+
+**Decision.** Wayfarer does not ship a Kotlin server. Users install the
+JetBrains build themselves. Wayfarer looks for it in this order:
+`WAYFARER_KOTLIN_LSP_HOME`, then the newest version under
+`~/.local/share/wayfarer/kotlin-lsp/<version>/`, then the VS Code extension.
+A first-run download straight from JetBrains, with the user's consent, would
+also avoid redistribution. Bundling needs written redistribution terms from
+JetBrains (see `docs/initial-spec.md`, Language backends).
