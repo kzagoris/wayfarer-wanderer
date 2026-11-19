@@ -1,0 +1,645 @@
+using System.Diagnostics;
+using System.Net.Sockets;
+using System.Runtime.CompilerServices;
+using System.Text;
+using System.Text.RegularExpressions;
+using Passenger.Core;
+
+namespace Passenger.Vcs;
+
+/// <summary>What git, or the ssh it runs, asks while it reaches a remote.</summary>
+public enum GitQuestionKind
+{
+    /// <summary>A user name for a URL, which the login's password follows.</summary>
+    User,
+
+    /// <summary>A password: for a URL, or ssh's for a user at a host.</summary>
+    Password,
+
+    /// <summary>The passphrase of an ssh key.</summary>
+    Passphrase,
+
+    /// <summary>A yes or no: ssh's whether to trust a host it has not met.</summary>
+    YesNo,
+
+    /// <summary>Anything else, in git's or ssh's own words.</summary>
+    Other,
+}
+
+/// <summary>A question git or ssh asks while it reaches a remote, or ssh-keygen or Passenger's gpg while a commit is signed
+/// (<see cref="Signs"/>), as its askpass helper is given it: its kind, its words, and what it is about (a login's URL,
+/// with the user where git names one; a key's file or a GPG key; ssh's host). Read from their English words: a prompt in
+/// another language is <see cref="GitQuestionKind.Other"/>, asked in its own words.</summary>
+public sealed partial record GitQuestion(GitQuestionKind Kind, string Prompt, string? About = null, string? User = null, bool Signs = false)
+{
+    public static GitQuestion Of(string prompt)
+    {
+        string asked = prompt.Trim();
+        if (Login().Match(asked) is { Success: true } login)
+        {
+            string url = login.Groups["url"].Value;
+            return login.Groups["what"].Value == "Username"
+                ? new GitQuestion(GitQuestionKind.User, prompt, url)
+                : new GitQuestion(GitQuestionKind.Password, prompt, url, UserOf(url));
+        }
+        if (KeyPassphrase().Match(asked) is { Success: true } key)
+        {
+            return new GitQuestion(GitQuestionKind.Passphrase, prompt, key.Groups["key"].Value);
+        }
+        if (SigningPassphrase().Match(asked) is { Success: true } signing)
+        {
+            return new GitQuestion(GitQuestionKind.Passphrase, prompt, signing.Groups["key"].Value, Signs: true);
+        }
+        if (GpgPassphrase().Match(asked) is { Success: true } gpg)
+        {
+            return new GitQuestion(GitQuestionKind.Passphrase, prompt, gpg.Groups["key"].Value, Signs: true) { IsGpg = true, SignsWith = gpg.Groups["kind"].Value == "GPG" ? "gpg" : "gpgsm" };
+        }
+        if (SshPassword().Match(asked) is { Success: true } ssh)
+        {
+            return new GitQuestion(GitQuestionKind.Password, prompt, ssh.Groups["host"].Value, ssh.Groups["user"].Value);
+        }
+        if (asked.Contains("(yes/no", StringComparison.Ordinal))
+        {
+            return new GitQuestion(GitQuestionKind.YesNo, prompt, Host().Match(asked) is { Success: true } host ? host.Groups["host"].Value : null);
+        }
+        return new GitQuestion(GitQuestionKind.Other, prompt);
+    }
+
+    /// <summary>Whether it is Passenger's gpg asking for a GPG or X.509 key's passphrase, the key named by its id and user.</summary>
+    public bool IsGpg { get; init; }
+
+    /// <summary>The program a passphrase asked to sign is given to: gpg's or gpgsm's (through Passenger's own), else ssh-keygen.</summary>
+    public string SignsWith { get; init; } = "ssh-keygen";
+
+    /// <summary>Where it asks for, as a person names it: a URL's host and port, a key's file name (a GPG key's id and user),
+    /// ssh's host.</summary>
+    public string Place => Kind switch
+    {
+        GitQuestionKind.Passphrase when IsGpg => About ?? "the key",
+        GitQuestionKind.Passphrase => Path.GetFileName(About ?? string.Empty),
+        _ when About is { } about && about.IndexOf("://", StringComparison.Ordinal) is int scheme and >= 0 => HostOf(about[(scheme + 3)..]),
+        _ => About ?? "the remote",
+    };
+
+    /// <summary>What it asks for, as a sentence names it ("the login to github.com").</summary>
+    public string Asks => Kind switch
+    {
+        GitQuestionKind.User => $"the login to {Place}",
+        GitQuestionKind.Password => User is { } user ? $"the password of {user} at {Place}" : $"the password for {Place}",
+        GitQuestionKind.Passphrase => $"the passphrase of key {Place}",
+        GitQuestionKind.YesNo => $"whether to trust {Place}",
+        _ => $"an answer to \"{Prompt.Trim()}\"",
+    };
+
+    /// <summary>Whether its answer is a secret, typed unseen and masked wherever it would be shown.</summary>
+    public bool IsSecret => Kind is GitQuestionKind.Password or GitQuestionKind.Passphrase or GitQuestionKind.Other;
+
+    /// <summary>The URL git names in the password it asks for next, once the user named is given for this one's URL; null
+    /// where this asks for no user.</summary>
+    public string? WithUser(string user) =>
+        Kind == GitQuestionKind.User && About is { } url && url.IndexOf("://", StringComparison.Ordinal) is int scheme and >= 0
+            ? $"{url[..(scheme + 3)]}{user}@{url[(scheme + 3)..]}"
+            : null;
+
+    /// <summary>The user a URL names before its host (git's "http://user@host"), or null.</summary>
+    private static string? UserOf(string url)
+    {
+        int scheme = url.IndexOf("://", StringComparison.Ordinal);
+        string rest = scheme < 0 ? url : url[(scheme + 3)..];
+        int path = rest.IndexOf('/', StringComparison.Ordinal);
+        int at = (path < 0 ? rest : rest[..path]).LastIndexOf('@');
+        return at > 0 ? rest[..at] : null;
+    }
+
+    /// <summary>A URL's host and port, from what follows its scheme: its user and path left off.</summary>
+    private static string HostOf(string rest)
+    {
+        int path = rest.IndexOf('/', StringComparison.Ordinal);
+        string authority = path < 0 ? rest : rest[..path];
+        return authority[(authority.LastIndexOf('@') + 1)..];
+    }
+
+    [GeneratedRegex(@"^(?<what>Username|Password) for '(?<url>[^']+)':$")]
+    private static partial Regex Login();
+
+    [GeneratedRegex(@"^Enter passphrase for key '(?<key>.+)':$")]
+    private static partial Regex KeyPassphrase();
+
+    /// <summary>ssh-keygen's, signing with a key's file.</summary>
+    [GeneratedRegex(@"^Enter passphrase for ""(?<key>.+)"":$")]
+    private static partial Regex SigningPassphrase();
+
+    /// <summary>Passenger's gpg's (<see cref="GpgLoopback"/>), signing with a GPG key or an X.509 certificate's.</summary>
+    [GeneratedRegex(@"^Enter passphrase for (?<kind>GPG|X\.509) key (?<key>.+):$")]
+    private static partial Regex GpgPassphrase();
+
+    [GeneratedRegex(@"^(?<user>[^@\s']+)@(?<host>[^@\s']+)'s password:$")]
+    private static partial Regex SshPassword();
+
+    [GeneratedRegex(@"host '(?<host>[^' ]+)")]
+    private static partial Regex Host();
+}
+
+/// <summary>An answer to a question git asked: what git is given, and with a user name the password for the same place,
+/// given as git asks for it next; or why there is none (<see cref="Refused"/>), which the operation's failure says.</summary>
+public sealed record GitAnswer(string? Text, string? Password = null, string? Refused = null)
+{
+    public static GitAnswer No(string why) => new(null, null, why);
+}
+
+/// <summary>Who answers what git asks while it reaches a remote, and how git reaches them: <see cref="Helper"/>, the
+/// program git runs to ask (Passenger's own executable), answers over a socket the operation opens in
+/// <see cref="SocketFolder"/> (one only the user reaches), asking <see cref="Ask"/> in turn.</summary>
+public sealed record GitAsker(string Helper, string SocketFolder, Func<GitQuestion, CancellationToken, Task<GitAnswer>> Ask)
+{
+    /// <summary>The window's gits that may ask, which end together (<see cref="GitQuestions.EndAsync"/>); none where they
+    /// end with nothing else.</summary>
+    public GitQuestions? Questions { get; init; }
+}
+
+/// <summary>The gits a window runs that may ask the person something, ended together as its folder closes
+/// (<see cref="EndAsync"/>): every question then answered as refused, which git takes as no answer and ends on its own,
+/// taking away what it holds (its index.lock), never killed while it still could.</summary>
+public sealed class GitQuestions
+{
+    private readonly CancellationTokenSource refusing = new();
+    private readonly Dictionary<Process, Task> running = [];
+
+    /// <summary>Cancelled once every question is to be refused.</summary>
+    internal CancellationToken Refusing => refusing.Token;
+
+    /// <summary>A git that may ask, its end heard apart from whatever flow waits for it there.</summary>
+    internal void Runs(Process process)
+    {
+        lock (running)
+        {
+            foreach (Process ended in running.Where(r => r.Value.IsCompleted).Select(r => r.Key).ToList())
+            {
+                running.Remove(ended);
+            }
+            running[process] = process.WaitForExitAsync();
+        }
+    }
+
+    /// <summary>Every question asked from now on answered as refused, and done once each git that may ask has ended on its
+    /// own, or at <paramref name="limit"/> ended with all it started; at once where none runs.</summary>
+    public Task EndAsync(TimeSpan limit)
+    {
+        KeyValuePair<Process, Task>[] gits;
+        lock (running)
+        {
+            gits = [.. running.Where(r => !r.Value.IsCompleted)];
+        }
+        if (gits.Length == 0)
+        {
+            refusing.Cancel();
+            return Task.CompletedTask;
+        }
+        // Not held, and off the caller's thread, whose loop may stop before git ends: nothing it does is drawn.
+        return BackgroundWork.Unheld(() => EndingAsync(gits, limit));
+    }
+
+    private async Task EndingAsync(KeyValuePair<Process, Task>[] gits, TimeSpan limit)
+    {
+        await refusing.CancelAsync();
+        try
+        {
+            await Task.WhenAll(gits.Select(g => g.Value)).WaitAsync(limit);
+        }
+        catch (TimeoutException)
+        {
+            foreach ((Process git, _) in gits.Where(g => !g.Value.IsCompleted))
+            {
+                ChildProcesses.Kill(git);
+            }
+        }
+    }
+}
+
+/// <summary>Git's askpass helper, both ends. Git runs with GIT_ASKPASS and SSH_ASKPASS naming Passenger's executable and
+/// <see cref="Variable"/> the operation's socket (<see cref="Prompting.Variables"/>); run with a prompt, the executable sends it
+/// there and writes the answer for git (<see cref="Answer"/>), or exits 1, which git takes as no answer. The helper sends
+/// the prompt and its <see cref="End"/>; the IDE says at once that it took it, then answers after a byte saying whether
+/// there is an answer, a given one ending the same way. Each end reads the other's words to their end byte, never to the
+/// other end's close of its side, which Windows' Unix sockets can fail to pass on. A secret goes only over the socket and
+/// git's pipe, never on a command line or into a file.</summary>
+public static class GitAskPass
+{
+    /// <summary>The variable naming the socket of the operation git asks for.</summary>
+    [IdentifierHome]
+    public const string Variable = "PASSENGER_GIT_ASKPASS";
+
+    internal const byte Taken = (byte)'?';
+    internal const byte Given = (byte)'+';
+    internal const byte None = (byte)'-';
+
+    /// <summary>Ends a prompt and a given answer: no program's argument holds one, and git, ssh and gpg read an answer
+    /// only to its first.</summary>
+    internal const byte End = 0;
+
+    /// <summary>The longest prompt read: ssh's question about a host is a few lines.</summary>
+    internal const int Longest = 64 * 1024;
+
+    /// <summary>How long the helper waits for the IDE to take its question, which it does as the question comes; the
+    /// person's answer may then take as long as they like.</summary>
+    internal static readonly TimeSpan TakeLimit = TimeSpan.FromSeconds(30);
+
+    /// <summary>How the helper's words begin where it gives none for want of the IDE, on git's errors, from which the IDE's
+    /// log takes them (<see cref="Prompting.Heard"/>).</summary>
+    internal const string NoAnswer = "Passenger gave git no answer: ";
+
+    /// <summary>What Main asks before anything starts: where git runs this executable to ask (<see cref="Variable"/> set, one prompt given), the
+    /// answer written for git, and the exit code; else null, and Passenger starts as itself.</summary>
+    public static int? Answer(string[] args)
+    {
+        if (Environment.GetEnvironmentVariable(Variable) is not { Length: > 0 } socket || args.Length != 1)
+        {
+            return null;
+        }
+        (string? answer, string? why) = Put(socket, args[0], Waits.Of(TakeLimit));
+        try
+        {
+            if (answer is null)
+            {
+                if (why is not null)
+                {
+                    Console.Error.WriteLine(NoAnswer + why);
+                }
+                return 1;
+            }
+            using Stream output = Console.OpenStandardOutput();
+            output.Write(Encoding.UTF8.GetBytes(answer));
+            output.Write("\n"u8);
+            return 0;
+        }
+        catch (IOException)
+        {
+            // Git stopped reading: it has its answer no more.
+            return 1;
+        }
+    }
+
+    /// <summary>A question put to an operation's socket: its answer, or null with why where the IDE gave none for want of
+    /// itself (a why of null where it refused). One the IDE has not taken within <paramref name="taking"/> is given up;
+    /// once taken, the answer is waited for however long the person takes.</summary>
+    public static (string? Answer, string? Why) Put(string socket, string prompt, TimeSpan taking)
+    {
+        try
+        {
+            using Socket asking = new(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            asking.Connect(new UnixDomainSocketEndPoint(socket));
+            asking.Send([.. Encoding.UTF8.GetBytes(prompt), End]);
+            // An IDE of an earlier build, still running as this one is installed over it, reads a prompt to this close.
+            asking.Shutdown(SocketShutdown.Send);
+            if (!asking.Poll(taking, SelectMode.SelectRead))
+            {
+                return (null, $"the IDE had not taken its question within {Durations.Said(taking)}");
+            }
+            using MemoryStream reply = new();
+            byte[] buffer = new byte[4096];
+            int read;
+            while (!Whole(reply.GetBuffer().AsSpan(0, (int)reply.Length)) && (read = asking.Receive(buffer)) > 0)
+            {
+                reply.Write(buffer, 0, read);
+            }
+            return Read(reply.GetBuffer().AsSpan(0, (int)reply.Length));
+        }
+        catch (Exception failed) when (failed is SocketException or IOException)
+        {
+            return (null, $"it could not ask the IDE ({failed.Message})");
+        }
+    }
+
+    /// <summary>The IDE's reply as the helper reads it: the byte saying the question was taken, where there is one, then one
+    /// saying whether there is an answer, then the answer to its <see cref="End"/>, or to the reply's end where an IDE of
+    /// an earlier build gives none.</summary>
+    internal static (string? Answer, string? Why) Read(ReadOnlySpan<byte> reply)
+    {
+        int at = reply.Length > 0 && reply[0] == Taken ? 1 : 0;
+        return reply.Length <= at ? (null, at == 1 ? "the IDE took its question and ended before answering" : "the IDE ended without taking its question")
+            : reply[at] == Given ? (Encoding.UTF8.GetString(ToEnd(reply[(at + 1)..])), null)
+            : reply[at] == None ? (null, null)
+            : (null, $"the IDE answered in a way the helper does not read ({reply[at]})");
+
+        static ReadOnlySpan<byte> ToEnd(ReadOnlySpan<byte> answer) => answer.IndexOf(End) is int end and >= 0 ? answer[..end] : answer;
+    }
+
+    /// <summary>Whether the IDE's reply so far is all the helper waits for: no answer, an answer to its <see cref="End"/>,
+    /// or a byte it does not read.</summary>
+    internal static bool Whole(ReadOnlySpan<byte> reply)
+    {
+        int at = reply.Length > 0 && reply[0] == Taken ? 1 : 0;
+        return reply.Length > at && (reply[at] != Given || reply[(at + 1)..].Contains(End));
+    }
+
+    /// <summary>A question as the IDE reads it off a helper's connection: the prompt to its <see cref="End"/>, or to the
+    /// connection's end, the first <see cref="Longest"/> bytes kept.</summary>
+    public static async Task<string> QuestionAsync(Stream connection, CancellationToken cancel)
+    {
+        using MemoryStream prompt = new();
+        byte[] buffer = new byte[4096];
+        int read;
+        while ((read = await connection.ReadAsync(buffer, cancel)) > 0)
+        {
+            int end = buffer.AsSpan(0, read).IndexOf(End);
+            prompt.Write(buffer, 0, (int)Math.Min(end < 0 ? read : end, Math.Max(0, Longest - prompt.Length)));
+            if (end >= 0)
+            {
+                break;
+            }
+        }
+        return Encoding.UTF8.GetString(prompt.GetBuffer(), 0, (int)prompt.Length);
+    }
+
+    /// <summary>The IDE's answer as it goes to the helper, after the byte saying the question was taken: the answer to its
+    /// <see cref="End"/>, or the byte saying there is none.</summary>
+    public static byte[] ReplyOf(string? answer) => answer is { } text ? [Given, .. Encoding.UTF8.GetBytes(text), End] : [None];
+}
+
+/// <summary>An operation's socket for git's helper while git runs (<see cref="GitAskPass"/>): each connection taken and
+/// served apart (<see cref="Accepting"/>), each question put to <see cref="GitAsker.Ask"/> in turn, a login's password kept
+/// for git's next question for the same place and then forgotten, the operation's background work let go while the person
+/// answers, and every question answered as refused once its <see cref="GitAsker.Questions"/> end. The first question left
+/// unanswered is <see cref="Refused"/>. Disposed as git ends: a question still asked is taken away, and the socket goes,
+/// with what Passenger's gpg could not delete beside it (<see cref="CommitFile.DeleteSigned"/>).</summary>
+internal sealed class Prompting : IAsyncDisposable
+{
+    private static int opened;
+
+    private readonly GitAsker asker;
+    private readonly Socket listener;
+    private readonly string path;
+    private readonly Func<IDisposable> apart;
+    private readonly CancellationTokenSource ending;
+    private readonly CancellationToken refusing;
+    private readonly CancellationTokenSource asking;
+    private readonly SemaphoreSlim turn = new(1, 1);
+    private readonly List<Task> serving = [];
+    private readonly Task accepting;
+
+    /// <summary>The password git asks for next, by the URL it will name, once a login's user is given.</summary>
+    private (string Url, string Password)? next;
+
+    private volatile string? refused;
+
+    private Prompting(GitAsker asker, Socket listener, string path, Func<IDisposable> apart, CancellationToken cancel)
+    {
+        this.asker = asker;
+        this.listener = listener;
+        this.path = path;
+        this.apart = apart;
+        ending = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        refusing = asker.Questions?.Refusing ?? CancellationToken.None;
+        asking = CancellationTokenSource.CreateLinkedTokenSource(ending.Token, refusing);
+        // Not held: it waits for git's questions while git runs, which the operation's own hold covers.
+        accepting = BackgroundWork.Unheld(() => Accepting.EachAsync(stop => listener.AcceptAsync(stop), Serve, listener.Dispose, "Git's question socket", ending.Token));
+    }
+
+    /// <summary>The socket opened for an operation, letting go of its background work through <paramref name="apart"/>
+    /// while a question waits; null where it cannot be, when git asks nobody.</summary>
+    public static Prompting? Open(GitAsker asker, Func<IDisposable> apart, CancellationToken cancel)
+    {
+        if (!File.Exists(asker.Helper))
+        {
+            return null;
+        }
+        string path = Path.Combine(asker.SocketFolder, $"{Environment.ProcessId}-git-{Interlocked.Increment(ref opened)}");
+        Socket listener = new(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        try
+        {
+            // Only a dead Passenger that had this process's number leaves one by this name.
+            File.Delete(path);
+            listener.Bind(new UnixDomainSocketEndPoint(path));
+            listener.Listen(2);
+        }
+        catch (Exception unopened) when (unopened is SocketException or IOException or UnauthorizedAccessException)
+        {
+            listener.Dispose();
+            return null;
+        }
+        return new Prompting(asker, listener, path, apart, cancel);
+    }
+
+    /// <summary>What git runs with to ask through the socket: its own questions and ssh's, ssh's even where a terminal
+    /// would do.</summary>
+    public IReadOnlyDictionary<string, string> Variables => new Dictionary<string, string>
+    {
+        [GitVariables.AskPass] = asker.Helper,
+        ["SSH_ASKPASS"] = asker.Helper,
+        ["SSH_ASKPASS_REQUIRE"] = "force",
+        [GitAskPass.Variable] = path,
+    };
+
+    /// <summary>Why the first question left unanswered was, in the asker's words; null while each was answered.</summary>
+    public string? Refused => refused;
+
+    /// <summary>The operation's git, started, whose end its <see cref="GitAsker.Questions"/> wait for as they end.</summary>
+    public void Runs(Process git) => asker.Questions?.Runs(git);
+
+    /// <summary>Writes to the IDE's log what git's helper said, on git's <paramref name="errors"/>, of a question it gave
+    /// no answer for want of the IDE, which nothing here heard.</summary>
+    public static void Heard(string errors)
+    {
+        foreach (string line in errors.Split('\n'))
+        {
+            if (line.Contains(GitAskPass.NoAnswer, StringComparison.Ordinal))
+            {
+                PassengerLog.Write(line.Trim());
+            }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await ending.CancelAsync();
+        listener.Dispose();
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception kept) when (kept is IOException or UnauthorizedAccessException)
+        {
+            // Left for the next start to take away, as a dead process's socket is.
+        }
+        CommitFile.DeleteSigned(path);
+        await accepting;
+        Task[] served;
+        lock (serving)
+        {
+            served = [.. serving];
+        }
+        await Task.WhenAll(served);
+        turn.Dispose();
+        asking.Dispose();
+        ending.Dispose();
+    }
+
+    private void Serve(Socket client)
+    {
+        lock (serving)
+        {
+            serving.Add(ServeAsync(client));
+        }
+    }
+
+    private async Task ServeAsync(Socket client)
+    {
+        try
+        {
+            await using NetworkStream stream = new(client, ownsSocket: true);
+            // Said at once, so the helper waits on the person's answer however long it takes, and on nothing else.
+            await stream.WriteAsync((byte[])[GitAskPass.Taken], ending.Token);
+            string prompt = await GitAskPass.QuestionAsync(stream, ending.Token);
+            GitAnswer answer;
+            await turn.WaitAsync(ending.Token);
+            try
+            {
+                answer = await AnswerAsync(GitQuestion.Of(prompt));
+            }
+            finally
+            {
+                turn.Release();
+            }
+            await stream.WriteAsync(GitAskPass.ReplyOf(answer.Text), ending.Token);
+            client.Shutdown(SocketShutdown.Send);
+        }
+        catch (Exception gone) when (gone is IOException or SocketException or OperationCanceledException or ObjectDisposedException)
+        {
+            // The helper went (git ended), or the operation did.
+        }
+    }
+
+    private async Task<GitAnswer> AnswerAsync(GitQuestion question)
+    {
+        (string Url, string Password)? kept = next;
+        next = null;
+        if (question.Kind == GitQuestionKind.Password && kept is { } login && login.Url == question.About)
+        {
+            return new GitAnswer(login.Password);
+        }
+        GitAnswer answer;
+        if (refusing.IsCancellationRequested)
+        {
+            answer = GitAnswer.No(NotGiven(question));
+        }
+        else
+        {
+            IDisposable away = apart();
+            int taken = 0;
+            Task<GitAnswer> asked = HeldAgainAsync(() => asker.Ask(question, asking.Token), Again);
+            try
+            {
+                // Refused or ended apart from the asker, whose answer may need a window's thread that runs no more.
+                answer = await asked.WaitAsync(asking.Token);
+            }
+            catch (OperationCanceledException) when (refusing.IsCancellationRequested)
+            {
+                UnawaitedWork.Dismiss(asked);
+                answer = GitAnswer.No(NotGiven(question));
+            }
+            catch (OperationCanceledException) when (ending.IsCancellationRequested)
+            {
+                UnawaitedWork.Dismiss(asked);
+                answer = GitAnswer.No($"{question.Asks} was not given before git ended");
+            }
+            finally
+            {
+                Again();
+            }
+
+            // Taken again once, as the answer comes or the question goes unanswered, so no wait finds the work quiet before git goes on.
+            void Again()
+            {
+                if (Interlocked.Exchange(ref taken, 1) == 0)
+                {
+                    away.Dispose();
+                }
+            }
+        }
+        if (answer.Text is null)
+        {
+            refused ??= answer.Refused ?? $"{question.Asks} was not given";
+        }
+        else if (answer.Password is { } password && question.WithUser(answer.Text) is { } url)
+        {
+            next = (url, password);
+        }
+        return answer;
+    }
+
+    /// <summary>The asker's answer, the operation's work taken again (<paramref name="again"/>) on the thread giving it, before
+    /// whatever waits for the answer goes on: by a continuation run there synchronously, since an await's is queued to the
+    /// thread pool from a thread of a context of its own (a window's), leaving the work let go meanwhile.</summary>
+    private static async Task<GitAnswer> HeldAgainAsync(Func<Task<GitAnswer>> ask, Action again)
+    {
+        try
+        {
+            Task<GitAnswer> asked = ask();
+            await asked.ContinueWith(_ => again(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default).ConfigureAwait(false);
+            return await asked.ConfigureAwait(false);
+        }
+        finally
+        {
+            again();
+        }
+    }
+
+    /// <summary>What a question refused as its folder closes says.</summary>
+    private static string NotGiven(GitQuestion question) => $"{question.Asks} was not given: its folder was closed first";
+}
+
+/// <summary>The background work an operation holds while git runs (<see cref="BackgroundWork.Scope"/>), let go while a
+/// question waits on the person, which no screenshot or test waits for, and taken again once it is answered.</summary>
+public sealed class GitHold : IDisposable
+{
+    private readonly Lock gate = new();
+    private readonly string file;
+    private readonly int line;
+    private IDisposable? held;
+    private bool ended;
+
+    /// <summary>Held from now, named by the git call that holds it.</summary>
+    public GitHold([CallerFilePath] string file = "", [CallerLineNumber] int line = 0)
+    {
+        this.file = file;
+        this.line = line;
+        held = BackgroundWork.Scope(file, line);
+    }
+
+    /// <summary>Lets go until what it returns is disposed.</summary>
+    public IDisposable Apart()
+    {
+        lock (gate)
+        {
+            held?.Dispose();
+            held = null;
+        }
+        return new Again(this);
+    }
+
+    public void Dispose()
+    {
+        lock (gate)
+        {
+            ended = true;
+            held?.Dispose();
+            held = null;
+        }
+    }
+
+    private void Take()
+    {
+        lock (gate)
+        {
+            if (!ended && held is null)
+            {
+                held = BackgroundWork.Scope(file, line);
+            }
+        }
+    }
+
+    private sealed class Again(GitHold hold) : IDisposable
+    {
+        public void Dispose() => hold.Take();
+    }
+}

@@ -1,0 +1,231 @@
+<Project>
+  <!-- One version per package for the whole repo; a project's reference names the package only. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <!-- Roslyn's language server, a package per system downloaded rather than referenced (RoslynServer.targets), so its
+         version is a property: the newest on nuget.org, prerelease or not, at least as new as the compiler of
+         global.json's SDK. A build that starts Visual Studio Telemetry's session even with telemetry off (from
+         5.12.0-1.26475.2 until one carries dotnet/roslyn#86130) is carried with it cut off (tools/Passenger.RoslynPatch). -->
+    <RoslynServerVersion>5.13.0-1.26514.10</RoslynServerVersion>
+    <!-- Avalonia's dotnet new templates at the Avalonia version below, downloaded for the tests' local feed so no test
+         reaches nuget.org for them. -->
+    <AvaloniaTemplatesVersion>12.1.6</AvaloniaTemplatesVersion>
+    <!-- Avalonia 11's last release, for the previewer's test of an app still on it (tests/AvaloniaGraphs). -->
+    <AvaloniaOlderVersion>11.3.22</AvaloniaOlderVersion>
+    <!-- The MVVM Toolkit at the version Avalonia's MVVM template above writes, downloaded for the tests' package cache, so
+         an app of theirs restores with its generators and reaches no feed. -->
+    <CommunityToolkitMvvmVersion>8.4.2</CommunityToolkitMvvmVersion>
+    <!-- Aspire's templates, AppHost SDK and package, dashboard, orchestrator and CLI at one version, downloaded for the
+         tests' local feed. -->
+    <AspireTemplatesVersion>13.6.5</AspireTemplatesVersion>
+    <!-- The Azure Functions app (.NET isolated worker) the Aspire tests write: its MSBuild SDK, downloaded for the tests'
+         local feed, and its worker and HTTP triggers, whose graph tests/AspireGraphs restores. -->
+    <AzureFunctionsSdkVersion>1.0.2</AzureFunctionsSdkVersion>
+    <AzureFunctionsWorkerVersion>2.52.0</AzureFunctionsWorkerVersion>
+    <AzureFunctionsHttpVersion>3.3.0</AzureFunctionsHttpVersion>
+    <!-- WPF's reference pack at the version global.json's SDK gives its own WPF (its TargetingPackVersion), downloaded
+         for the tests' local feed so the WPF app they make restores off Windows; another SDK's fails WpfXamlTests naming
+         the version to pin. -->
+    <WindowsDesktopRefVersion>11.0.0</WindowsDesktopRefVersion>
+    <!-- .NET MAUI's controls at the release of global.json's SDK: what the MAUI previewer (src/Passenger.MauiPreview) draws
+         a project's XAML with, and the MAUI XAML tests' app (tests/MauiGraphs), whose package graph builds a plain net11.0
+         project without MAUI's workload, which CI has not. -->
+    <MauiVersion>11.0.0</MauiVersion>
+    <!-- EF Core and the dotnet-ef tool for the Migrations window's tests, downloaded for the tests' local feed: at its
+         version, and at the one before for a tool that does not match and a stand-in provider that trails it. -->
+    <EfCoreVersion>10.0.14</EfCoreVersion>
+    <EfCoreOlderVersion>10.0.13</EfCoreOlderVersion>
+    <!-- EF Core 11 and its dotnet-ef, whose options' defaults .config/dotnet-ef.json gives, for the Migrations window's
+         test of them, downloaded for the tests' local feed. -->
+    <EfCore11Version>11.0.0</EfCore11Version>
+    <!-- Npgsql's provider of EF Core, at a version whose range holds EfCoreVersion, for the test of a compose run's
+         Postgres. -->
+    <NpgsqlEfVersion>10.0.3</NpgsqlEfVersion>
+    <!-- GoDotTest at its release for Godot 4.7.2, and what it depends on but Godot's own GodotSharp, downloaded for the
+         Godot tests' GoDotTest tests (tests/GodotGraphs): restored as a graph, nuget.org's GodotSharp would go into the
+         package cache under the version a Godot's own packages give a game, and fail the next locked restore of either. -->
+    <GoDotTestVersion>2.0.52</GoDotTestVersion>
+    <ChickensoftLogVersion>2.0.0</ChickensoftLogVersion>
+    <ChickensoftCollectionsVersion>3.2.1</ChickensoftCollectionsVersion>
+    <JetBrainsAnnotationsVersion>2026.2.0</JetBrainsAnnotationsVersion>
+    <!-- GdUnit4's VSTest adapter at its release for Godot 4.7, the API release it needs, and what they depend on but
+         Godot's own GodotSharp, at the versions they name, downloaded for the Godot tests' GdUnit4 tests (tests/GodotGraphs)
+         as GoDotTest's are. -->
+    <GdUnit4ApiVersion>5.1.0-rc6</GdUnit4ApiVersion>
+    <GdUnit4AdapterVersion>3.2.0</GdUnit4AdapterVersion>
+    <GdUnit4RoslynVersion>5.0.0</GdUnit4RoslynVersion>
+    <GdUnit4RoslynAnalyzersVersion>3.11.0</GdUnit4RoslynAnalyzersVersion>
+    <GdUnit4TestPlatformVersion>18.0.1</GdUnit4TestPlatformVersion>
+    <MonoCecilVersion>0.11.6</MonoCecilVersion>
+    <!-- Microsoft.Bcl.AsyncInterfaces at the version xunit.v3's common package names, which the headless test projects
+         TestFramesTests make resolve where the tests' own graph takes a newer one (Azure.Core's): downloaded for the tests'
+         package cache, so their restore reaches no feed. -->
+    <XunitAsyncInterfacesVersion>6.0.0</XunitAsyncInterfacesVersion>
+    <!-- The test frameworks the tests' own test projects take beside VSTest's SDK at its version below, and what each
+         depends on that no other restore brings, downloaded for the tests' package cache (tests/UnitTestGraphs), so their
+         restores reach no feed: xunit v2 and its VSTest adapter; MSTest on VSTest; NUnit and its adapter, on VSTest and on
+         the Testing Platform alone, and NUnit 4 with the adapter of its day on VSTest; MSTest on its own runner and xunit v3
+         on the Testing Platform's second line, where the tests' own xunit v3 is on its first. -->
+    <XunitTwoVersion>2.9.3</XunitTwoVersion>
+    <XunitTwoAbstractionsVersion>2.0.3</XunitTwoAbstractionsVersion>
+    <XunitTwoAnalyzersVersion>1.18.0</XunitTwoAnalyzersVersion>
+    <XunitTwoRunnerVersion>3.1.5</XunitTwoRunnerVersion>
+    <MSTestOnVSTestVersion>3.10.0</MSTestOnVSTestVersion>
+    <MSTestOnVSTestPlatformVersion>1.8.0</MSTestOnVSTestPlatformVersion>
+    <NUnitVersion>5.0.0</NUnitVersion>
+    <NUnitAdapterVersion>6.3.1</NUnitAdapterVersion>
+    <NUnitPlatformVersion>2.4.1</NUnitPlatformVersion>
+    <NUnitAdapterUtilitiesVersion>18.10.1</NUnitAdapterUtilitiesVersion>
+    <NUnitRunnerObjectModelVersion>18.9.0</NUnitRunnerObjectModelVersion>
+    <NUnitDependencyModelVersion>8.0.2</NUnitDependencyModelVersion>
+    <NUnitFourVersion>4.4.0</NUnitFourVersion>
+    <NUnitFourAdapterVersion>5.2.0</NUnitFourAdapterVersion>
+    <NUnitFourPlatformVersion>1.9.0</NUnitFourPlatformVersion>
+    <TestAdapterUtilitiesVersion>17.13.0</TestAdapterUtilitiesVersion>
+    <MSTestRunnerVersion>4.5.1</MSTestRunnerVersion>
+    <MSTestRunnerObjectModelVersion>18.10.1</MSTestRunnerObjectModelVersion>
+    <XunitAppVersion>4.0.2</XunitAppVersion>
+    <XunitAppAnalyzersVersion>2.2.0</XunitAppAnalyzersVersion>
+    <XunitAppAccessControlVersion>6.0.1</XunitAppAccessControlVersion>
+    <TestingPlatformTwoVersion>2.5.1</TestingPlatformTwoVersion>
+    <!-- Reqnroll on xunit v3 for the BDD tests' Reqnroll projects (tests/UnitTestGraphs/Reqnroll), with what it depends on
+         that the tests' own xunit v3, VSTest adapter and test SDK do not bring, at the versions its restore resolves. -->
+    <ReqnrollVersion>3.3.4</ReqnrollVersion>
+    <ReqnrollGherkinVersion>35.0.0</ReqnrollGherkinVersion>
+    <ReqnrollCucumberExpressionsVersion>17.1.0</ReqnrollCucumberExpressionsVersion>
+    <ReqnrollHtmlFormatterVersion>22.2.0</ReqnrollHtmlFormatterVersion>
+    <ReqnrollMessagesVersion>30.1.0</ReqnrollMessagesVersion>
+    <ReqnrollAsyncInterfacesVersion>9.0.6</ReqnrollAsyncInterfacesVersion>
+    <ReqnrollDependencyModelVersion>8.0.2</ReqnrollDependencyModelVersion>
+    <ReqnrollXunitAnalyzersVersion>1.27.0</ReqnrollXunitAnalyzersVersion>
+    <ReqnrollTestingPlatformVersion>1.9.1</ReqnrollTestingPlatformVersion>
+    <!-- Serilog at the version the Solution view's evaluation tests pin centrally (ProjectEvaluationTests), which depends
+         on nothing at the tests' target: downloaded for the tests' package cache, so the restore their language server
+         makes reaches no feed. -->
+    <ProjectEvaluationSerilogVersion>4.0.0</ProjectEvaluationSerilogVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Avalonia" Version="12.1.6" />
+    <PackageVersion Include="Avalonia.Desktop" Version="12.1.6" />
+    <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.1.6" />
+    <!-- An HTML file's preview beside its text, the system's own web view (MIT since it left Accelerate, at 11.4.0). -->
+    <PackageVersion Include="Avalonia.Controls.WebView" Version="12.1.2" />
+    <PackageVersion Include="Avalonia.HarfBuzz" Version="12.1.6" />
+    <!-- XAML Hot Reload's compiler, carried by the inspector into an app that has none: at Avalonia's version, as it reaches
+         into Avalonia's own insides. -->
+    <PackageVersion Include="Avalonia.Markup.Xaml.Loader" Version="12.1.6" />
+    <PackageVersion Include="Avalonia.Headless" Version="12.1.6" />
+    <PackageVersion Include="Avalonia.Skia" Version="12.1.6" />
+    <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.1.6" />
+    <!-- Skia and HarfBuzz under Avalonia's renderer, Svg.Skia and the MAUI previewer, at their newest stable line rather
+         than the older ones Avalonia.Skia and Avalonia.Controls.Maui name as their least, each with the Linux native
+         library of its own version (macOS's and Windows' come with the managed package). -->
+    <PackageVersion Include="SkiaSharp" Version="4.156.0" />
+    <PackageVersion Include="SkiaSharp.NativeAssets.Linux" Version="4.156.0" />
+    <PackageVersion Include="HarfBuzzSharp" Version="14.4.0.100" />
+    <PackageVersion Include="HarfBuzzSharp.NativeAssets.Linux" Version="14.4.0.100" />
+    <!-- The MAUI previewer's (src/Passenger.MauiPreview): Avalonia's backend for .NET MAUI, which draws MAUI's controls with
+         Avalonia's on every system. Its newest release candidate, as it has no stable release yet. -->
+    <PackageVersion Include="Avalonia.Controls.Maui" Version="11.0.0-rc.3.26301.1434" />
+    <PackageVersion Include="Microsoft.Maui.Controls.Core" Version="$(MauiVersion)" />
+    <PackageVersion Include="Microsoft.Maui.Controls.Xaml" Version="$(MauiVersion)" />
+    <PackageVersion Include="Google.Protobuf" Version="3.36.2" />
+    <PackageVersion Include="Grpc.Net.Client" Version="2.85.0" />
+    <!-- Also what Passenger's analyzers are compiled against (src/Passenger.Analyzers), so never past the compiler of
+         global.json's SDK, nor of Roslyn's server at RoslynServerVersion, which load them. -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
+    <!-- The unit tests' workspaces, at the compiler's version above: what the extension inside Roslyn's server keeps by a
+         solution's documents, held to each workspace apart. -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.9.0" />
+    <PackageVersion Include="ModelContextProtocol.Core" Version="2.3.1" />
+    <!-- The NuGet window's package sources, read by NuGet's own code, so they match the CLI's. -->
+    <PackageVersion Include="NuGet.Configuration" Version="7.9.0" />
+    <PackageVersion Include="StreamJsonRpc" Version="2.26.150" />
+    <!-- The app's JoinableTaskFactory (Synchronously.cs), at the version StreamJsonRpc takes. -->
+    <PackageVersion Include="Microsoft.VisualStudio.Threading.Only" Version="18.7.23" />
+    <PackageVersion Include="Porta.Pty" Version="2.2.4" />
+    <!-- A Godot game's Ogg Vorbis and MP3 sounds decoded to WAV for the system's player; NVorbis's 0.10 line, as 1.0 is
+         still a pre-release. -->
+    <PackageVersion Include="NVorbis" Version="0.10.5" />
+    <PackageVersion Include="NLayer" Version="3.0.1" />
+    <!-- An SVG file's picture. -->
+    <PackageVersion Include="Svg.Skia" Version="5.2.3" />
+    <!-- TextMate grammars' tokenizer, with GregsEx's managed regular expressions: colour for every
+         language but C#. -->
+    <PackageVersion Include="Tint" Version="0.3.0" />
+    <!-- Cucumber's own Gherkin reader (every language its keywords are written in) and Cucumber Expressions, which read a
+         .feature file and match its steps to their step definitions as Reqnroll does: at the versions Reqnroll 3 takes,
+         so a step reads and matches in the editor as it does in a test run. -->
+    <PackageVersion Include="Gherkin" Version="35.0.0" />
+    <PackageVersion Include="Cucumber.CucumberExpressions" Version="17.1.0" />
+    <!-- VSTest's own client for the vstest.console the SDK ships: discovery, runs and debugging of tests. -->
+    <PackageVersion Include="Microsoft.TestPlatform.TranslationLayer" Version="18.11.0" />
+    <!-- The Windows install's hooks, at the version of the vpk tool that packs it (dotnet-tools.json). -->
+    <PackageVersion Include="Velopack" Version="1.2.161" />
+  </ItemGroup>
+  <!-- The project host (Passenger.Host): MSBuild compiled against at the oldest an SDK it may load carries (8.0.4xx's
+       17.11), never copied, and MSBuildLocator at the version Roslyn's own build host uses. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Build" Version="17.11.48" />
+    <PackageVersion Include="Microsoft.Build.Framework" Version="17.11.48" />
+    <PackageVersion Include="Microsoft.Build.Locator" Version="1.10.2" />
+  </ItemGroup>
+  <!-- Roslyn's server written again without Visual Studio Telemetry's session (tools/Passenger.RoslynPatch), a tool of
+       the build, never carried: at the version GdUnit4 names for the tests' package cache, one version for both. -->
+  <ItemGroup>
+    <PackageVersion Include="Mono.Cecil" Version="$(MonoCecilVersion)" />
+  </ItemGroup>
+  <!-- The debugger's engine. The expression compiler is Roslyn's, packed from its own source (Roslyn does not
+       publish it) at the Microsoft.CodeAnalysis version above, which it must match. -->
+  <ItemGroup>
+    <PackageVersion Include="ICSharpCode.Decompiler" Version="11.2.0.10050" />
+    <PackageVersion Include="Krafs.Publicizer" Version="2.3.2" />
+    <PackageVersion Include="Microsoft.Diagnostics.DbgShim" Version="10.0.750501" />
+    <PackageVersion Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.750501" />
+    <PackageVersion Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="4.0.0" />
+    <PackageVersion Include="Microsoft.Diagnostics.Runtime" Version="4.2.751201" />
+    <PackageVersion Include="MP.Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.ExpressionCompiler" Version="5.9.0" />
+    <PackageVersion Include="ZLinq" Version="1.6.1" />
+  </ItemGroup>
+  <!-- Tests. xunit v3 stays on 3.2, the line Avalonia.Headless.XUnit is built against. -->
+  <ItemGroup>
+    <PackageVersion Include="Aspire.Hosting.AppHost" Version="$(AspireTemplatesVersion)" />
+    <PackageVersion Include="Aspire.Hosting.Azure.Functions" Version="$(AspireTemplatesVersion)" />
+    <!-- The analyzers and generators at the versions Azure.Functions.Sdk (AzureFunctionsSdkVersion) adds them. -->
+    <PackageVersion Include="Microsoft.Azure.Functions.Worker" Version="$(AzureFunctionsWorkerVersion)" />
+    <PackageVersion Include="Microsoft.Azure.Functions.Worker.Extensions.Http" Version="$(AzureFunctionsHttpVersion)" />
+    <PackageVersion Include="Microsoft.Azure.Functions.Worker.Sdk.Analyzers" Version="1.2.2" />
+    <PackageVersion Include="Microsoft.Azure.Functions.Worker.Sdk.Generators" Version="1.4.0" />
+    <!-- At the versions Aspire's templates at AspireTemplatesVersion write, not their newest, so the test folders made
+         from those templates restore from the package cache tests/AspireGraphs fills. -->
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.14" />
+    <!-- What writes a build's OpenAPI document, restored for the test of a document Passenger reads from the build: at
+         Microsoft.AspNetCore.OpenApi's version above, not its newest, as its dotnet-getdocument loads the Microsoft.OpenApi
+         it is built against beside the app's own and fails where the app's is older (10.0.15's takes 2.13.0, where
+         OpenApi 10.0.14 brings 2.12.2). -->
+    <PackageVersion Include="Microsoft.Extensions.ApiDescription.Server" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.10.0" />
+    <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.10.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.17.0" />
+    <!-- At the version the SDK's Blazor WebAssembly and Blazor Web App templates write for the tests' own target, so the
+         apps they make from them restore from the package cache tests/BlazorGraphs fills. -->
+    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="$(EfCoreVersion)" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="$(EfCoreVersion)" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(NpgsqlEfVersion)" />
+    <PackageVersion Include="Avalonia.Headless.XUnit" Version="12.1.6" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="5.6.0" />
+    <!-- The analyzers' (src/Passenger.Analyzers): the last release, MIT where netstandard2.0's 1.1.0 is not. -->
+    <PackageVersion Include="Microsoft.NETCore.Platforms" Version="7.0.4" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
+    <PackageVersion Include="xunit.v3" Version="3.2.2" />
+  </ItemGroup>
+</Project>

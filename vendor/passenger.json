@@ -1,0 +1,26 @@
+{
+  "repository": "https://github.com/Zaneris/passenger.git",
+  "commit": "2044e49b52742eea87acbf6a5901a108d2778719",
+  "keep": [
+    ".editorconfig",
+    ".gitattributes",
+    ".gitignore",
+    "Directory.Build.props",
+    "Directory.Build.targets",
+    "Directory.Packages.props",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "global.json",
+    "nuget.config",
+    "docs/release-notes/",
+    "src/",
+    "tools/Passenger.NodePackages/",
+    "tools/Passenger.Notices/",
+    "tools/Passenger.RoslynPatch/",
+    "tools/Shared/"
+  ],
+  "drop": [
+    "src/Passenger.ContainerTools/",
+    "src/Passenger.DebugRelay/"
+  ]
+}

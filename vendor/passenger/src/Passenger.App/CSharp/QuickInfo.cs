@@ -1,0 +1,450 @@
+using Avalonia;
+using Avalonia.Input;
+using Passenger.Core;
+using Passenger.Editor;
+using Passenger.Lsp;
+using Passenger.Text;
+
+namespace Passenger.App.CSharp;
+
+/// <summary>The card when the pointer rests, or Quick Documentation at the caret: the problems there, then a paused
+/// program's value (its rows to open, the card taking the pointer and the keys) or what the file's language says of the
+/// symbol; an inlay hint's own words over a hint. A card a key shows is read to a screen reader, one the pointer brings
+/// never.</summary>
+internal sealed class QuickInfo
+{
+    private readonly AssistContext context;
+    private readonly PopupPlacement popups;
+    private readonly Func<bool> completing;
+    private readonly InfoCard hoverCard = new("Quick Documentation");
+    private CancellationTokenSource? hovering;
+
+    /// <summary>The pause after the pointer leaves a card of a paused program's value (its word, or the card itself) before
+    /// the card goes: time to reach the card from the word, on which it stays while the pointer or the keys are on it.</summary>
+    private readonly Debounce leaving;
+
+    /// <summary>Takes the card away once the stop its value was read at is gone.</summary>
+    private CancellationTokenRegistration hoverGone;
+
+    /// <summary>Where a card of a value was placed: the line's top it hangs from, in the layer, and whether it stands over
+    /// the line, so a card that grows as its rows open stays beside the line and inside the editor.</summary>
+    private (Point Line, bool Above)? valuesPlace;
+
+    /// <summary>The hover card on the layer, which never shows over an open completion list (<paramref name="completing"/>).</summary>
+    public QuickInfo(AssistContext context, PopupPlacement popups, Func<bool> completing)
+    {
+        this.context = context;
+        this.popups = popups;
+        this.completing = completing;
+        popups.Add(hoverCard);
+        hoverCard.Play = context.Play;
+        leaving = new Debounce(TimeSpan.FromMilliseconds(300), () =>
+        {
+            if (!HoverHeld)
+            {
+                Hide();
+            }
+            return Task.CompletedTask;
+        });
+        hoverCard.PointerEntered += (_, _) => leaving.Stop();
+        hoverCard.PointerExited += (_, _) => LeaveValues();
+        hoverCard.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == InputElement.IsKeyboardFocusWithinProperty && e.NewValue is false)
+            {
+                LeaveValues();
+            }
+        };
+        hoverCard.SizeChanged += (_, _) => KeepValuesPlaced();
+        hoverCard.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Escape && hoverCard.Values is not null)
+            {
+                Hide();
+                e.Handled = true;
+            }
+        };
+    }
+
+    private CodeEditor Editor => context.Editor;
+
+    public bool IsVisible => hoverCard.IsVisible;
+
+    /// <summary>What the hover card says while it shows, null otherwise.</summary>
+    public string? Text => hoverCard.IsVisible ? hoverCard.Text : null;
+
+    /// <summary>The rows of a paused program's value the hover card shows, while it shows them.</summary>
+    public Debugging.VariablesList? Values => hoverCard.IsVisible ? hoverCard.Values : null;
+
+    /// <summary>The hover card while it shows, its frame the popups' (<c>Border.popup</c>).</summary>
+    public Avalonia.Controls.Border? Card => hoverCard.IsVisible ? hoverCard : null;
+
+    /// <summary>While the debugger is paused, the value of what the pointer rests on, which the hover card shows
+    /// instead of the symbol's description; in a debugged app's .axaml file, a binding's.</summary>
+    public Func<int, CancellationToken, Task<DebuggerHover?>>? DebuggerValue { get; set; }
+
+    /// <summary>What the gutter says beside a line (from zero) of the file shown, a line of words each (a breakpoint's
+    /// state); null where it says nothing.</summary>
+    public Func<int, IReadOnlyList<string>?>? GutterWords { get; set; }
+
+    /// <summary>Whether a card of a value is in use: it has the keys, its menu is open, or a value is being typed in it.</summary>
+    public bool ValuesInUse => hoverCard.IsVisible && hoverCard.Values is { } values && (hoverCard.IsKeyboardFocusWithin || values.IsInUse);
+
+    /// <summary>Whether a card of a value, or one holding something to use, stays: in use, or the pointer is on it.</summary>
+    private bool HoverHeld => ValuesInUse || (hoverCard.IsVisible && Reachable && hoverCard.IsPointerOver);
+
+    /// <summary>Whether the card shown is one the pointer may go to: a value's rows, or something to use (a sound's Play).</summary>
+    private bool Reachable => hoverCard.Values is not null || hoverCard.Usable;
+
+    /// <summary>The pointer left the word the card is of: a card the pointer may go to goes after a pause, any other at once.</summary>
+    public void PointerLeft()
+    {
+        if (hoverCard.IsVisible && Reachable)
+        {
+            LeaveValues();
+        }
+        else
+        {
+            Hide();
+        }
+    }
+
+    /// <summary>Quick Documentation: the card for what is at the caret (its problems, a paused program's value, the symbol's
+    /// description); pressed again while a value's card shows, the card takes the keys, its rows to open with the arrows.</summary>
+    public void QuickDocumentation()
+    {
+        if (hoverCard.IsVisible && hoverCard.Values is { } values)
+        {
+            values.FocusRow();
+            return;
+        }
+        IdeErrors.Observe(Show(context.Caret, Editor.PointOf(context.Caret), byKey: true));
+    }
+
+    /// <summary>The card for an offset, hung at a point's left; told to a screen reader where a key asked for it.</summary>
+    public async Task Show(int offset, Point point, bool byKey = false)
+    {
+        using (BackgroundWork.Scope())
+        {
+            await ShowCore(offset, point, byKey);
+        }
+    }
+
+    private async Task ShowCore(int offset, Point point, bool byKey)
+    {
+        hovering?.Cancel();
+        CancellationTokenSource cancel = new();
+        hovering = cancel;
+        ForgetValues();
+        hoverCard.Clear();
+        foreach (Marker marker in Editor.MarkersAt(offset))
+        {
+            hoverCard.AddText(marker.Message, marker.Kind switch
+            {
+                MarkerKind.Error => InfoCard.Brush(TokenKeys.Error),
+                MarkerKind.Warning => InfoCard.Brush(TokenKeys.Warning),
+                _ => null,
+            });
+        }
+        DebuggerHover? debuggerValue = DebuggerValue is { } value ? await value(offset, cancel.Token) : null;
+        if (cancel.IsCancellationRequested)
+        {
+            return;
+        }
+        Debugging.VariablesList? values = null;
+        if (debuggerValue is not null)
+        {
+            if (!AddValue(debuggerValue, out values))
+            {
+                return;
+            }
+        }
+        else
+        {
+            try
+            {
+                if (context.Editors.Active is { } shown)
+                {
+                    await context.Languages.HoverAsync(hoverCard, shown, offset, cancel.Token);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
+        if ((hoverCard.IsEmpty && values is null) || completing())
+        {
+            hoverCard.IsVisible = false;
+            return;
+        }
+        Place(offset, point, values, debuggerValue);
+        if (byKey)
+        {
+            Said();
+        }
+    }
+
+    /// <summary>The card shown, its words told to a screen reader.</summary>
+    private void Said() => popups.Tell(hoverCard.Text, Urgency.Polite, hoverCard);
+
+    /// <summary>Quick Evaluate Expression's card: a value read for an offset, shown as a hovered one is under its line, its
+    /// row taking the keys at once, as Quick Documentation pressed again gives them.</summary>
+    public void ShowValue(int offset, DebuggerHover value)
+    {
+        hovering?.Cancel();
+        hovering = new CancellationTokenSource();
+        ForgetValues();
+        hoverCard.Clear();
+        if (!AddValue(value, out Debugging.VariablesList? values) || values is null)
+        {
+            return;
+        }
+        Place(offset, Editor.PointOf(Math.Min(offset, Editor.Document.Snapshot.Length)), values, value);
+        Said();
+        // Once laid out, so the row itself has a container to take them.
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (hoverCard.IsVisible && hoverCard.Values == values)
+            {
+                values.FocusRow();
+            }
+        }, Avalonia.Threading.DispatcherPriority.Loaded);
+    }
+
+    /// <summary>A paused program's value added to the card: what went wrong reading it, then its rows or its code; false,
+    /// the card hidden, once the stop it was read at is gone.</summary>
+    private bool AddValue(DebuggerHover value, out Debugging.VariablesList? values)
+    {
+        values = null;
+        if (value.Gone.IsCancellationRequested)
+        {
+            hoverCard.IsVisible = false;
+            return false;
+        }
+        if (value.Problem is { } problem)
+        {
+            hoverCard.AddText(problem, InfoCard.Brush(TokenKeys.Error));
+        }
+        if (value.Values is { } rows)
+        {
+            values = rows;
+            // The menu closed, the card goes unless the pointer or the keys are still on it.
+            rows.MenuClosed += (_, _) =>
+            {
+                if (hoverCard.Values == rows)
+                {
+                    LeaveValues();
+                }
+            };
+        }
+        else if (value.Code.Length > 0)
+        {
+            hoverCard.AddCode(value.Code);
+        }
+        return true;
+    }
+
+    /// <summary>The card shown under the line of an offset, at a point's left: a value's rows as they fit
+    /// (<see cref="PlaceValues"/>), gone with the stop a debugger's value was read at.</summary>
+    private void Place(int offset, Point point, Debugging.VariablesList? values, DebuggerHover? debuggerValue)
+    {
+        hoverCard.IsVisible = true;
+        TextSnapshot text = Editor.Document.Snapshot;
+        int lineStart = text.GetLineStart(text.GetLineFromOffset(Math.Min(offset, text.Length)));
+        Point anchor = Editor.PointOf(lineStart);
+        if (values is not null)
+        {
+            PlaceValues(values, new Point(point.X, anchor.Y));
+        }
+        else
+        {
+            popups.Place(hoverCard, new Point(point.X, anchor.Y), above: false);
+        }
+        if (debuggerValue is not null)
+        {
+            // Read at a stop, the value goes with it: the program going on, another program's tab chosen, the folder left.
+            hoverGone = debuggerValue.Gone.Register(Hide);
+        }
+    }
+
+    /// <summary>Puts a card of a value's rows under the line at <paramref name="at"/> (its top), or over it when the room
+    /// below holds fewer rows than the room above, its rows scrolling past what that room holds; held to the editor's
+    /// width, where its rows give way (<see cref="PopupPlacement.Widest"/>).</summary>
+    private void PlaceValues(Debugging.VariablesList values, Point at)
+    {
+        at = popups.InLayer(at);
+        double below = popups.Room.Height - (at.Y + Editor.LineHeight + 2) - 8;
+        double over = at.Y - 2 - 8;
+        bool above = below < ListRow.Height * 8 && over > below;
+        hoverCard.AddValues(values, above ? over : below);
+        hoverCard.Within(popups.Widest);
+        valuesPlace = (at, above);
+        hoverCard.Measure(Size.Infinity);
+        Size size = hoverCard.DesiredSize;
+        Avalonia.Controls.Canvas.SetLeft(hoverCard, Math.Clamp(at.X - 4, 0, Math.Max(0, popups.Room.Width - size.Width - 8)));
+        Avalonia.Controls.Canvas.SetTop(hoverCard, ValuesTop(at, above, size.Height));
+    }
+
+    /// <summary>A card of a value that grew as its rows opened stays inside the editor, and over its line when it stands over it.</summary>
+    private void KeepValuesPlaced()
+    {
+        if (valuesPlace is not { } place || !hoverCard.IsVisible || hoverCard.Values is null)
+        {
+            return;
+        }
+        Size size = hoverCard.Bounds.Size;
+        double x = Math.Clamp(Avalonia.Controls.Canvas.GetLeft(hoverCard), 0, Math.Max(0, popups.Room.Width - size.Width - 8));
+        if (x != Avalonia.Controls.Canvas.GetLeft(hoverCard))
+        {
+            Avalonia.Controls.Canvas.SetLeft(hoverCard, x);
+        }
+        double y = ValuesTop(place.Line, place.Above, size.Height);
+        if (y != Avalonia.Controls.Canvas.GetTop(hoverCard))
+        {
+            Avalonia.Controls.Canvas.SetTop(hoverCard, y);
+        }
+    }
+
+    /// <summary>Where a card of a value's rows stands, over or under the line whose top is <paramref name="line"/>: in an
+    /// editor too short for its least rows, moved in to end at its edge, over some of the line.</summary>
+    private double ValuesTop(Point line, bool above, double height) => above
+        ? Math.Max(0, line.Y - height - 2)
+        : Math.Max(0, Math.Min(line.Y + Editor.LineHeight + 2, popups.Room.Height - height));
+
+    /// <summary>The pointer left a card of a value, or its word, or the keys left the card: it goes after a pause unless
+    /// the pointer comes back to it or it is in use.</summary>
+    private void LeaveValues()
+    {
+        if (hoverCard.IsVisible && Reachable)
+        {
+            leaving.Restart();
+        }
+    }
+
+    /// <summary>Lets go of the value the card showed: its pause before going, its stop, its place.</summary>
+    private void ForgetValues()
+    {
+        leaving.Stop();
+        hoverGone.Dispose();
+        hoverGone = default;
+        valuesPlace = null;
+    }
+
+    /// <summary>The card for an inlay hint the pointer rests on: what the server says of it (a type's description, a
+    /// parameter's), or none when it says nothing.</summary>
+    public async Task ShowHint(InlayHint hint, Point point)
+    {
+        hovering?.Cancel();
+        CancellationTokenSource cancel = new();
+        hovering = cancel;
+        ForgetValues();
+        hoverCard.Clear();
+        if (hint.Data is not LspInlayHint server || context.Current?.Lsp is not { } lsp)
+        {
+            hoverCard.IsVisible = false;
+            return;
+        }
+        using IDisposable held = BackgroundWork.Scope();
+        try
+        {
+            string tooltip = await lsp.InlayHintTooltipAsync(server, cancel.Token);
+            if (cancel.IsCancellationRequested)
+            {
+                return;
+            }
+            if (tooltip.Length == 0 || completing())
+            {
+                hoverCard.IsVisible = false;
+                return;
+            }
+            hoverCard.AddMarkdown(tooltip);
+            hoverCard.IsVisible = true;
+            TextSnapshot text = Editor.Document.Snapshot;
+            int lineStart = text.GetLineStart(text.GetLineFromOffset(Math.Min(hint.Offset, text.Length)));
+            popups.Place(hoverCard, new Point(point.X, Editor.PointOf(lineStart).Y), above: false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (LanguageServerFailed)
+        {
+            // A server that no longer has the hint (the file changed since) shows no card for it.
+            hoverCard.IsVisible = false;
+        }
+    }
+
+    /// <summary>What the card says of a line-end annotation the pointer rests on (a running game's value), added to the card;
+    /// false where it says nothing of it.</summary>
+    public Func<LineAnnotation, IHoverCard, bool>? AnnotationCard { get; set; }
+
+    /// <summary>The card for a line-end annotation the pointer rests on (<see cref="AnnotationCard"/>), hung under its line;
+    /// none where nothing is said of it.</summary>
+    public void ShowAnnotation(LineAnnotation annotation, Point point)
+    {
+        hovering?.Cancel();
+        ForgetValues();
+        hoverCard.Clear();
+        TextSnapshot text = Editor.Document.Snapshot;
+        if (completing() || annotation.Line >= text.LineCount || AnnotationCard?.Invoke(annotation, hoverCard) != true)
+        {
+            hoverCard.IsVisible = false;
+            return;
+        }
+        hoverCard.IsVisible = true;
+        popups.Place(hoverCard, new Point(point.X, Editor.PointOf(text.GetLineStart(annotation.Line)).Y), above: false);
+    }
+
+    /// <summary>The card for what the gutter shows beside a line the pointer rests on (<see cref="GutterWords"/>), hung under
+    /// the line; none where it says nothing.</summary>
+    public void ShowGutter(int line, Point point)
+    {
+        hovering?.Cancel();
+        ForgetValues();
+        hoverCard.Clear();
+        TextSnapshot text = Editor.Document.Snapshot;
+        if (GutterWords?.Invoke(line) is not { Count: > 0 } words || completing() || line >= text.LineCount)
+        {
+            hoverCard.IsVisible = false;
+            return;
+        }
+        hoverCard.AddText(string.Join('\n', words));
+        hoverCard.IsVisible = true;
+        popups.Place(hoverCard, new Point(point.X, Editor.PointOf(text.GetLineStart(line)).Y), above: false);
+    }
+
+    public void Hide()
+    {
+        hovering?.Cancel();
+        bool focused = hoverCard.IsKeyboardFocusWithin;
+        ForgetValues();
+        hoverCard.IsVisible = false;
+        if (hoverCard.Values is not null)
+        {
+            hoverCard.Clear();
+        }
+        if (focused)
+        {
+            Editor.Focus();
+        }
+    }
+
+    /// <summary>The card for what a language server says of an offset (its symbol's description), added to the card;
+    /// none where the server fails, the card then saying what the markers there say.</summary>
+    public static async Task ServerHoverAsync(LspDocument lsp, IHoverCard card, int offset, CancellationToken cancel)
+    {
+        try
+        {
+            Hover? hover = await lsp.HoverAsync(offset, cancel);
+            cancel.ThrowIfCancellationRequested();
+            if (hover is not null)
+            {
+                card.AddHover(hover);
+            }
+        }
+        catch (LanguageServerFailed)
+        {
+            // The card says what the markers there say, without the symbol's description.
+        }
+    }
+}

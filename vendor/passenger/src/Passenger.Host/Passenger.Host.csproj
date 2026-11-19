@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- MSBuild's evaluation of the open folder's projects, in a process of its own: MSBuild needs the JIT and the
+       installed SDK's own assemblies, which MSBuildLocator finds by the folder's global.json, and none of it belongs in
+       the UI's process. It runs on the runtime Passenger runs on (Passenger's helper host), and for an SDK newer than that
+       on the machine's newest, so whichever SDK the folder picks can load, and carries MSBuildLocator alone: MSBuild is
+       compiled against, never copied. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- The oldest runtime it needs, Roslyn's server's: on the machine's, it rolls forward to the newest there. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Passenger.Host</RootNamespace>
+    <RollForward>LatestMajor</RollForward>
+    <UseAppHost>false</UseAppHost>
+    <!-- PathNames' own calls to the system (realpath, GetFinalPathNameByHandle). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Compiled against at the oldest MSBuild an SDK it may load has (8.0.4xx's); the SDK's own assemblies run. -->
+    <PackageReference Include="Microsoft.Build" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Build.Framework" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Build.Locator" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Passenger.Core's paths, a project's own folders and the names it reads them by, its reader of JSON lines, its
+         pooled buffer and MSBuild's names, compiled in since its net11.0 is past the host's. -->
+    <Compile Include="../Passenger.Core/PathNames.cs" Link="PathNames.cs" />
+    <!-- The Windows calls PathNames makes, declared once. -->
+    <Compile Include="../Passenger.Core/Kernel32.cs" Link="Kernel32.cs" />
+    <Compile Include="../Passenger.Core/PathComparer.cs" Link="PathComparer.cs" />
+    <Compile Include="../Passenger.Core/ProjectFolders.cs" Link="ProjectFolders.cs" />
+    <Compile Include="../Passenger.Core/FolderNames.cs" Link="FolderNames.cs" />
+    <Compile Include="../Passenger.Core/JsonLines.cs" Link="JsonLines.cs" />
+    <Compile Include="../Passenger.Core/PooledBytes.cs" Link="PooledBytes.cs" />
+    <Compile Include="../Passenger.Core/MSBuildNames.cs" Link="MSBuildNames.cs" />
+    <!-- A C# name's characters, as a program's first member is read by them (ProgramFiles). -->
+    <Compile Include="../Passenger.Core/CSharpNames.cs" Link="CSharpNames.cs" />
+  </ItemGroup>
+
+  <!-- MSBuild's own dependencies come from the SDK with it: copied here, an older one would be loaded in their place. -->
+  <Target Name="CarryOnlyTheLocator" AfterTargets="ResolvePackageAssets">
+    <ItemGroup>
+      <RuntimeCopyLocalItems Remove="@(RuntimeCopyLocalItems)" Condition="'%(RuntimeCopyLocalItems.NuGetPackageId)' != 'Microsoft.Build.Locator'" />
+    </ItemGroup>
+  </Target>
+</Project>

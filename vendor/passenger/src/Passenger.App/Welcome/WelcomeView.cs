@@ -1,0 +1,297 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
+using Avalonia.Threading;
+using Passenger.App.ToolWindows;
+using Passenger.Core;
+using Passenger.Text;
+using Passenger.Workspace;
+
+namespace Passenger.App.Welcome;
+
+/// <summary>The Welcome screen, a start page in the window while nothing is open: Passenger's mark and version, New
+/// Solution, Open, Open Folder and Clone Repository, and the folders, solutions and projects opened lately (each with what
+/// it opens as), newest first and narrowed as a search is typed. Up and Down
+/// choose one from the search box or the list, Enter opens it, and Delete (Backspace on the Mac) or its menu removes it.
+/// One gone from disk is marked, and the window says so when it is opened (<see cref="Say"/>).</summary>
+public sealed class WelcomeView : UserControl
+{
+    private readonly TextBox search;
+    private readonly ListBox list;
+    private readonly TextBlock empty;
+    private readonly TextBlock notice;
+    private IReadOnlyList<RecentRow> all = [];
+
+    public WelcomeView()
+    {
+        Classes.Add(StyleClasses.Welcome);
+        Image mark = new() { Classes = { StyleClasses.WelcomeMark }, Source = new Bitmap(AssetLoader.Open(new Uri("avares://Passenger/Assets/passenger.png"))) };
+        RenderOptions.SetBitmapInterpolationMode(mark, BitmapInterpolationMode.HighQuality);
+        TextBlock title = new() { Classes = { StyleClasses.WelcomeTitle }, Text = "Welcome to Passenger" };
+        TextBlock subtitle = new()
+        {
+            Classes = { StyleClasses.WelcomeSubtitle },
+            Text = $"Version {Product.Version}. Start a new solution, open a solution, project or folder, or clone a repository.",
+            TextWrapping = TextWrapping.Wrap,
+        };
+        Grid hero = new() { Classes = { StyleClasses.WelcomeHero }, ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+        // The mark gives its room to the words in a narrow page, where beside them it would break the title mid-word.
+        hero.SizeChanged += (_, e) => mark.IsVisible = e.NewSize.Width >= NarrowHero;
+        hero.Children.Add(mark);
+        hero.Children.Add(new StackPanel { [Grid.ColumnProperty] = 1, VerticalAlignment = VerticalAlignment.Center, Children = { title, subtitle } });
+
+        NewSolutionButton = Action(IconKeys.Add, "New Solution", "From a template");
+        NewSolutionButton.Click += (_, _) => NewSolutionRequested?.Invoke(this, EventArgs.Empty);
+        Button open = Action(IconKeys.Solution, "Open", "A solution or project");
+        open.Click += (_, _) => OpenRequested?.Invoke(this, EventArgs.Empty);
+        Button openFolder = Action(IconKeys.FolderOpen, "Open Folder", "A folder of code");
+        openFolder.Click += (_, _) => OpenFolderRequested?.Invoke(this, EventArgs.Empty);
+        Button clone = Action(IconKeys.Branch, "Clone Repository", "From a Git URL");
+        clone.Click += (_, _) => CloneRequested?.Invoke(this, EventArgs.Empty);
+        WrapPanel actions = new() { Classes = { StyleClasses.WelcomeActions }, Children = { NewSolutionButton, open, openFolder, clone } };
+        // Two or one across in a narrow page, so no tile is cut off at its edge.
+        actions.SizeChanged += (_, e) =>
+        {
+            double gap = actions.ItemSpacing;
+            int across = e.NewSize.Width >= 4 * ActionWidth + 3 * gap ? 4 : e.NewSize.Width >= 2 * ActionWidth + gap ? 2 : 1;
+            actions.ItemWidth = Math.Floor((e.NewSize.Width - (across - 1) * gap) / across);
+        };
+
+        TextBlock recent = new() { Classes = { StyleClasses.WelcomeSection }, Text = "Recent solutions", VerticalAlignment = VerticalAlignment.Center };
+        search = new TextBox { Classes = { StyleClasses.Search, StyleClasses.WelcomeSearch }, PlaceholderText = "Search recent solutions", [Grid.ColumnProperty] = 1 };
+        search.TextChanged += (_, _) => Filter();
+        Grid bar = new() { Classes = { StyleClasses.WelcomeRecentBar }, ColumnDefinitions = new ColumnDefinitions("Auto,*"), Children = { recent, search } };
+
+        notice = new TextBlock { TextWrapping = TextWrapping.Wrap, IsVisible = false, Margin = new Thickness(4, 0, 4, 10) };
+        notice.Bind(TextBlock.ForegroundProperty, notice.GetResourceObservable(TokenKeys.Warning));
+        list = new ListBox
+        {
+            Classes = { StyleClasses.Tree, StyleClasses.WelcomeList },
+        };
+        ReusedRows.Use(list, Row);
+        ListKeys.Act(list, new ListActs
+        {
+            Open = OpenChosen,
+            Remove = () =>
+            {
+                if (Selected is { } chosen)
+                {
+                    RemoveRequested?.Invoke(this, chosen);
+                }
+            },
+        });
+        ListKeys.Search(search, list, OpenChosen);
+        ListMenus.Attach(list, () => list.SelectedItem is not RecentRow chosen ? [] :
+        [
+            ListMenus.Item("Open", "Enter", () => Chosen?.Invoke(this, chosen)),
+            ListMenus.Item(FileManager.Showing, null, () => RevealRequested?.Invoke(this, chosen), !chosen.Missing),
+            ListMenus.Item("Copy Path", null, () => IdeErrors.Observe(ListMenus.CopyAsync(this, chosen.Path))),
+            new Separator(),
+            ListMenus.Item("Remove from Recent Solutions", OperatingSystem.IsMacOS() ? "Back" : "Delete", () => RemoveRequested?.Invoke(this, chosen)),
+        ]);
+        empty = new TextBlock { Classes = { StyleClasses.EmptyText, StyleClasses.WelcomeEmpty } };
+
+        Page page = new() { Classes = { StyleClasses.WelcomePage } };
+        foreach (Control top in (Control[])[hero, actions, bar, notice])
+        {
+            DockPanel.SetDock(top, Dock.Top);
+            page.Children.Add(top);
+        }
+        page.Children.Add(new Border { Classes = { StyleClasses.WelcomeRecent }, Child = new Panel { Children = { list, empty } } });
+        ScrollViewer scroller = new() { Content = page };
+        scroller.SizeChanged += (_, e) => page.View = e.NewSize.Height - page.Margin.Top - page.Margin.Bottom;
+        Content = new Panel { Children = { scroller, new ThemeBackdrop(BackgroundPlaces.Welcome) } };
+        Filter();
+    }
+
+    /// <summary>The page in its scroller: as tall as the view, the recent ones' list filling what the parts above it leave
+    /// and scrolling itself, while that is at least the list's least (Shell.axaml's <c>Border.welcomeRecent</c>); on a
+    /// shorter view, as tall as its parts with the list at its least, the view scrolling them.</summary>
+    private sealed class Page : DockPanel
+    {
+        private double view;
+
+        /// <summary>The height the page has in its scroller's view.</summary>
+        public double View
+        {
+            get => view;
+            set
+            {
+                if (Math.Abs(value - view) > 0.5)
+                {
+                    view = value;
+                    InvalidateMeasure();
+                }
+            }
+        }
+
+        protected override Type StyleKeyOverride => typeof(DockPanel);
+
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            // The parts above the list each as tall as it wants (one given less cuts its lines), the list at its least.
+            Control[] shown = [.. Children.Where(c => c.IsVisible)];
+            double least = 0;
+            foreach (Control part in shown.SkipLast(1))
+            {
+                part.Measure(availableSize.WithHeight(double.PositiveInfinity));
+                least += part.DesiredSize.Height;
+            }
+            least += shown.LastOrDefault() is { } list ? list.MinHeight + list.Margin.Top + list.Margin.Bottom : 0;
+            double height = Math.Max(least, View);
+            return base.MeasureOverride(availableSize.WithHeight(height)).WithHeight(height);
+        }
+    }
+
+    /// <summary>The narrowest the hero is with the mark beside its words.</summary>
+    private const double NarrowHero = 360;
+
+    /// <summary>The narrowest an action's tile is before the tiles go two or one across.</summary>
+    private const double ActionWidth = 160;
+
+    /// <summary>One of the page's actions: its icon, its name, and in a few words what it opens.</summary>
+    private static Button Action(string icon, string name, string hint)
+    {
+        PathIcon glyph = new() { Classes = { StyleClasses.WelcomeActionIcon } };
+        glyph.Bind(PathIcon.DataProperty, glyph.GetResourceObservable(icon));
+        Border chip = new() { Classes = { StyleClasses.WelcomeActionChip }, Child = glyph, VerticalAlignment = VerticalAlignment.Center };
+        TextBlock label = new() { Classes = { StyleClasses.WelcomeActionTitle }, Text = name, TextTrimming = TextTrimming.CharacterEllipsis };
+        TextBlock what = new() { Classes = { StyleClasses.WelcomeActionHint }, Text = hint, TextTrimming = TextTrimming.CharacterEllipsis };
+        DockPanel.SetDock(chip, Dock.Left);
+        return new Button
+        {
+            Classes = { StyleClasses.WelcomeAction },
+            Content = new DockPanel { Children = { chip, new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children = { label, what } } } },
+        };
+    }
+
+    /// <summary>A click on New Solution.</summary>
+    public event EventHandler? NewSolutionRequested;
+
+    /// <summary>A click on Open, for a solution or project.</summary>
+    public event EventHandler? OpenRequested;
+
+    public event EventHandler? OpenFolderRequested;
+
+    public event EventHandler? CloneRequested;
+
+    /// <summary>A recent folder or solution to open, by Enter, a double-click or its menu.</summary>
+    public event EventHandler<RecentRow>? Chosen;
+
+    /// <summary>One to take off the list, by its key or its menu.</summary>
+    public event EventHandler<RecentRow>? RemoveRequested;
+
+    /// <summary>A recent folder or solution to show in the file manager.</summary>
+    public event EventHandler<RecentRow>? RevealRequested;
+
+    /// <summary>The New Solution button, for a click on it.</summary>
+    public Button NewSolutionButton { get; }
+
+    public string Query
+    {
+        get => search.Text ?? string.Empty;
+        set => search.Text = value;
+    }
+
+    /// <summary>The rows listed, after the search.</summary>
+    public IReadOnlyList<RecentRow> Rows => list.ItemsSource as IReadOnlyList<RecentRow> ?? [];
+
+    /// <summary>The row Enter opens.</summary>
+    public RecentRow? Selected => list.SelectedItem as RecentRow;
+
+    /// <summary>What the screen says of the last one opened, when it could not be.</summary>
+    public string? Notice => notice.IsVisible ? notice.Text : null;
+
+    /// <summary>A row's place in the list, for a click on it; null when it is not listed.</summary>
+    public Control? RowControl(RecentRow row) => Rows.ToList().IndexOf(row) is var at and >= 0 ? list.ContainerFromIndex(at) : null;
+
+    /// <summary>The recent ones, newest first: the one chosen stays chosen if it is still there, else the one now in its
+    /// place.</summary>
+    public void Show(IReadOnlyList<RecentRow> rows)
+    {
+        all = rows;
+        Filter();
+    }
+
+    /// <summary>Says something of the one last opened (it is gone), or nothing.</summary>
+    public void Say(string? text)
+    {
+        notice.Text = text;
+        notice.IsVisible = text is not null;
+    }
+
+    /// <summary>The keys go to the search, as the screen opens.</summary>
+    public void FocusSearch() => Dispatcher.UIThread.Post(() => search.Focus(), DispatcherPriority.Loaded);
+
+    private void Filter()
+    {
+        RecentRow? was = Selected;
+        int at = Math.Max(0, list.SelectedIndex);
+        bool focused = list.IsKeyboardFocusWithin;
+        string[] words = Query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        List<RecentRow> shown = [.. all.Where(row => words.All(w => Matches(row, w)))];
+        list.ItemsSource = shown;
+        int chosen = was is null ? -1 : shown.FindIndex(r => r.Path == was.Path);
+        list.SelectedIndex = shown.Count == 0 ? -1 : chosen >= 0 ? chosen : Math.Min(at, shown.Count - 1);
+        empty.Text = all.Count == 0 ? "No recent solutions yet\nThe solutions, projects and folders you open are listed here" : "Nothing matches";
+        empty.IsVisible = shown.Count == 0;
+        if (focused && list.SelectedIndex >= 0)
+        {
+            // The rows are made anew, so the focus goes back to the one chosen.
+            Dispatcher.UIThread.Post(() => list.ContainerFromIndex(list.SelectedIndex)?.Focus(), DispatcherPriority.Loaded);
+        }
+    }
+
+    /// <summary>A word typed names a row by its name (CamelHumps too) or anywhere in its path.</summary>
+    private static bool Matches(RecentRow row, string word) =>
+        row.Name.Contains(word, StringComparison.OrdinalIgnoreCase) || row.Shown.Contains(word, StringComparison.OrdinalIgnoreCase)
+        || FuzzyMatch.Score(word, row.Name) is not null;
+
+    private void OpenChosen()
+    {
+        if (Selected is { } chosen)
+        {
+            Chosen?.Invoke(this, chosen);
+        }
+    }
+
+    /// <summary>A recent solution's row: its initials' badge, its name over where it is, its kind, and Missing for one no
+    /// longer on disk, its name and badge muted.</summary>
+    private static Control Row()
+    {
+        TextBlock letters = new() { Classes = { StyleClasses.WelcomeBadgeText }, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        Border badge = new() { Classes = { StyleClasses.WelcomeBadge }, Child = letters, VerticalAlignment = VerticalAlignment.Center };
+        TextBlock name = new() { Classes = { StyleClasses.WelcomeRowName }, TextTrimming = TextTrimming.CharacterEllipsis };
+        TextBlock where = new() { Classes = { StyleClasses.Muted, StyleClasses.WelcomeRowPath }, TextTrimming = TextTrimming.PathSegmentEllipsis };
+        DockPanel line = new() { Classes = { StyleClasses.WelcomeRow } };
+        DockPanel.SetDock(badge, Dock.Left);
+        line.Children.Add(badge);
+        TextBlock gone = new() { Text = "Missing", FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 4, 0) };
+        gone.Bind(TextBlock.ForegroundProperty, gone.GetResourceObservable(TokenKeys.Warning));
+        DockPanel.SetDock(gone, Dock.Right);
+        line.Children.Add(gone);
+        TextBlock kindText = new() { Classes = { StyleClasses.WelcomeKindText } };
+        Border kind = new() { Classes = { StyleClasses.WelcomeKind }, Child = kindText, VerticalAlignment = VerticalAlignment.Center };
+        DockPanel.SetDock(kind, Dock.Right);
+        line.Children.Add(kind);
+        line.Children.Add(new StackPanel { VerticalAlignment = VerticalAlignment.Center, Spacing = 2, Children = { name, where } });
+        return line.Showing<RecentRow>(row =>
+        {
+            letters.Text = MainWindow.Initials(row.Name);
+            badge.Classes.Set(StyleClasses.Missing, row.Missing);
+            name.Text = row.Name;
+            name.Classes.Set(StyleClasses.Muted, row.Missing);
+            where.Text = row.Shown;
+            gone.IsVisible = row.Missing;
+            kindText.Text = Kind(row.Path);
+        });
+    }
+
+    /// <summary>What a recent path opens as: a solution file, a solution filter, a project opened alone, or a folder.</summary>
+    private static string Kind(string path) =>
+        SolutionFilter.Is(path) ? "Solution Filter" : WorkspaceModel.IsSolution(path) ? "Solution" : WorkspaceModel.IsProject(path) ? "Project" : "Folder";
+}

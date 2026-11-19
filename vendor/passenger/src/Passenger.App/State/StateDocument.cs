@@ -1,0 +1,931 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
+using Passenger.Core;
+using Passenger.Text;
+
+namespace Passenger.App.State;
+
+/// <summary>What a kind of document knows of its own shape: the steps that bring a file an older build wrote up to
+/// this build's, and how to bring into range a value read from a file it did not write (a hand edit, a later build's).</summary>
+public interface IStateDocument<TSelf> where TSelf : class, IStateDocument<TSelf>, new()
+{
+    /// <summary>Each step takes a document from the version of its index to the next, the first from a file written
+    /// before documents had versions; the version this build writes is their count.</summary>
+    static abstract IReadOnlyList<Action<JsonObject>> Upgrades { get; }
+
+    /// <summary>The properties (by their C# names) whose lists are sets, in no order and with no repeats: a change merges as
+    /// what it added and took away, so what another side added or took away meanwhile stays. Any other list is one value,
+    /// taken whole from the side that changed it, as its order may matter.</summary>
+    static virtual IReadOnlyList<string> Sets => [];
+
+    /// <summary>Gives what a file of any version keeps under a name since replaced (an action's former id) the name it has
+    /// now, so a change is written under that name alone, the former one dropped: a build that still writes the former may
+    /// share the file.</summary>
+    static virtual void Renamed(JsonObject document)
+    {
+    }
+
+    /// <summary>The value with whatever this build cannot use brought into range, or back to its default.</summary>
+    TSelf Clamped();
+}
+
+/// <summary>One file of the store, read the first time it is wanted and clamped. A change is written a moment later,
+/// off the UI thread, or as Passenger ends where that comes first (<see cref="StateStore.LandWaiting"/>), through a temporary
+/// file flushed to disk and moved over the old one; it is merged over what the file holds then, so a value this build does
+/// not know, or one another Passenger changed, stays. The file is read and written under the lock every Passenger on the
+/// same state honours (<see cref="StateFile.Hold"/>). A write that fails keeps its change waiting and is tried again. A value of a kind its property cannot take is passed over alone; a file
+/// that does not read is set aside as <c>.bad</c>, never written over; each logged and said in a window keeping its state
+/// there.</summary>
+public sealed class StateDocument<T> where T : class, IStateDocument<T>, new()
+{
+    /// <summary>How long a change waits before it is written, so a burst of them (a drag, an edit moving breakpoints)
+    /// is written once.</summary>
+    private static readonly TimeSpan Delay = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>The waits before a write that failed is tried again, each longer, as Windows refuses a move over a file
+    /// another program has open a moment sharing no deletion; past the last, the change waits for the next one,
+    /// <see cref="Flush"/> or Passenger's end (<see cref="StateStore.LandWaiting"/>).</summary>
+    private static readonly TimeSpan[] Again = [.. new[] { 250, 500, 1000, 2000, 4000, 8000 }.Select(ms => TimeSpan.FromMilliseconds(ms))];
+
+    private readonly string? formerly;
+    private readonly object writing;
+    private readonly object gate = new();
+    private T? value;
+    private bool kept;
+
+    /// <summary>The value last read or set, as written: a change to the same is none.</summary>
+    private string? latest;
+
+    /// <summary>The file as this side last read or wrote it, held under <see cref="writing"/>: what differs from it in a
+    /// change is what this side changed.</summary>
+    private string? known;
+
+    private string? pending;
+    private bool scheduled;
+
+    /// <summary>The tries of the change waiting that failed since one last landed or a change was set, under
+    /// <see cref="gate"/>.</summary>
+    private int failed;
+
+    private bool readOnly;
+
+    /// <summary>The write Passenger's end makes of a change still waiting, given how long it may wait for the lock.</summary>
+    private readonly Action<TimeSpan> landing;
+
+    /// <summary>Whether Passenger's end holds this side's change as waiting (<see cref="StateFile.Waits"/>), under
+    /// <see cref="gate"/>.</summary>
+    private bool landsAtEnd;
+
+    /// <summary>A document at a path; <paramref name="formerly"/> is the file an older build kept the same value in, read
+    /// while this one does not exist yet and left where it is.</summary>
+    internal StateDocument(string path, string? formerly = null)
+    {
+        Path = path;
+        this.formerly = formerly;
+        writing = StateFile.Lock(path);
+        landing = left => Write(heldFor: left);
+    }
+
+    public string Path { get; }
+
+    /// <summary>The value: as read and clamped, the defaults when there is no file or it did not read, or as set last.</summary>
+    public T Value
+    {
+        get
+        {
+            Load();
+            return value!;
+        }
+    }
+
+    /// <summary>Whether a value is kept, read from the file or set since, rather than only the defaults.</summary>
+    public bool IsKept
+    {
+        get
+        {
+            Load();
+            return kept;
+        }
+    }
+
+    /// <summary>The value the file keeps as read and clamped now, on any thread, as <see cref="Value"/> reads it: null where
+    /// none is kept (no file, or one that did not read). The document takes none of it in.</summary>
+    public T? KeptNow()
+    {
+        (T found, bool isKept, _) = ReadNow();
+        return isKept ? found : null;
+    }
+
+    /// <summary>Keeps a value, written a moment later, or as Passenger ends where that comes first, unless it is the one
+    /// kept already and written, or being tried again.</summary>
+    public void Set(T next)
+    {
+        Load();
+        value = next;
+        kept = true;
+        string text = JsonSerializer.Serialize(next, StateFile.Options);
+        lock (gate)
+        {
+            if (text == latest && (pending is null || scheduled))
+            {
+                return;
+            }
+            latest = text;
+            pending = text;
+            failed = 0;
+            LandsAtEnd();
+            if (scheduled)
+            {
+                return;
+            }
+            scheduled = true;
+        }
+        WriteAfter(Delay);
+    }
+
+    /// <summary>Writes a change still waiting, now, on the caller's thread: as the window closes, since the process does
+    /// not wait for a timer. One that fails is tried again while the process runs, the log saying it is lost if
+    /// none lands.</summary>
+    public void Flush() => Write(flushing: true);
+
+    /// <summary>A change of this side's about to be put in the file's place, holding this side's value and nothing it has not
+    /// read: the written file's stamp, by which a look at the file later knows it holds nothing new. Raised on the writing
+    /// thread, under the document's lock.</summary>
+    public event Action<FileStamp>? Wrote;
+
+    /// <summary>Reads the file again, once a change still waiting is written: what another Passenger wrote since comes
+    /// in. A change that could not be written, a file gone or one not reading leaves the value as it is (this is no first
+    /// read, which sets a bad one aside), one not reading said so. Whether the value changed.</summary>
+    public bool Reread()
+    {
+        Load();
+        if (!Write())
+        {
+            // This side's change, which the file lacks, stays the value until it lands.
+            return false;
+        }
+        lock (writing)
+        {
+            if (readOnly || !File.Exists(Path))
+            {
+                return false;
+            }
+            T read;
+            try
+            {
+                read = StateFile.Read<T>(Path, Upgraded(StateFile.ReadHeld(Path)).Document).Clamped();
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                return false;
+            }
+            catch (Exception error) when (StateFile.DoesNotRead(error))
+            {
+                StateFile.Unread(Path, error);
+                return false;
+            }
+            StateFile.Reads(Path);
+            string text = JsonSerializer.Serialize(read, StateFile.Options);
+            known = text;
+            if (text == latest)
+            {
+                return false;
+            }
+            latest = text;
+            value = read;
+            kept = true;
+            return true;
+        }
+    }
+
+    /// <summary>The file's value as read and clamped now, on any thread, without taking it in.</summary>
+    public T Peek() => ReadNow().Value;
+
+    /// <summary>Changes the value as the file holds it now, with this side's change still waiting (one whose write was
+    /// refused) over it, and writes the change at once, merged over the file as a <see cref="Set"/>'s is, on any thread:
+    /// for a document no window keeps. A document a window keeps is changed through <see cref="Set"/>.</summary>
+    public void ChangeNow(Func<T, T> change)
+    {
+        lock (writing)
+        {
+            (T read, _, string text) = ReadNow();
+            string? waiting;
+            lock (gate)
+            {
+                waiting = pending;
+            }
+            // The change waiting is in no file yet, so this one, which takes its place, is made over it.
+            T from = waiting is null ? read : StateFile.Read<T>(path: null, StateFile.Merged((JsonObject)JsonNode.Parse(text)!, T.Upgrades.Count, known, waiting, T.Sets)).Clamped();
+            known = text;
+            string mine = JsonSerializer.Serialize(change(from).Clamped(), StateFile.Options);
+            lock (gate)
+            {
+                pending = mine == text ? null : mine;
+                failed = 0;
+            }
+            if (mine != text)
+            {
+                Write();
+            }
+        }
+    }
+
+    /// <summary>The value, read off the UI thread the first time and taken in on it, for a document large enough that
+    /// reading it there would hold the window up (a solution's project caches, megabytes each).</summary>
+    public async Task<T> ValueAsync()
+    {
+        UiThread.Check();
+        if (value is null)
+        {
+            (T Value, bool Kept, string Known) read = await BackgroundWork.Run(ReadNow);
+            if (value is null)
+            {
+                Take(read);
+            }
+        }
+        return value!;
+    }
+
+    private void Load()
+    {
+        // The value and what was set last are the UI thread's; only the writing crosses to another.
+        UiThread.Check();
+        if (value is null)
+        {
+            Take(ReadNow());
+        }
+    }
+
+    /// <summary>The file's value as read and clamped, whether one was kept, and its text: on any thread.</summary>
+    private (T Value, bool Kept, string Known) ReadNow()
+    {
+        lock (writing)
+        {
+            string? file = File.Exists(Path) ? Path : formerly is not null && File.Exists(formerly) ? formerly : null;
+            T? read = file is null ? null : Read(file);
+            T clamped = (read ?? new T()).Clamped();
+            return (clamped, read is not null, JsonSerializer.Serialize(clamped, StateFile.Options));
+        }
+    }
+
+    private void Take((T Value, bool Kept, string Known) read)
+    {
+        lock (writing)
+        {
+            kept = read.Kept;
+            value = read.Value;
+            known = read.Known;
+            latest = known;
+        }
+    }
+
+    /// <summary>A file's value, or null when it did not read: it is then set aside, or when it cannot be, left alone and
+    /// not written over this run.</summary>
+    private T? Read(string file)
+    {
+        try
+        {
+            return StateFile.Read<T>(file, Upgraded(file == Path ? StateFile.ReadHeld(file) : File.ReadAllText(file)).Document);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            readOnly |= file == Path;
+            StateFile.Log($"{file} could not be read ({error.Message}): the defaults stand, and it is not written this run");
+            return null;
+        }
+        catch (Exception error) when (StateFile.DoesNotRead(error))
+        {
+            readOnly |= !StateFile.SetAside(file, error, "its defaults stand") && file == Path;
+            return null;
+        }
+    }
+
+    private void WriteAfter(TimeSpan wait) => IdeErrors.Observe(Task.Delay(wait).ContinueWith(_ => Write(), TaskScheduler.Default));
+
+    /// <summary>Writes the change waiting, if there is one, merged over the file as it is now. Given
+    /// <paramref name="heldFor"/>, it waits no longer than that for a try of this side's own or for another Passenger's
+    /// lock; else as long as its own takes and <see cref="StateFile.HeldFor"/> for the lock. Whether none waits after: one
+    /// whose write failed, or that was not tried in time, waits again (<see cref="Failed"/>).</summary>
+    private bool Write(bool flushing = false, TimeSpan? heldFor = null)
+    {
+        if (!Monitor.TryEnter(writing, heldFor ?? Timeout.InfiniteTimeSpan))
+        {
+            return false;
+        }
+        try
+        {
+            string? mine;
+            int tries;
+            lock (gate)
+            {
+                mine = pending;
+                pending = null;
+                scheduled = false;
+                tries = failed;
+            }
+            if (mine is null || readOnly)
+            {
+                Landed();
+                return true;
+            }
+            try
+            {
+                using FileStream held = StateFile.Hold(Path, heldFor ?? StateFile.HeldFor);
+                if (OnDisk() is not { } disk)
+                {
+                    Landed();
+                    return true;
+                }
+                JsonObject merged = StateFile.Merged(disk.Document, Math.Max(disk.Version, T.Upgrades.Count), known, mine, T.Sets);
+                StateFile.Replace(Path, merged, Wrote is { } told && Holds(merged, mine) ? told : null);
+                known = mine;
+                Landed();
+                if (tries > 0)
+                {
+                    lock (gate)
+                    {
+                        failed = 0;
+                    }
+                    StateFile.Log($"{Path} was written after {tries} tries failed");
+                }
+                return true;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                Failed(mine, error, flushing);
+                return false;
+            }
+        }
+        finally
+        {
+            Monitor.Exit(writing);
+        }
+    }
+
+    /// <summary>Has Passenger's end write this side's change waiting, if it ends first. Under <see cref="gate"/>.</summary>
+    private void LandsAtEnd()
+    {
+        if (!landsAtEnd)
+        {
+            landsAtEnd = true;
+            StateFile.Waits(this, Path, landing);
+        }
+    }
+
+    /// <summary>Passenger's end has nothing of this side's to write, unless a change was set while the last was written.</summary>
+    private void Landed()
+    {
+        lock (gate)
+        {
+            if (pending is null)
+            {
+                landsAtEnd = false;
+                StateFile.Landed(this);
+            }
+        }
+    }
+
+    /// <summary>A change whose write failed waits again, unless one set since holds it, and is tried after the next of
+    /// <see cref="Again"/>'s waits, a flush's from the first, and as Passenger ends; the log says so at its first failure,
+    /// once its tries are spent, and at a flush.</summary>
+    private void Failed(string mine, Exception error, bool flushing)
+    {
+        TimeSpan? wait = null;
+        int tries;
+        lock (gate)
+        {
+            pending ??= mine;
+            failed = flushing ? 1 : failed + 1;
+            tries = failed;
+            if (!scheduled && tries <= Again.Length)
+            {
+                wait = Again[tries - 1];
+                scheduled = true;
+            }
+            LandsAtEnd();
+        }
+        if (flushing)
+        {
+            StateFile.Log($"{Path} could not be written as it was flushed ({error.Message}): it is tried again while Passenger runs, and as it ends");
+        }
+        else if (tries == 1)
+        {
+            StateFile.Log($"{Path} could not be written ({error.Message}): it is tried again, {Again.Length} times over {Durations.Said(Again.Aggregate(TimeSpan.Zero, (all, one) => all + one))} at most");
+        }
+        else if (tries == Again.Length + 1)
+        {
+            StateFile.Log($"{Path} still could not be written ({error.Message}): its change waits for the next one, or the window's close");
+        }
+        if (wait is { } after)
+        {
+            WriteAfter(after);
+        }
+    }
+
+    /// <summary>Whether a document about to be written holds, as this build reads it, this side's value and nothing else.</summary>
+    private static bool Holds(JsonObject written, string mine)
+    {
+        try
+        {
+            return JsonSerializer.Serialize(StateFile.Read<T>(path: null, written).Clamped(), StateFile.Options) == mine;
+        }
+        catch (Exception error) when (StateFile.DoesNotRead(error))
+        {
+            return false;
+        }
+    }
+
+    /// <summary>The file as it is now, brought up to this build's version, with the version it was written at: an empty
+    /// one when there is none, and null when it did not read and could not be set aside.</summary>
+    private (JsonObject Document, int Version)? OnDisk()
+    {
+        if (!File.Exists(Path))
+        {
+            return ([], 0);
+        }
+        string text = File.ReadAllText(Path);
+        try
+        {
+            return Upgraded(text);
+        }
+        catch (Exception error) when (StateFile.DoesNotRead(error))
+        {
+            if (StateFile.SetAside(Path, error, "what this Passenger has in force is written in its place"))
+            {
+                return ([], 0);
+            }
+            readOnly = true;
+            return null;
+        }
+    }
+
+    /// <summary>A file's text as a document of this build's version and names, with the version it was written at.</summary>
+    private static (JsonObject Document, int Version) Upgraded(string text)
+    {
+        if (JsonNode.Parse(text, documentOptions: LenientJson.Document) is not JsonObject document)
+        {
+            throw new JsonException("it is not a JSON object");
+        }
+        int version = document["version"] switch
+        {
+            null => 0,
+            JsonValue number when number.TryGetValue(out int read) && read >= 0 => read,
+            _ => throw new JsonException("its version is not a whole number"),
+        };
+        for (int step = version; step < T.Upgrades.Count; step++)
+        {
+            T.Upgrades[step](document);
+        }
+        T.Renamed(document);
+        return (document, version);
+    }
+}
+
+/// <summary>What every document shares: its JSON, its file's lock in this process, the writing and setting aside of
+/// its file, and the merge of a change over what the file holds.</summary>
+internal static class StateFile
+{
+    /// <summary>Readable JSON: indented, camelCase, enums by name, characters as they are.</summary>
+    public static readonly JsonSerializerOptions Options = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        Converters = { new EnumNames() },
+    };
+
+    private static readonly ConcurrentDictionary<string, object> Locks = new(StringComparer.Ordinal);
+
+    /// <summary>The one lock for a file in this process, however many documents (windows) keep it.</summary>
+    public static object Lock(string path) => Locks.GetOrAdd(path, _ => new object());
+
+    /// <summary>How long a document's write waits for another Passenger on the same state to let go of its file
+    /// (<see cref="Hold"/>).</summary>
+    public static readonly TimeSpan HeldFor = TimeSpan.FromSeconds(5);
+
+    /// <summary>A file held against every other Passenger on the same state while this one reads, merges and replaces it, so
+    /// each change starts from the other's: a lock file beside it (its path and ".lock"), open sharing nothing, waited for
+    /// up to <paramref name="limit"/>, past which the refusal is thrown.</summary>
+    public static FileStream Hold(string path, TimeSpan limit)
+    {
+        string held = path + ".lock";
+        Directory.CreateDirectory(Path.GetDirectoryName(held)!);
+        long began = Stopwatch.GetTimestamp();
+        while (true)
+        {
+            try
+            {
+                return new FileStream(held, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException) when (Stopwatch.GetElapsedTime(began) < limit)
+            {
+                Thread.Sleep(5);
+            }
+        }
+    }
+
+    /// <summary>Whether a refusal of <see cref="Hold"/> is another Passenger's holding the file, as an IOException's HResult
+    /// says it: Windows' sharing or lock violation, EWOULDBLOCK's number on Linux and on macOS; not a disk's refusal.</summary>
+    public static bool HeldElsewhere(IOException refused) => OperatingSystem.IsWindows()
+        ? refused.HResult is SharingViolation or LockViolation
+        : refused.HResult == (OperatingSystem.IsMacOS() ? MacWouldBlock : LinuxWouldBlock);
+
+    private const int SharingViolation = unchecked((int)0x80070020);
+    private const int LockViolation = unchecked((int)0x80070021);
+    private const int LinuxWouldBlock = 11;
+    private const int MacWouldBlock = 35;
+
+    /// <summary>A document's file read whole under its <see cref="Hold"/>, so the read is never in the way of another
+    /// Passenger's write (Windows refuses a move over a file a program has open sharing no deletion, as this read does, and
+    /// any move where the file system has no POSIX semantics); read without it where it is not had in time, or where its
+    /// lock file cannot be made (a folder closed to writes, which no Passenger writes).</summary>
+    public static string ReadHeld(string path)
+    {
+        FileStream? held = null;
+        try
+        {
+            held = Hold(path, HeldFor);
+        }
+        catch (IOException refused)
+        {
+            Log($"{path} is read without its lock, which another Passenger held past {Durations.Said(HeldFor)} ({refused.Message})");
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+        using (held)
+        {
+            return File.ReadAllText(path);
+        }
+    }
+
+    public static void Log(string line) => IdeErrors.Write($"State: {line}");
+
+    /// <summary>The documents whose change waits, not yet written or after a write that failed, each with its file and the
+    /// write that tries it again.</summary>
+    private static readonly ConcurrentDictionary<object, (string Path, Action<TimeSpan> Write)> Unwritten = new();
+
+    /// <summary>How long Passenger's end tries again the changes still waiting, <see cref="LandingPause"/> apart.</summary>
+    private static readonly TimeSpan LandingLimit = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan LandingPause = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>A document's change waiting, not yet written or after a write that failed, written as Passenger ends by
+    /// <paramref name="write"/>, given how long it may wait for another Passenger's lock.</summary>
+    public static void Waits(object document, string path, Action<TimeSpan> write) => Unwritten[document] = (path, write);
+
+    /// <summary>A document with no change waiting.</summary>
+    public static void Landed(object document) => Unwritten.TryRemove(document, out _);
+
+    /// <summary>Writes each change waiting, one not yet written or after a write that failed, <see cref="LandingPause"/>
+    /// apart, until all have landed or <see cref="LandingLimit"/> has passed, a write waiting for another Passenger's lock
+    /// only as long as is left of it, and logs those still waiting as lost.</summary>
+    public static void LandWaiting()
+    {
+        long began = Stopwatch.GetTimestamp();
+        while (!Unwritten.IsEmpty)
+        {
+            foreach ((string _, Action<TimeSpan> write) in Unwritten.Values)
+            {
+                TimeSpan left = LandingLimit - Stopwatch.GetElapsedTime(began);
+                write(left > TimeSpan.Zero ? left : TimeSpan.Zero);
+            }
+            if (Unwritten.IsEmpty || Stopwatch.GetElapsedTime(began) >= LandingLimit)
+            {
+                break;
+            }
+            Thread.Sleep(LandingPause);
+        }
+        foreach ((string path, Action<TimeSpan> _) in Unwritten.Values)
+        {
+            Log($"{path} could not be written before Passenger ended: its change is lost");
+        }
+    }
+
+    /// <summary>Whether an exception is a file's not reading: its JSON, its shape, or a value of the wrong kind.</summary>
+    public static bool DoesNotRead(Exception error) =>
+        error is JsonException or InvalidOperationException or ArgumentException or NotSupportedException or FormatException;
+
+    /// <summary>What no window has said yet of the files that did not read (set aside, read again, a value passed over),
+    /// each with the file and what a window says of it, and the file a click there shows.</summary>
+    private static readonly List<(string File, string Said, string Kept)> Unsaid = [];
+
+    /// <summary>What was last said of each file's values passed over, and of its not reading again, by its path, under
+    /// <see cref="Unsaid"/>: each is said once, and again only once it changed or the file read whole between.</summary>
+    private static readonly Dictionary<string, (string? Passed, string? Unread)> LastSaid = new(StringComparer.Ordinal);
+
+    /// <summary>Raised on any thread once there is something for a window keeping its state there to say.</summary>
+    public static event Action? NewsNow;
+
+    /// <summary>What a window keeping its state in a folder says of the files there that did not read that no window has
+    /// said yet, which are then said, with the file each click shows: the person's settings in a .bad file, a hand edit
+    /// passed over, are never news only to the log.</summary>
+    public static IReadOnlyList<(string Said, string Kept)> TakeUnsaid(string root)
+    {
+        lock (Unsaid)
+        {
+            List<(string File, string Said, string Kept)> taken = [.. Unsaid.Where(u => PathNames.IsUnder(u.File, Path.GetFullPath(root)))];
+            Unsaid.RemoveAll(taken.Contains);
+            return [.. taken.Select(t => (t.Said, t.Kept))];
+        }
+    }
+
+    /// <summary>Moves a file that did not read to its <c>.bad</c> name (numbered past one there already), and logs and
+    /// says it with what <paramref name="stands"/> in its place; false when it could not be moved.</summary>
+    public static bool SetAside(string file, Exception reason, string stands)
+    {
+        string bad = file + ".bad";
+        for (int n = 2; File.Exists(bad); n++)
+        {
+            bad = $"{file}.{n}.bad";
+        }
+        string why = Why(reason);
+        try
+        {
+            File.Move(file, bad);
+            Log($"{file} did not read ({why}): set aside as {Path.GetFileName(bad)}, and {stands}");
+            Tell(file, $"{Path.GetFileName(file)} did not read, so {stands}: what it held is kept as {bad}", bad);
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Log($"{file} did not read ({why}) and could not be set aside ({error.Message}): it is not written this run");
+            return false;
+        }
+    }
+
+    /// <summary>A file read again that does not read, logged and said, once for each way it does not: the values in
+    /// force stand until it reads.</summary>
+    public static void Unread(string file, Exception reason)
+    {
+        string said = $"{Path.GetFileName(file)} does not read ({Why(reason)}): the values in force stand until it reads";
+        lock (Unsaid)
+        {
+            (string? Passed, string? Unread) last = LastSaid.GetValueOrDefault(file);
+            if (last.Unread == said)
+            {
+                return;
+            }
+            LastSaid[file] = (last.Passed, said);
+        }
+        Log($"{file} does not read as it is read again ({Why(reason)}): the values in force stand");
+        Tell(file, said, file);
+    }
+
+    /// <summary>A file read whole: what is said next of its not reading is news again.</summary>
+    public static void Reads(string file)
+    {
+        lock (Unsaid)
+        {
+            if (LastSaid.TryGetValue(file, out (string? Passed, string? Unread) last))
+            {
+                LastSaid[file] = (last.Passed, null);
+            }
+        }
+    }
+
+    /// <summary>A document's value read from its JSON, each of its own values whose kind its property cannot take (a hand
+    /// edit's "16" where a number goes) passed over alone, its default standing, and said once for the file at
+    /// <paramref name="path"/> (none for a document about to be written). What still does not read throws.</summary>
+    public static T Read<T>(string? path, JsonObject document) where T : class, new()
+    {
+        List<string> passed = [];
+        T read;
+        try
+        {
+            read = document.Deserialize<T>(Options) ?? throw new JsonException("it holds null");
+        }
+        catch (Exception error) when (DoesNotRead(error))
+        {
+            JsonObject kept = [];
+            JsonTypeInfo shape = Options.GetTypeInfo(typeof(T));
+            foreach ((string name, JsonNode? value) in document)
+            {
+                try
+                {
+                    _ = new JsonObject { [name] = value?.DeepClone() }.Deserialize<T>(Options);
+                    kept[name] = value?.DeepClone();
+                }
+                catch (Exception wrong) when (DoesNotRead(wrong))
+                {
+                    Type? type = shape.Properties.FirstOrDefault(p => p.Name == name)?.PropertyType;
+                    passed.Add($"{name} is {Shown(value)}, where {(type is null ? "another kind of value" : KindOf(type))} goes");
+                }
+            }
+            if (passed.Count == 0)
+            {
+                throw;
+            }
+            read = kept.Deserialize<T>(Options) ?? throw new JsonException("it holds null");
+        }
+        if (path is not null)
+        {
+            Passed(path, passed);
+        }
+        return read;
+    }
+
+    /// <summary>A file's values passed over, logged and said when they differ from those said last.</summary>
+    private static void Passed(string file, List<string> passed)
+    {
+        string? said = passed.Count == 0 ? null : $"{Path.GetFileName(file)}'s {string.Join("; ", passed)}: {Plural.Agreeing(passed.Count, "its default stands", "their defaults stand")}";
+        lock (Unsaid)
+        {
+            (string? Passed, string? Unread) last = LastSaid.GetValueOrDefault(file);
+            if (last.Passed == said)
+            {
+                return;
+            }
+            LastSaid[file] = (said, last.Unread);
+        }
+        if (said is not null)
+        {
+            Log($"{file}: {said}");
+            Tell(file, said, file);
+        }
+    }
+
+    /// <summary>Something for a window keeping its state where a file is to say, a click there showing <paramref name="kept"/>.</summary>
+    private static void Tell(string file, string said, string kept)
+    {
+        lock (Unsaid)
+        {
+            Unsaid.Add((Path.GetFullPath(file), said, kept));
+        }
+        NewsNow?.Invoke();
+    }
+
+    /// <summary>Why a file did not read in its reader's words, with the line where its text stopped reading when it says
+    /// one (a value read from the parsed document has no line of the file's).</summary>
+    public static string Why(Exception error)
+    {
+        string words = error.Message;
+        int place = words.IndexOf(" Path: ", StringComparison.Ordinal) is int path and >= 0 ? path : words.IndexOf(" LineNumber: ", StringComparison.Ordinal);
+        if (place >= 0)
+        {
+            words = words[..place];
+        }
+        words = words.TrimEnd('.', ' ');
+        return error is JsonException { LineNumber: long line, Path: null } ? $"{words}, at line {line + 1}" : words;
+    }
+
+    /// <summary>A value as the person wrote it, cut short past 40 characters.</summary>
+    private static string Shown(JsonNode? value)
+    {
+        string written = value?.ToJsonString(Options) ?? "null";
+        return written.Length > 40 ? written[..39] + "…" : written;
+    }
+
+    /// <summary>The kind of value a property takes, as a person writing JSON names it.</summary>
+    private static string KindOf(Type type)
+    {
+        type = Nullable.GetUnderlyingType(type) ?? type;
+        return type == typeof(bool) ? "true or false"
+            : type == typeof(string) ? "text"
+            : type.IsPrimitive || type == typeof(decimal) ? "a number"
+            : typeof(System.Collections.IDictionary).IsAssignableFrom(type) ? "an object"
+            : typeof(System.Collections.IEnumerable).IsAssignableFrom(type) ? "a list"
+            : "an object";
+    }
+
+    /// <summary>Writes a document through a temporary file beside it, flushed to disk and moved over it, so a crash or
+    /// a full disk leaves the old file whole; a symlink (settings.json kept in a dotfiles folder) is written through to
+    /// its target, which keeps its permissions, rather than replaced by a file of its own. <paramref name="placing"/> is
+    /// told the written file's stamp just before it is moved over the old one.</summary>
+    public static void Replace(string path, JsonObject document, Action<FileStamp>? placing = null)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        string target = AtomicFile.Target(path);
+        if (FileText.IsReadOnly(target))
+        {
+            // Made read-only to keep it as it is: logged as a write that failed, never moved over.
+            throw new ReadOnlyFileException(path);
+        }
+        UnixFileMode? mode = !OperatingSystem.IsWindows() && File.Exists(target) ? File.GetUnixFileMode(target) : null;
+        AtomicFile.Write(target, Encoding.UTF8.GetBytes(document.ToJsonString(Options) + "\n"), mode, AtomicFile.Temporary, (temporary, at) =>
+        {
+            if (placing is not null && FileStamp.Of(temporary) is { } written)
+            {
+                placing(written);
+            }
+            AtomicFile.Move(temporary, at);
+        });
+    }
+
+    /// <summary>The file's document, its version first, with each value this side changed since it last read or wrote
+    /// the file (<paramref name="known"/>) taken from <paramref name="mine"/>, and every other as the file has it; a list
+    /// among <paramref name="sets"/> (<see cref="IStateDocument{TSelf}.Sets"/>) merged as a set.</summary>
+    public static JsonObject Merged(JsonObject disk, int version, string? known, string mine, IReadOnlyList<string> sets)
+    {
+        disk.Remove("version");
+        JsonObject written = new() { ["version"] = version };
+        MergeInto(written, disk, known is null ? [] : (JsonObject)JsonNode.Parse(known)!, (JsonObject)JsonNode.Parse(mine)!, Named(sets));
+        return written;
+    }
+
+    /// <summary>A value with what changed between two others put over it, value by value: what a window changed from the
+    /// settings it had, over the settings as they are now.</summary>
+    public static T Merged<T>(T now, T from, T to) where T : class, IStateDocument<T>, new()
+    {
+        JsonObject merged = [];
+        MergeInto(merged, Node(now), Node(from), Node(to), Named(T.Sets));
+        return (merged.Deserialize<T>(Options) ?? new T()).Clamped();
+
+        static JsonObject Node(T value) => (JsonObject)JsonSerializer.SerializeToNode(value, Options)!;
+    }
+
+    /// <summary>Properties' C# names as the document's JSON names them.</summary>
+    private static HashSet<string> Named(IReadOnlyList<string> properties) =>
+        [.. properties.Select(p => Options.PropertyNamingPolicy?.ConvertName(p) ?? p)];
+
+    /// <summary>Merges one object's values: the document's own, whose lists among <paramref name="sets"/> merge as sets,
+    /// or (with none) an object inside it. In an object inside the document (a dictionary: shortcuts, recent solutions),
+    /// an entry this side has unchanged that the file no longer has was removed by another side, and stays removed.</summary>
+    private static void MergeInto(JsonObject into, JsonObject disk, JsonObject before, JsonObject after, HashSet<string>? sets)
+    {
+        bool nested = sets is null;
+        foreach ((string name, JsonNode? there) in disk)
+        {
+            if (after.TryGetPropertyValue(name, out JsonNode? now))
+            {
+                into[name] = !before.TryGetPropertyValue(name, out JsonNode? was) ? now?.DeepClone()
+                    : sets?.Contains(name) == true ? MergeSet(there, was, now)
+                    : MergeValue(there, was, now);
+            }
+            else if (!before.ContainsKey(name))
+            {
+                // A value this build does not know (a later build's), or one another Passenger added.
+                into[name] = there?.DeepClone();
+            }
+        }
+        foreach ((string name, JsonNode? now) in after)
+        {
+            if (!disk.ContainsKey(name) && !(nested && before.TryGetPropertyValue(name, out JsonNode? was) && JsonNode.DeepEquals(was, now)))
+            {
+                into[name] = now?.DeepClone();
+            }
+        }
+    }
+
+    private static JsonNode? MergeValue(JsonNode? there, JsonNode? was, JsonNode? now)
+    {
+        if (there is JsonObject thereObject && was is JsonObject wasObject && now is JsonObject nowObject)
+        {
+            JsonObject merged = [];
+            MergeInto(merged, thereObject, wasObject, nowObject, sets: null);
+            return merged;
+        }
+        return (JsonNode.DeepEquals(was, now) ? there : now)?.DeepClone();
+    }
+
+    /// <summary>A set's merge: the file's members in its order, less those this side took away, then those it added.</summary>
+    private static JsonNode? MergeSet(JsonNode? there, JsonNode? was, JsonNode? now)
+    {
+        if (there is not JsonArray theirs || was is not JsonArray before || now is not JsonArray after)
+        {
+            return MergeValue(there, was, now);
+        }
+        JsonArray merged = [];
+        foreach (JsonNode? member in theirs.Concat(after))
+        {
+            bool kept = Has(theirs, member) ? !Has(before, member) || Has(after, member) : !Has(before, member);
+            if (kept && !Has(merged, member))
+            {
+                merged.Add(member?.DeepClone());
+            }
+        }
+        return merged;
+
+        static bool Has(JsonArray set, JsonNode? member) => set.Any(m => JsonNode.DeepEquals(m, member));
+    }
+
+    /// <summary>Enums by name; a name this build does not have (a later build's) reads as no value of the enum, which
+    /// the document's Clamped puts back to its default, rather than failing the whole file.</summary>
+    private sealed class EnumNames : JsonConverterFactory
+    {
+        public override bool CanConvert(Type typeToConvert) => typeToConvert.IsEnum;
+
+        public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options) =>
+            (JsonConverter)Activator.CreateInstance(typeof(EnumName<>).MakeGenericType(typeToConvert))!;
+    }
+
+    private sealed class EnumName<TEnum> : JsonConverter<TEnum> where TEnum : struct, Enum
+    {
+        public override TEnum Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType == JsonTokenType.String && Enum.TryParse(reader.GetString(), ignoreCase: true, out TEnum named) && Enum.IsDefined(named))
+            {
+                return named;
+            }
+            reader.Skip();
+            return (TEnum)Enum.ToObject(typeof(TEnum), -1);
+        }
+
+        public override void Write(Utf8JsonWriter writer, TEnum value, JsonSerializerOptions options) => writer.WriteStringValue(value.ToString());
+    }
+}

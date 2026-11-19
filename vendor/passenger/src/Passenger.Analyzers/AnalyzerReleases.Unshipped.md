@@ -1,0 +1,18 @@
+; Unshipped analyzer release
+; https://github.com/dotnet/roslyn/blob/main/src/RoslynAnalyzers/Microsoft.CodeAnalysis.Analyzers/ReleaseTrackingAnalyzers.Help.md
+
+### New Rules
+
+Rule ID | Category | Severity | Notes
+--------|----------|----------|-------
+PSG0001 | Passenger | Warning | IdentifierLiterals
+PSG0002 | Passenger | Warning | AsyncVoidMethods
+PSG0003 | Passenger | Warning | AsyncVoidLambdas
+PSG0004 | Passenger | Warning | BlockingWaits
+PSG0005 | Passenger | Warning | CatchAlls
+PSG0006 | Passenger | Warning | BareTaskRuns
+PSG0007 | Passenger | Warning | ProcessEnds
+PSG0008 | Passenger | Warning | BareJsonReads
+PSG0009 | Passenger | Warning | FileMovesOver
+PSG9001 | Passenger | Error | ResourceKeys
+PSG9002 | Passenger | Error | StyleClassNames

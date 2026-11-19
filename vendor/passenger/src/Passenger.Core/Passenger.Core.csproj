@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- What every part of Passenger shares and no UI needs: the programs it starts (ChildProcesses, which ends them with
+       the IDE), a .NET program's hold at its start (HeldStart, through its runtime's diagnostic port) and where the
+       tools they run are found. No Avalonia, so the boundary is the project's own. -->
+  <PropertyGroup>
+    <RootNamespace>Passenger.Core</RootNamespace>
+    <!-- The system's own calls, through LibraryImport: kill for a child's process group, what describes another
+         process (proc_pidinfo, sysctl, NtQueryInformationProcess) for the .NET programs a debugger can attach to, and
+         what a file a write replaces keeps (statx, fchown, extended attributes, copyfile). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Passenger.UnitTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,552 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Passenger.Core;
+using Passenger.Editor;
+using Passenger.Languages;
+
+namespace Passenger.App.Settings;
+
+/// <summary>Where a setting's own row stands in Settings and what finds it: its page, its label, the words a search
+/// matches beside those, and a note under its editor where what it does needs saying.</summary>
+public sealed record SettingRow(string Page, string Label, string Words, string? Note = null)
+{
+    /// <summary>Whether its row takes effect under the settings as they stand, and why not where not: a row another greys
+    /// while it is off (a line length while wrapping is off).</summary>
+    public SettingWhen? When { get; init; }
+
+    /// <summary>The .editorconfig keys that say over it for the files they are set for, which its note names and under
+    /// which Settings says what the open folder's .editorconfig files set.</summary>
+    public EditorConfigOver? Over { get; init; }
+
+    /// <summary>The note as Settings shows it: its own words, then the keys that say over it.</summary>
+    public string? NoteShown => Over is null ? Note : Note is null ? Over.Words : $"{Note} {Over.Words}";
+}
+
+/// <summary>What a row takes effect under, and the words said on it while it does not.</summary>
+public sealed record SettingWhen(Func<AppSettings, bool> Holds, string Why);
+
+/// <summary>The .editorconfig keys a file's .editorconfig says over a row's setting by, for <paramref name="Files"/>'
+/// files (null for every file); <see cref="Aliases"/> are read as well, under names the row's note leaves out.</summary>
+public sealed record EditorConfigOver(IReadOnlyList<string> Keys, Language? Files = null)
+{
+    public IReadOnlyList<string> Aliases { get; init; } = [];
+
+    /// <summary>What the row's note says of them.</summary>
+    public string Words => $"A file's .editorconfig says over this by {Plural.Either(Keys)}.";
+
+    /// <summary>Whether a key (as an .editorconfig's reader lowers it) is one of them.</summary>
+    public bool Names(string key) => Keys.Contains(key, StringComparer.Ordinal) || Aliases.Contains(key, StringComparer.Ordinal);
+}
+
+/// <summary>A setting of one value, declared once in <see cref="Declared"/>: how it is read and written, what it allows (a
+/// number's range, an enum's values) and its own row in Settings, where it has one. Its editor and its clamp come from
+/// here; a row that edits two settings, a radio group or one that follows another setting is the dialog's, built round
+/// the editor made here where one fits.</summary>
+public abstract class Setting
+{
+    protected Setting(SettingRow? row)
+    {
+        Row = row;
+        Declared.All.Add(this);
+    }
+
+    public SettingRow? Row { get; }
+
+    /// <summary>The control that edits it, showing its value in <paramref name="now"/>; each edit goes through
+    /// <paramref name="change"/>.</summary>
+    public abstract Control Editor(AppSettings now, Action<Func<AppSettings, AppSettings>> change);
+
+    /// <summary>The settings with this one brought into what it allows.</summary>
+    public abstract AppSettings Clamp(AppSettings settings);
+
+    /// <summary>Why a change from <paramref name="was"/> to <paramref name="now"/> gives this setting a value Settings
+    /// refuses, naming the setting; null where it leaves the value be or the new one is allowed.</summary>
+    public virtual string? Refused(AppSettings was, AppSettings now) => null;
+
+    /// <summary>The settings with this one's value as it stands in force where a theme gives it and the person gave none.</summary>
+    public virtual AppSettings FilledIn(AppSettings settings) => settings;
+
+    /// <summary>The settings with this one at another value it takes, which tells what it is kept as (<see cref="Member"/>).</summary>
+    public abstract AppSettings Other(AppSettings settings);
+
+    /// <summary>Its name in settings.json, as the agents' settings tool names it: the member <see cref="Other"/> changes.</summary>
+    public string Member => member ??= SettingMembers.Changed(new AppSettings(), Other(new AppSettings()))[0].Split('.')[0];
+
+    private string? member;
+}
+
+/// <summary>A setting on or off, edited by a check box.</summary>
+public sealed class ToggleSetting(Func<AppSettings, bool> get, Func<AppSettings, bool, AppSettings> set, SettingRow? row = null) : Setting(row)
+{
+    public override Control Editor(AppSettings now, Action<Func<AppSettings, AppSettings>> change)
+    {
+        CheckBox box = new() { IsChecked = get(now) };
+        box.IsCheckedChanged += (_, _) => change(s => set(s, box.IsChecked == true));
+        return box;
+    }
+
+    public override AppSettings Clamp(AppSettings settings) => settings;
+
+    public override AppSettings Other(AppSettings settings) => set(settings, !get(settings));
+}
+
+/// <summary>A number held between <paramref name="min"/> and <paramref name="max"/>, edited by a spin box in steps of
+/// <paramref name="step"/>, its unit after it where it has one; one that may be left unset (<paramref name="given"/> false)
+/// shows the value in force and stays unset until changed.</summary>
+public sealed class NumberSetting(Func<AppSettings, double> get, Func<AppSettings, double, AppSettings> set, double min, double max, double step,
+    SettingRow? row = null, string? unit = null, Func<AppSettings, bool>? given = null) : Setting(row)
+{
+    public override Control Editor(AppSettings now, Action<Func<AppSettings, AppSettings>> change) =>
+        unit is null ? Box(now, change) : WithUnit(Box(now, change), unit);
+
+    /// <summary>A number box with its unit after it, the box as wide as a number's where there is room.</summary>
+    public static NarrowingField WithUnit(NumericUpDown box, string unit) =>
+        new(box, new TextBlock { Text = unit, VerticalAlignment = VerticalAlignment.Center }) { Most = OptionRow.NumberWidth };
+
+    /// <summary>The spin box alone, for a row the dialog builds round it.</summary>
+    public NumericUpDown Box(AppSettings now, Action<Func<AppSettings, AppSettings>> change)
+    {
+        NumericUpDown number = new()
+        {
+            Value = (decimal)get(now), Minimum = (decimal)min, Maximum = (decimal)max, Increment = (decimal)step, MaxWidth = OptionRow.NumberWidth,
+            HorizontalAlignment = HorizontalAlignment.Stretch, FormatString = step < 1 ? "0.0" : "0",
+        };
+        number.ValueChanged += (_, e) =>
+        {
+            if (e.NewValue is { } next)
+            {
+                change(s => set(s, (double)next));
+            }
+        };
+        return number;
+    }
+
+    public override AppSettings Clamp(AppSettings settings) =>
+        given is not null && !given(settings) ? settings : set(settings, Math.Clamp(get(settings), min, max));
+
+    public override AppSettings FilledIn(AppSettings settings) => given is not null && !given(settings) ? set(settings, get(settings)) : settings;
+
+    public override AppSettings Other(AppSettings settings) => set(settings, get(settings) == min ? max : min);
+}
+
+/// <summary>A size chosen from a drop-down of <paramref name="sizes"/> (1.5 shown as 150%), from the least to the most: the
+/// choice is made in a list that closes as it is made, so a size the window takes at once never moves what the pointer is
+/// on. A size off the list (written by hand) is shown as one of its own and kept; any is held between the least and most.</summary>
+public sealed class SizeSetting(Func<AppSettings, double> get, Func<AppSettings, double, AppSettings> set, IReadOnlyList<double> sizes, SettingRow? row = null)
+    : Setting(row)
+{
+    public override Control Editor(AppSettings now, Action<Func<AppSettings, AppSettings>> change) => Box(now, change);
+
+    /// <summary>The drop-down alone, for a row the dialog builds round it.</summary>
+    public ComboBox Box(AppSettings now, Action<Func<AppSettings, AppSettings>> change)
+    {
+        double value = get(now);
+        double[] offered = sizes.Contains(value) ? [.. sizes] : [.. sizes.Append(value).Order()];
+        ComboBox box = new()
+        {
+            ItemsSource = offered.Select(Percent).ToArray(),
+            SelectedIndex = Array.IndexOf(offered, value),
+            Classes = { StyleClasses.Form },
+        };
+        box.SelectionChanged += (_, _) =>
+        {
+            if (box.SelectedIndex >= 0)
+            {
+                change(s => set(s, offered[box.SelectedIndex]));
+            }
+        };
+        return box;
+    }
+
+    /// <summary>A size as the list shows it: 1.25 as 125%.</summary>
+    public static string Percent(double size) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{size * 100:0.#}%");
+
+    public override AppSettings Clamp(AppSettings settings) => set(settings, Math.Clamp(get(settings), sizes[0], sizes[^1]));
+
+    public override AppSettings Other(AppSettings settings) => set(settings, get(settings) == sizes[0] ? sizes[^1] : sizes[0]);
+}
+
+/// <summary>One of an enum's values, edited by a drop-down of the names Settings gives them, in <paramref name="choices"/>'
+/// order (the enum's own names where it gives none); a value this build does not know goes back to its default.</summary>
+public sealed class ChoiceSetting<T> : Setting where T : struct, Enum
+{
+    private readonly Func<AppSettings, T> get;
+    private readonly Func<AppSettings, T, AppSettings> set;
+    private readonly IReadOnlyList<(T Value, string Name)> choices;
+    private readonly T fallback;
+
+    public ChoiceSetting(Func<AppSettings, T> get, Func<AppSettings, T, AppSettings> set, IReadOnlyList<(T Value, string Name)>? choices = null, SettingRow? row = null)
+        : base(row)
+    {
+        this.get = get;
+        this.set = set;
+        this.choices = choices ?? [.. Enum.GetValues<T>().Select(v => (v, v.ToString()))];
+        fallback = get(new AppSettings());
+    }
+
+    public override Control Editor(AppSettings now, Action<Func<AppSettings, AppSettings>> change) => Box(now, change);
+
+    /// <summary>The drop-down alone, for a row the dialog builds round it.</summary>
+    public ComboBox Box(AppSettings now, Action<Func<AppSettings, AppSettings>> change)
+    {
+        T value = get(now);
+        ComboBox box = new()
+        {
+            ItemsSource = choices.Select(c => c.Name).ToArray(),
+            SelectedIndex = choices.Select(c => c.Value).ToList().IndexOf(value),
+            Classes = { StyleClasses.Form },
+        };
+        box.SelectionChanged += (_, _) => change(s => set(s, choices[Math.Max(0, box.SelectedIndex)].Value));
+        return box;
+    }
+
+    public override AppSettings Clamp(AppSettings settings) => Enum.IsDefined(get(settings)) ? settings : set(settings, fallback);
+
+    public override AppSettings Other(AppSettings settings) =>
+        set(settings, choices.Select(c => c.Value).FirstOrDefault(v => !EqualityComparer<T>.Default.Equals(v, get(settings))));
+}
+
+/// <summary>One of an enum's values that a theme may give and the person's own choice wins over, edited by a drop-down: its
+/// first choice follows the theme (naming what that gives now), then the values by the names Settings gives them. Left
+/// unchosen it stays unset, and a value this build does not know follows the theme again.</summary>
+public sealed class ThemedChoiceSetting<T>(Func<AppSettings, T?> own, Func<AppSettings, T> inForce, Func<AppSettings, T?, AppSettings> set,
+    IReadOnlyList<(T Value, string Name)> choices, SettingRow row) : Setting(row) where T : struct, Enum
+{
+    public override Control Editor(AppSettings now, Action<Func<AppSettings, AppSettings>> change)
+    {
+        T themes = inForce(set(now, null));
+        string[] names = [$"Theme default ({NameOf(themes)})", .. choices.Select(c => c.Name)];
+        ComboBox box = new()
+        {
+            ItemsSource = names,
+            SelectedIndex = own(now) is { } chosen ? 1 + choices.Select(c => c.Value).ToList().IndexOf(chosen) : 0,
+            Classes = { StyleClasses.Form },
+        };
+        box.SelectionChanged += (_, _) => change(s => set(s, box.SelectedIndex > 0 ? choices[box.SelectedIndex - 1].Value : null));
+        return box;
+    }
+
+    /// <summary>The name Settings gives a value.</summary>
+    public string NameOf(T value) => choices.FirstOrDefault(c => EqualityComparer<T>.Default.Equals(c.Value, value)).Name ?? value.ToString();
+
+    public override AppSettings Clamp(AppSettings settings) => own(settings) is { } chosen && !Enum.IsDefined(chosen) ? set(settings, null) : settings;
+
+    public override AppSettings FilledIn(AppSettings settings) => own(settings) is null ? set(settings, inForce(settings)) : settings;
+
+    public override AppSettings Other(AppSettings settings) => set(settings, own(settings) is null ? choices[0].Value : null);
+}
+
+/// <summary>Vim mode's Ctrl keys (<see cref="Vim.CtrlKeys"/>), each Vim mode's or the keymap's: the setting names those the
+/// keymap takes by Vim's names ("&lt;C-v&gt;"), a space between each, edited by a drop-down per key naming what each side
+/// does with it. A name that is none of the keys is refused, saying which there are; one read from settings.json is
+/// passed over.</summary>
+public sealed class VimKeysSetting(string property, Func<AppSettings, string> get, Func<AppSettings, string, AppSettings> set, SettingRow row) : Setting(row)
+{
+    /// <summary>The AppSettings property it reads.</summary>
+    public string Property => property;
+
+    /// <summary>The keys it gives, by Vim's names, in Settings' order.</summary>
+    public static IReadOnlyList<string> Keys { get; } = [.. Vim.CtrlKeys.Select(k => k.Key)];
+
+    /// <summary>The keys the keymap takes, of those it gives alone.</summary>
+    public IReadOnlySet<string> Given(AppSettings settings) => Named(get(settings)).Where(Keys.Contains).ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>What a person presses for a key it gives: Ctrl and the key's letter.</summary>
+    public static Keystroke StrokeOf(string key) =>
+        VimKeys.CtrlLetter(key) is { } letter ? new(Avalonia.Input.Key.A + (letter - 'a'), Avalonia.Input.KeyModifiers.Control)
+            : throw new ArgumentException($"{key} is no Ctrl key of Vim mode's", nameof(key));
+
+    public override Control Editor(AppSettings now, Action<Func<AppSettings, AppSettings>> change) => Box(now, change, _ => null);
+
+    /// <summary>The rows alone, a key's keymap side naming what <paramref name="keymapDoes"/> says the keymap in force does
+    /// with it (null to name nothing), for the dialog, which knows that keymap.</summary>
+    public StackPanel Box(AppSettings now, Action<Func<AppSettings, AppSettings>> change, Func<Keystroke, string?> keymapDoes)
+    {
+        StackPanel rows = new() { Spacing = 4 };
+        IReadOnlySet<string> given = Given(now);
+        foreach ((string key, string does) in Vim.CtrlKeys)
+        {
+            Keystroke stroke = StrokeOf(key);
+            ComboBox choice = new()
+            {
+                ItemsSource = new[] { $"Vim mode: {does}", keymapDoes(stroke) is { } keymaps ? $"Keymap: {keymaps}" : "Keymap" },
+                SelectedIndex = given.Contains(key) ? 1 : 0,
+                Classes = { StyleClasses.Form },
+            };
+            choice.SelectionChanged += (_, _) => change(s => set(s, Joined(Given(s), key, choice.SelectedIndex == 1)));
+            Avalonia.Automation.AutomationProperties.SetName(choice, stroke.Display());
+            rows.Children.Add(new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 8,
+                Children = { new TextBlock { Text = stroke.Display(), MinWidth = 56, VerticalAlignment = VerticalAlignment.Center }, choice },
+            });
+        }
+        return rows;
+    }
+
+    /// <summary>What each key does on either side, as an agent is told it: "&lt;C-r&gt; (Vim mode: Redo; keymap: …)".</summary>
+    public static string Described(Func<Keystroke, string?> keymapDoes) =>
+        string.Join(", ", Vim.CtrlKeys.Select(k => $"{k.Key} (Vim mode: {k.Does}; keymap: {keymapDoes(StrokeOf(k.Key)) ?? "its own"})"));
+
+    public override AppSettings Clamp(AppSettings settings) =>
+        Named(get(settings)) is var named && named.All(Keys.Contains) && named.Distinct(StringComparer.Ordinal).Count() == named.Length && get(settings) == string.Join(' ', named)
+            ? settings
+            : set(settings, string.Join(' ', named.Where(Keys.Contains).Distinct(StringComparer.Ordinal)));
+
+    public override string? Refused(AppSettings was, AppSettings now) =>
+        get(now) != get(was) && Named(get(now)).FirstOrDefault(k => !Keys.Contains(k)) is { } unknown
+            ? $"{Row!.Label} ({SettingsDialog.PlaceOfPage(Row.Page)}) has no key {unknown}: its keys are {Plural.Listed(Keys)}, a space between each"
+            : null;
+
+    public override AppSettings Other(AppSettings settings) => set(settings, Joined(Given(settings), Keys[0], !Given(settings).Contains(Keys[0])));
+
+    /// <summary>The keys given with <paramref name="key"/> given to the keymap or taken back, as the setting keeps them.</summary>
+    private static string Joined(IReadOnlySet<string> given, string key, bool toKeymap) =>
+        string.Join(' ', Keys.Where(k => k == key ? toKeymap : given.Contains(k)));
+
+    private static string[] Named(string? keys) => (keys ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+}
+
+/// <summary>A program to start and its arguments, written as one command line (<see cref="Run.CommandLine"/>), or null for
+/// the one Passenger finds, <paramref name="found"/>'s, which an empty box shows; a line naming no program (quotes round
+/// nothing) is refused, saying why under the box. Where it is given <paramref name="described"/>, what the line in force
+/// runs (its version, say) is said under the box as it is typed, once found off the UI thread.</summary>
+public sealed class ProgramSetting(Func<AppSettings, string?> get, Func<AppSettings, string?, AppSettings> set, Func<string> found, SettingRow row,
+    Func<string?, Task<string>>? described = null) : Setting(row)
+{
+    /// <summary>Why a line naming no program is refused.</summary>
+    private const string NamesNone = "names no program to start: the program's path comes first, its arguments after it";
+
+    public override Control Editor(AppSettings now, Action<Func<AppSettings, AppSettings>> change)
+    {
+        TextBox line = new() { Classes = { StyleClasses.Search }, Text = get(now) ?? string.Empty, PlaceholderText = found() };
+        TextBlock problem = new() { TextWrapping = TextWrapping.Wrap, HorizontalAlignment = HorizontalAlignment.Left };
+        problem.Classes.Add(StyleClasses.Error);
+        TextBlock runs = new() { Classes = { StyleClasses.Muted }, TextWrapping = TextWrapping.Wrap, HorizontalAlignment = HorizontalAlignment.Left, IsVisible = described is not null };
+        int asked = 0;
+        Said();
+        line.TextChanged += (_, _) =>
+        {
+            change(s => set(s, string.IsNullOrWhiteSpace(line.Text) ? null : line.Text.Trim()));
+            Said();
+        };
+        return new StackPanel { Spacing = 4, MaxWidth = OptionRow.EditorWidth, Children = { line, problem, runs } };
+
+        // What the line runs, the last asked winning.
+        async Task DescribeAsync(string? typed)
+        {
+            int mine = ++asked;
+            string words = await described!(typed);
+            if (mine == asked)
+            {
+                runs.Text = words;
+            }
+        }
+
+        void Said()
+        {
+            problem.IsVisible = Run.CommandLine.NamesNoProgram(line.Text);
+            problem.Text = problem.IsVisible ? $"This {NamesNone}" : null;
+            if (described is not null && !problem.IsVisible)
+            {
+                IdeErrors.Observe(DescribeAsync(string.IsNullOrWhiteSpace(line.Text) ? null : line.Text.Trim()));
+            }
+        }
+    }
+
+    public override AppSettings Clamp(AppSettings settings) => string.IsNullOrWhiteSpace(get(settings)) ? set(settings, null) : settings;
+
+    public override AppSettings Other(AppSettings settings) => set(settings, get(settings) is null ? "program" : null);
+
+    public override string? Refused(AppSettings was, AppSettings now) => get(now) is { } line && line != get(was) && Run.CommandLine.NamesNoProgram(line)
+        ? $"{Row!.Label} {line.Trim()} ({SettingsDialog.PlaceOfPage(Row.Page)}) {NamesNone}"
+        : null;
+}
+
+/// <summary>A text of parts with <paramref name="separator"/> between each (XAML's attribute groups), edited a part to a line
+/// in a box of several lines <paramref name="height"/> high, where a line longer than the box scrolls into view rather than
+/// being cut at its edge; kept with a space after each separator.</summary>
+public sealed class LinesSetting(Func<AppSettings, string> get, Func<AppSettings, string, AppSettings> set, char separator, double height, SettingRow row)
+    : Setting(row)
+{
+    public override Control Editor(AppSettings now, Action<Func<AppSettings, AppSettings>> change)
+    {
+        TextBox lines = new()
+        {
+            Classes = { StyleClasses.Search }, Text = string.Join('\n', Parts(get(now))), AcceptsReturn = true, MaxWidth = OptionRow.EditorWidth, Height = height,
+        };
+        ScrollViewer.SetHorizontalScrollBarVisibility(lines, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
+        lines.TextChanged += (_, _) => change(s => set(s, string.Join($"{separator} ", (lines.Text ?? string.Empty).Split('\n', Split))));
+        return lines;
+    }
+
+    public override AppSettings Clamp(AppSettings settings) => settings;
+
+    public override AppSettings Other(AppSettings settings) => set(settings, $"{get(settings)}{separator} other");
+
+    private const StringSplitOptions Split = StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries;
+
+    private string[] Parts(string text) => text.Split(separator, Split);
+}
+
+/// <summary>A font family by name (<paramref name="property"/>'s), chosen from a drop-down of what <paramref name="fonts"/>
+/// offers (the carried font, any choices of its own, the installed families it takes), each named in its own face, the
+/// list filled once the installed ones are found off the UI thread; null for the first choice, <paramref name="none"/>'s
+/// (the carried font where it names none). A name the fonts refuse is refused, saying why.</summary>
+public sealed class FontSetting(string property, Func<AppSettings, string?> get, Func<AppSettings, string?, AppSettings> set, string? none,
+    FontChoices fonts, SettingRow row) : Setting(row)
+{
+    /// <summary>The AppSettings property it reads.</summary>
+    public string Property => property;
+
+    /// <summary>The names it takes, the carried font's first.</summary>
+    public async Task<IReadOnlyList<string>> ChoicesAsync() => [.. Offered, .. await InstalledAsync()];
+
+    /// <summary>The names it offers of its own: the carried font's, then its own choices (the system's UI font).</summary>
+    public IReadOnlyList<string> Offered => [fonts.Carried, .. fonts.Own().Select(own => own.Name)];
+
+    /// <summary>The installed families it takes, by name in order.</summary>
+    public Task<IReadOnlyList<string>> InstalledAsync() => fonts.InstalledAsync();
+
+    public override Control Editor(AppSettings now, Action<Func<AppSettings, AppSettings>> change)
+    {
+        string? chosen = Trimmed(get(now));
+        ComboBox box = new() { Classes = { StyleClasses.Form, StyleClasses.Faces }, MaxDropDownHeight = 360 };
+        ReusedRows.Use(box, () =>
+        {
+            TextBlock shown = new() { VerticalAlignment = VerticalAlignment.Center };
+            return shown.Showing<Choice>(choice =>
+            {
+                shown.Text = choice.Shown;
+                shown.FontFamily = choice.Face;
+            });
+        });
+        bool filling = false;
+        Fill(null);
+        box.SelectionChanged += (_, _) =>
+        {
+            if (!filling && box.SelectedItem is Choice choice)
+            {
+                chosen = choice.Name;
+                change(s => set(s, choice.Name));
+            }
+        };
+        IdeErrors.Observe(FillAsync());
+        return box;
+
+        async Task FillAsync() => Fill(await fonts.InstalledAsync());
+
+        // Before the installed fonts are found, the list holds the first choice, the fonts' own and the one in force.
+        void Fill(IReadOnlyList<string>? installed)
+        {
+            List<Choice> choices = [none is null ? new(null, fonts.Carried, fonts.Face) : new(null, none, FontFamily.Default)];
+            if (none is not null)
+            {
+                choices.Add(new(fonts.Carried, fonts.Carried, fonts.Face));
+            }
+            choices.AddRange(fonts.Own().Select(own => new Choice(own.Name, own.Shown, own.Face)));
+            choices.AddRange((installed ?? []).Select(name => new Choice(name, name, new FontFamily(name))));
+            int at = choices.FindIndex(c => string.Equals(c.Name, chosen, StringComparison.OrdinalIgnoreCase));
+            if (at < 0 && none is null && string.Equals(chosen, fonts.Carried, StringComparison.OrdinalIgnoreCase))
+            {
+                at = 0;
+            }
+            if (at < 0 && chosen is not null)
+            {
+                string shown = installed is null ? chosen : $"{chosen} ({fonts.Unusable(chosen)})";
+                choices.Insert(1, new(chosen, shown, fonts.Named(chosen) ?? FontFamily.Default));
+                at = 1;
+            }
+            filling = true;
+            box.ItemsSource = choices;
+            box.SelectedIndex = Math.Max(0, at);
+            filling = false;
+        }
+    }
+
+    public override AppSettings Clamp(AppSettings settings) => set(settings, Trimmed(get(settings)));
+
+    public override AppSettings Other(AppSettings settings) => set(settings, get(settings) is null ? fonts.Carried : null);
+
+    public override string? Refused(AppSettings was, AppSettings now) =>
+        Trimmed(get(now)) is { } name && !string.Equals(name, Trimmed(get(was)), StringComparison.OrdinalIgnoreCase) && fonts.WhyNot(name) is { } why
+            ? $"{Row!.Label} {name} ({SettingsDialog.PlaceOfPage(Row.Page)}) {why}"
+            : null;
+
+    private static string? Trimmed(string? name) => string.IsNullOrWhiteSpace(name) ? null : name.Trim();
+
+    /// <summary>A row of the list: the name it sets (null for the first), the words shown, and the face they are shown in.</summary>
+    private sealed record Choice(string? Name, string Shown, FontFamily Face)
+    {
+        public override string ToString() => Shown;
+    }
+}
+
+/// <summary>What a font setting offers and takes: the font Passenger carries, by its name and face, any choices of its
+/// own after it, the installed families it takes, and why it refuses a name.</summary>
+public abstract class FontChoices
+{
+    /// <summary>Code's: the carried JetBrains Mono or an installed monospaced family (<see cref="CodeFonts"/>).</summary>
+    public static readonly FontChoices Code = new CodeChoices();
+
+    /// <summary>The window's: the carried Inter, the system's own UI font or any installed family (<see cref="WindowFonts"/>).</summary>
+    public static readonly FontChoices Window = new WindowChoices();
+
+    /// <summary>The carried font's name.</summary>
+    public abstract string Carried { get; }
+
+    /// <summary>The carried font.</summary>
+    public abstract FontFamily Face { get; }
+
+    /// <summary>The choices after the carried font and before the installed families: each the name it sets, the words
+    /// shown and its face.</summary>
+    public virtual IReadOnlyList<(string Name, string Shown, FontFamily Face)> Own() => [];
+
+    /// <summary>The installed families it takes, by name in order.</summary>
+    public abstract Task<IReadOnlyList<string>> InstalledAsync();
+
+    /// <summary>The family a name gives, or null for one it refuses.</summary>
+    public abstract FontFamily? Named(string name);
+
+    /// <summary>Why a name gives no font, as words after it; null where it gives one.</summary>
+    public abstract string? WhyNot(string name);
+
+    /// <summary>A name it refuses, as the list says so after it: "not installed".</summary>
+    public abstract string Unusable(string name);
+
+    private sealed class CodeChoices : FontChoices
+    {
+        public override string Carried => CodeFonts.Carried;
+
+        public override FontFamily Face => CodeEditor.CodeFont;
+
+        public override Task<IReadOnlyList<string>> InstalledAsync() => CodeFonts.InstalledAsync();
+
+        public override FontFamily? Named(string name) => CodeFonts.Named(name);
+
+        public override string? WhyNot(string name) => CodeFonts.WhyNot(name);
+
+        public override string Unusable(string name) => CodeFonts.IsInstalled(name) ? "not monospaced" : "not installed";
+    }
+
+    private sealed class WindowChoices : FontChoices
+    {
+        public override string Carried => WindowFontNames.Carried;
+
+        public override FontFamily Face => WindowFonts.Carried;
+
+        public override IReadOnlyList<(string Name, string Shown, FontFamily Face)> Own() =>
+            [(WindowFontNames.SystemUi, WindowFonts.SystemShown(), WindowFonts.Named(WindowFontNames.SystemUi) ?? FontFamily.Default)];
+
+        public override Task<IReadOnlyList<string>> InstalledAsync() => WindowFonts.InstalledAsync();
+
+        public override FontFamily? Named(string name) => WindowFonts.Named(name);
+
+        public override string? WhyNot(string name) => WindowFonts.WhyNot(name);
+
+        public override string Unusable(string name) => "not installed";
+    }
+}

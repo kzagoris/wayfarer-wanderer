@@ -1,0 +1,27 @@
+# Only what this repository's own commands, and the editors and systems around them, leave behind. A broader
+# rule once hid a source folder (#58); CI fails if anything under src, tests, tools or site is ignored.
+
+# Every build, publish, package, icon download, MCP clone and test result (UseArtifactsOutput, the justfile, tools/,
+# the tests' VSTestResultsDirectory).
+/artifacts/
+
+# Claude Code's local settings and its agents' worktrees.
+/.claude/
+
+# Editors
+.idea/
+.vs/
+.vscode/
+*.user
+*.suo
+*.swp
+*~
+
+# Operating systems
+.DS_Store
+._*
+Thumbs.db
+[Dd]esktop.ini
+
+# Python writes compiled modules beside a tool imported by another (theme-pictures.py takes themes.py).
+__pycache__/

@@ -1,0 +1,168 @@
+using System.Xml;
+using System.Xml.Linq;
+using Passenger.App.Workspace;
+using Passenger.Core;
+using Passenger.Host;
+using Passenger.Workspace;
+
+namespace Passenger.App.Testing;
+
+/// <summary>A test project's assembly for one of its target frameworks, where its build puts it.</summary>
+public sealed record TestAssembly(ProjectModel Project, string Framework, string Path)
+{
+    /// <summary>The run settings file its project names (RunSettingsFilePath, as `dotnet test` takes it), as a full path;
+    /// null for none.</summary>
+    public string? RunSettings { get; init; }
+
+    /// <summary>Where its project's code declares its tests as a runner looks through it; null where none was read.</summary>
+    public DeclaredLines? Declared { get; init; }
+}
+
+/// <summary>Where the test projects build their assemblies, one per target framework, asked of the warm project host with
+/// the global properties a build of each is given (a solution's build, the configuration and platform it maps each to):
+/// each project's target frameworks as MSBuild evaluates them (from a property, an import, Directory.Build.props), then,
+/// for a project of several, each framework's TargetPath as its inner build sees it (GetTargetFrameworks, GetTargetPath).</summary>
+public static class TestAssemblies
+{
+    /// <summary>The assemblies, built or not, the projects' in their order, as the build of <paramref name="solution"/> builds
+    /// them where it builds the projects (null where they are built one by one); a project MSBuild cannot evaluate is logged
+    /// and left out.</summary>
+    public static async Task<IReadOnlyList<TestAssembly>> ResolveAsync(IReadOnlyList<ProjectModel> projects, string folder, WorkspaceModel? workspace,
+        string? solution, Action<string> log, CancellationToken cancel)
+    {
+        if (projects.Count == 0)
+        {
+            return [];
+        }
+        ProjectHost host;
+        try
+        {
+            host = await ProjectHosts.ForAsync(folder, cancel);
+        }
+        catch (ProjectHostFailed failed)
+        {
+            throw new InvalidOperationException($"MSBuild could not say where the test projects build: {failed.Reason}", failed);
+        }
+        IReadOnlyList<SolutionBuilt> built = solution is null ? [] : await BuiltByAsync(host, solution, workspace?.Build is { OfSolution: true } chosen
+            ? new SolutionConfiguration(chosen.Chosen.Configuration, chosen.Chosen.Platform) : null, log, cancel);
+        (IReadOnlyList<TestAssembly> Assemblies, string? Problem)[] each = await Task.WhenAll(projects.Select(p =>
+            OfAsync(host, p, ProjectModels.Properties(workspace, p, built.FirstOrDefault(b => PathNames.Same(b.Project, p.Path))), cancel)));
+        List<string> problems = [.. each.Select(e => e.Problem).OfType<string>()];
+        foreach (string problem in problems)
+        {
+            log(problem);
+        }
+        List<TestAssembly> found = [.. each.SelectMany(e => e.Assemblies)];
+        if (found.Count == 0 && problems.Count > 0)
+        {
+            throw new InvalidOperationException($"MSBuild could not say where the test projects build: {string.Join("; ", problems)}");
+        }
+        return found;
+    }
+
+    /// <summary>Each project a build of the solution builds under the configuration chosen (else the one MSBuild takes), with
+    /// the configuration and platform it gives it; none, said,
+    /// where MSBuild could not read the solution, whose projects are then asked as built alone.</summary>
+    private static async Task<IReadOnlyList<SolutionBuilt>> BuiltByAsync(ProjectHost host, string solution, SolutionConfiguration? chosen, Action<string> log,
+        CancellationToken cancel)
+    {
+        string? problem;
+        try
+        {
+            SolutionBuild build = await host.SolutionBuildAsync(solution, cancel, chosen);
+            if (build.Problem is null)
+            {
+                return build.Projects;
+            }
+            problem = build.Problem;
+        }
+        catch (ProjectHostFailed failed)
+        {
+            problem = failed.Reason;
+        }
+        log($"MSBuild could not say how {System.IO.Path.GetFileName(solution)} builds its projects, so their tests are looked for where each builds alone: {problem}");
+        return [];
+    }
+
+    /// <summary>One project's assemblies, a framework's at a time in the order its TargetFrameworks gives them, or why MSBuild
+    /// could not say, with the global properties its build is given. A project of one framework is asked as its build builds
+    /// it, with no TargetFramework of the request's.</summary>
+    private static async Task<(IReadOnlyList<TestAssembly> Assemblies, string? Problem)> OfAsync(ProjectHost host, ProjectModel project,
+        Dictionary<string, string> globals, CancellationToken cancel)
+    {
+        try
+        {
+            PropertiesAnswer outer = await host.PropertiesAsync(project.Path, globals, [MSBuildNames.TargetFramework, MSBuildNames.TargetFrameworks, CarriedProperties.TargetPath, MSBuildNames.RunSettingsFilePath], cancel);
+            if (outer.Problem is { } problem)
+            {
+                return ([], $"{project.Name} could not be evaluated: {problem}");
+            }
+            string? single = outer.Values.GetValueOrDefault(MSBuildNames.TargetFramework);
+            string[] frameworks = [.. (outer.Values.GetValueOrDefault(MSBuildNames.TargetFrameworks) ?? string.Empty)
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.OrdinalIgnoreCase)];
+            // A TargetFramework of its own, or none to choose among, is a project MSBuild builds once (no cross-targeting).
+            if (single is { Length: > 0 } || frameworks.Length == 0)
+            {
+                return single is { Length: > 0 } && outer.Values.GetValueOrDefault(CarriedProperties.TargetPath) is { Length: > 0 } path
+                    ? ([new TestAssembly(project, single, PathNames.Canonical(path)) { RunSettings = SettingsOf(project, outer) }], null)
+                    : ([], null);
+            }
+            PropertiesAnswer[] inner = await Task.WhenAll(frameworks.Select(framework =>
+                host.PropertiesAsync(project.Path, new Dictionary<string, string>(globals, StringComparer.OrdinalIgnoreCase) { [MSBuildNames.TargetFramework] = framework }, [CarriedProperties.TargetPath, MSBuildNames.RunSettingsFilePath], cancel)));
+            List<TestAssembly> assemblies = [];
+            List<string> problems = [];
+            for (int i = 0; i < frameworks.Length; i++)
+            {
+                if (inner[i].Problem is { } failed)
+                {
+                    problems.Add($"{project.Name} ({frameworks[i]}) could not be evaluated: {failed}");
+                }
+                else if (inner[i].Values.GetValueOrDefault(CarriedProperties.TargetPath) is { Length: > 0 } path)
+                {
+                    assemblies.Add(new TestAssembly(project, frameworks[i], PathNames.Canonical(path)) { RunSettings = SettingsOf(project, inner[i]) });
+                }
+            }
+            return (assemblies, problems.Count == 0 ? null : string.Join("; ", problems));
+        }
+        catch (ProjectHostFailed failed)
+        {
+            return ([], $"{project.Name} could not be evaluated: {failed.Reason}");
+        }
+    }
+
+    /// <summary>The run settings file a project names (RunSettingsFilePath), asked of the warm project host with the global
+    /// properties a build of it is given; null for none, or where MSBuild cannot say.</summary>
+    public static async Task<string?> RunSettingsOfAsync(ProjectModel project, string folder, WorkspaceModel? workspace, CancellationToken cancel)
+    {
+        try
+        {
+            ProjectHost host = await ProjectHosts.ForAsync(folder, cancel);
+            PropertiesAnswer answer = await host.PropertiesAsync(project.Path, ProjectModels.Properties(workspace, project), [MSBuildNames.RunSettingsFilePath], cancel);
+            return answer.Problem is null ? SettingsOf(project, answer) : null;
+        }
+        catch (ProjectHostFailed)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>What a run settings file says; null, said, for one that cannot be read. A worker's: it reads the file.</summary>
+    public static XElement? ReadRunSettings(string file, Action<string>? log)
+    {
+        try
+        {
+            return XDocument.Load(file).Root is { Name.LocalName: "RunSettings" } read ? read : throw new XmlException("its root is not RunSettings");
+        }
+        catch (Exception unread) when (unread is IOException or UnauthorizedAccessException or XmlException)
+        {
+            log?.Invoke($"The run settings {PathNames.Shown(file, null)} were left out: {unread.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>The run settings file an evaluation names, a relative one from its project's folder; null for none.</summary>
+    private static string? SettingsOf(ProjectModel project, PropertiesAnswer answer) =>
+        answer.Values.GetValueOrDefault(MSBuildNames.RunSettingsFilePath) is { Length: > 0 } named
+            ? PathNames.Canonical(System.IO.Path.GetFullPath(named.Trim(), project.Folder))
+            : null;
+}

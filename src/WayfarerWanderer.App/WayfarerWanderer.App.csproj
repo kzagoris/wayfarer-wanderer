@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <!-- Windows makes a layered child window only for a program whose manifest names Windows 8 or later; Passenger's shell needs one. -->
+    <ApplicationManifest>../../vendor/passenger/src/Passenger.App/app.manifest</ApplicationManifest>
   </PropertyGroup>
   <ItemGroup>
     <AvaloniaResource Include="../../vendor/passenger/src/Passenger.App/Theme/Tokens.axaml" Link="Theme/Tokens.axaml" />
@@ -15,6 +17,7 @@
     <PackageReference Include="Velopack" />
     <ProjectReference Include="../WayfarerWanderer.Jvm/WayfarerWanderer.Jvm.csproj" />
     <ProjectReference Include="../../vendor/passenger/src/Passenger.Editor/Passenger.Editor.csproj" />
+    <ProjectReference Include="../../vendor/passenger/src/Passenger.App/Passenger.App.csproj" />
     <PackageReference Include="Avalonia.Desktop" />
     <PackageReference Include="Avalonia.HarfBuzz" />
     <PackageReference Include="SkiaSharp" />

@@ -1,0 +1,812 @@
+using System.Diagnostics;
+using System.Reflection;
+using System.Xml;
+using System.Xml.Linq;
+using Microsoft.TestPlatform.VsTestConsole.TranslationLayer;
+using Microsoft.VisualStudio.TestPlatform.ObjectModel;
+using Microsoft.VisualStudio.TestPlatform.ObjectModel.Client;
+using Microsoft.VisualStudio.TestPlatform.ObjectModel.Client.Interfaces;
+using Microsoft.VisualStudio.TestPlatform.ObjectModel.Logging;
+using Passenger.Core;
+using VsOutcome = Microsoft.VisualStudio.TestPlatform.ObjectModel.TestOutcome;
+using VsResult = Microsoft.VisualStudio.TestPlatform.ObjectModel.TestResult;
+
+namespace Passenger.App.Testing;
+
+/// <summary>Tests found and run through VSTest: the vstest.console of the SDK the folder builds with (its global.json's),
+/// driven through VSTest's own translation layer, so every framework with a VSTest adapter (xUnit, NUnit, MSTest) is
+/// found and run with its source locations and results. VSTest's test cases stay in here, each told as the IDE's own
+/// test and its results as outcomes. What VSTest warns of or fails with is in the logs folder's vstest.log, and with
+/// Trace protocol messages on every message it sends.</summary>
+public sealed class VsTestRunner : ITestRunner
+{
+    private const string RunSettings = "<RunSettings><RunConfiguration><DesignMode>true</DesignMode></RunConfiguration></RunSettings>";
+
+    /// <summary>Names a file for VSTest's own diagnostic log, for a run that goes wrong inside it.</summary>
+    [IdentifierHome]
+    public const string LogVariable = "PASSENGER_VSTEST_LOG";
+
+    /// <summary>The translation layer's constructor that names the dotnet running vstest.console.dll: the public ones run
+    /// the .dll under this process's own executable, which is right inside dotnet and wrong under Passenger's apphost (it
+    /// would start Passenger again). It is internal to the package version pinned, so a version without it fails every
+    /// run with this message.</summary>
+    private static readonly ConstructorInfo? NamesHost = typeof(VsTestConsoleWrapper).GetConstructor(
+        BindingFlags.Instance | BindingFlags.NonPublic, [typeof(string), typeof(string), typeof(ConsoleParameters)]);
+
+    /// <summary>How long a discovery told to stop has to say it has, before the runner is taken for stuck (an adapter that
+    /// never returns) and ended, its test hosts with it.</summary>
+    private static readonly TimeSpan StopLimit = TimeSpan.FromSeconds(10);
+
+    /// <summary>How long a run told to stop has to end after the test under way, before it is aborted, its test hosts ended.</summary>
+    private static readonly TimeSpan CancelLimit = TimeSpan.FromSeconds(2);
+
+    /// <summary>How long a run aborted has to end, before vstest.console is taken for stuck and ended, its test hosts with it.</summary>
+    private static readonly TimeSpan AbortLimit = TimeSpan.FromSeconds(3);
+
+    private readonly string consolePath;
+    private readonly string host;
+
+    /// <summary>The session of vstest.console the runner asks, another taken once a stopped run left one stuck.</summary>
+    private VsTestConsoleWrapper console;
+
+    /// <summary>The test cases discovered, by the id of the test each was told as.</summary>
+    private readonly TestCatalog<TestCase> cases = new();
+
+    /// <summary>The run settings file each assembly looked at runs with, by its path; null for none.</summary>
+    private readonly Dictionary<string, string?> settingsOf = new(StringComparer.Ordinal);
+
+    /// <summary>The assemblies looked at that are a Godot game's, whose GdUnit4 tests run on Godot, by their paths.</summary>
+    private readonly HashSet<string> games = new(StringComparer.Ordinal);
+
+    private VsTestRunner(string consolePath, string host, VsTestConsoleWrapper console)
+    {
+        this.consolePath = consolePath;
+        this.host = host;
+        this.console = console;
+    }
+
+    /// <summary>A runner for a folder: vstest.console from the SDK `dotnet --version` names there (<see cref="Dotnet.SdkAsync"/>),
+    /// saying why when it names none.</summary>
+    public static async Task<ITestRunner> StartAsync(string folder, CancellationToken cancellation = default)
+    {
+        string sdk;
+        try
+        {
+            sdk = await Dotnet.SdkAsync(folder, cancellation);
+        }
+        catch (InvalidOperationException unnamed)
+        {
+            throw new InvalidOperationException($"VSTest cannot start: the folder's .NET SDK could not be named ({unnamed.Message})", unnamed);
+        }
+        string host = Dotnet.Host(folder);
+        string console = System.IO.Path.Combine(Dotnet.Root(folder), "sdk", sdk, "vstest.console.dll");
+        if (!File.Exists(console))
+        {
+            throw new FileNotFoundException($"The SDK {sdk} has no vstest.console", console);
+        }
+        VsTestRunner runner = new(console, host, await SessionAsync(console, host));
+        IdeLog.Write(IdeLog.Tests, $"vstest.console of the SDK {sdk} started for {folder}");
+        if (cancellation.IsCancellationRequested)
+        {
+            // Stopped while it started: it ends now, rather than run idle until the IDE does.
+            IdeErrors.Observe(BackgroundWork.Unheld(runner.Dispose));
+            cancellation.ThrowIfCancellationRequested();
+        }
+        return runner;
+    }
+
+    /// <summary>vstest.console started, run by the dotnet given, its session begun.</summary>
+    private static async Task<VsTestConsoleWrapper> SessionAsync(string console, string host)
+    {
+        ConsoleParameters parameters = new()
+        {
+            InheritEnvironmentVariables = true,
+        };
+        if (Environment.GetEnvironmentVariable(LogVariable) is { Length: > 0 } logFile)
+        {
+            parameters.LogFilePath = logFile;
+            parameters.TraceLevel = TraceLevel.Verbose;
+        }
+        VsTestConsoleWrapper wrapper = NamesHost?.Invoke([console, host, parameters]) as VsTestConsoleWrapper
+            ?? throw new InvalidOperationException(
+                $"VSTest's translation layer {typeof(VsTestConsoleWrapper).Assembly.GetName().Version} cannot be told which dotnet runs vstest.console: VsTestRunner must follow its constructors");
+        // Its async calls wait for the handshake before starting vstest.console, so for ever: the blocking one, on a worker.
+        await Told(BackgroundWork.Run(wrapper.StartSession));
+        return wrapper;
+    }
+
+    public bool IsUsable { get; private set; } = true;
+
+    /// <summary>The tests in built test assemblies, as their adapters find them, each with its project's run settings, and
+    /// those VSTest could not look through, with what it said. Canceled, VSTest stops finding them and ends its test hosts;
+    /// one that does not within a few seconds leaves the runner unusable, to be ended.</summary>
+    public async Task<FoundTests> DiscoverAsync(IReadOnlyList<TestAssembly> assemblies, Action<string>? log = null, CancellationToken cancel = default)
+    {
+        List<TestCase> found = [];
+        List<UnfoundTests> unfound = [];
+        foreach (IGrouping<string?, TestAssembly> group in assemblies.GroupBy(a => a.RunSettings, StringComparer.Ordinal))
+        {
+            foreach (TestAssembly assembly in group)
+            {
+                settingsOf[assembly.Path] = group.Key;
+                if (assembly.Project.GodotFolder is not null)
+                {
+                    games.Add(assembly.Path);
+                }
+                else
+                {
+                    games.Remove(assembly.Path);
+                }
+            }
+            string settings = await BackgroundWork.Run(() => Settings(null, log, group.Key, [], false), cancel);
+            (List<TestCase> cases, List<UnfoundTests> missed) = await DiscoverWith([.. group.DistinctBy(a => a.Path, PathNames.Comparer)], settings, log, cancel);
+            found.AddRange(cases);
+            unfound.AddRange(missed);
+        }
+        return new FoundTests(await BackgroundWork.Run(() => Tell(assemblies, found)), unfound);
+    }
+
+    /// <summary>The test cases in assemblies, found with these settings in one discovery, and the assemblies whose tests could
+    /// not be found. A discovery aborted (a test host that cannot start) ends VSTest's look at every assembly it has yet to
+    /// look through, so each it did not look through whole is looked through again alone: one aborted alone is one whose
+    /// tests cannot be found, said with VSTest's words; what the first look said is not said again.</summary>
+    private async Task<(List<TestCase> Found, List<UnfoundTests> Unfound)> DiscoverWith(IReadOnlyList<TestAssembly> assemblies, string settings,
+        Action<string>? log, CancellationToken cancel)
+    {
+        Looked all = await LookAsync([.. assemblies.Select(a => a.Path)], settings, log, cancel);
+        if (!all.Aborted)
+        {
+            return ([.. all.Found], []);
+        }
+        if (assemblies is [{ } only])
+        {
+            return ([.. all.Found], [UnfoundTests.Of(only, all.Said)]);
+        }
+        HashSet<string> whole = new(all.Whole, PathNames.Comparer);
+        HashSet<string> saidOnce = new(all.Notable, StringComparer.Ordinal);
+        Action<string>? saidAgain = log is null ? null : line =>
+        {
+            if (!saidOnce.Contains(line))
+            {
+                log(line);
+            }
+        };
+        List<TestCase> found = [.. all.Found.Where(test => whole.Contains(test.Source))];
+        List<UnfoundTests> unfound = [];
+        List<TestAssembly> again = [.. assemblies.Where(a => !whole.Contains(a.Path))];
+        IdeLog.Write(IdeLog.Tests, $"Discovery aborted: {Plural.Of(again.Count, "assembly", "assemblies")} looked through again, each alone");
+        foreach (TestAssembly assembly in again)
+        {
+            Looked alone = await LookAsync([assembly.Path], settings, saidAgain, cancel);
+            found.AddRange(alone.Found);
+            if (alone.Aborted)
+            {
+                unfound.Add(UnfoundTests.Of(assembly, alone.Said));
+            }
+        }
+        return (found, unfound);
+    }
+
+    /// <summary>One discovery of assemblies with these settings: what VSTest found and said.</summary>
+    private async Task<Looked> LookAsync(List<string> assemblies, string settings, Action<string>? log, CancellationToken cancel)
+    {
+        Discovery handler = new(log);
+        VsTestConsoleWrapper session = console;
+        // The blocking call returns once VSTest has told the handler discovery is complete, stopped or not.
+        Task discovering = BackgroundWork.Run(() => session.DiscoverTests(assemblies, settings, new TestPlatformOptions(), handler));
+        // Not held, off the canceller's thread: the stop is said by discovery's own end.
+        using (cancel.Register(() => IdeErrors.Observe(BackgroundWork.Unheld(session.CancelDiscovery))))
+        {
+            try
+            {
+                await Told(discovering.WaitAsync(cancel));
+            }
+            catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+            {
+                try
+                {
+                    await discovering.WaitAsync(StopLimit);
+                }
+                catch (TimeoutException)
+                {
+                    IsUsable = false;
+                    IdeErrors.Observe(LetGoAsync(discovering));
+                }
+                catch (Exception error) when (error is IOException or InvalidOperationException or TestPlatformException)
+                {
+                }
+                throw;
+            }
+        }
+        return await handler.Done.Task;
+    }
+
+    /// <summary>Runs tests, their outcomes told a batch at a time as VSTest sends them; done when the run ends, with its
+    /// time and whether it was stopped, which cancellation does, keeping the outcomes of what has run. The tests of each
+    /// project's run settings run with them, the environment given set in the test hosts VSTest starts as the settings'
+    /// EnvironmentVariables are.</summary>
+    public async Task<RunSummary> RunAsync(IReadOnlyList<TestItem> tests, Action<IReadOnlyList<TestOutcome>> outcomes, Action<string>? log = null,
+        ITestDebugLauncher? debugger = null, IReadOnlyDictionary<string, string>? environment = null, GodotStart? godot = null, CancellationToken cancel = default)
+    {
+        // xUnit gives a test the same id in each target framework's assembly: its assembly tells them apart.
+        Dictionary<(Guid, string), TestItem> running = [];
+        List<TestCase> chosen = [];
+        foreach (TestItem test in tests)
+        {
+            if (cases.Of(test) is { } found && running.TryAdd((found.Id, found.Source), test))
+            {
+                chosen.Add(found);
+            }
+        }
+        RunSummary? summary = null;
+        // A Godot game's tests run apart, its GdUnit4's Godot given Settings' arguments, and headless where nobody sees Passenger.
+        foreach (IGrouping<(string? File, bool Game), TestCase> group in chosen.GroupBy(c => (settingsOf.GetValueOrDefault(cases.Canonical(c.Source)), games.Contains(cases.Canonical(c.Source)))))
+        {
+            bool headless = group.Key.Game && PassengerApp.ShowsNoWindow;
+            IReadOnlyList<string> arguments = group.Key.Game ? godot?.Arguments ?? [] : [];
+            // Debugged with Hot Reload, each test assembly's host is started for it and its own hook, one at a time.
+            List<(List<TestCase> Cases, TestHostReload? Reload)> parts = debugger is not null && !group.Key.Game
+                ? [.. group.GroupBy(c => c.Source, StringComparer.Ordinal)
+                    .Select(each => (Cases: each.ToList(), Reload: debugger.Reload(each.Key, environment ?? new Dictionary<string, string>())))]
+                : [(group.ToList(), null)];
+            bool stopped = false;
+            foreach ((List<TestCase> cases, TestHostReload? reload) in parts)
+            {
+                Dictionary<string, string>? given = reload is null ? environment?.ToDictionary() : new(environment ?? new Dictionary<string, string>());
+                foreach ((string name, string value) in reload?.Variables ?? new Dictionary<string, string>())
+                {
+                    given![name] = value;
+                }
+                string settings = await BackgroundWork.Run(() => Settings(given, log, group.Key.File, arguments, headless), cancel);
+                RunSummary part = await RunWith(cases, settings, running, outcomes, log, debugger, environment, cancel, reload);
+                summary = summary is null ? part : summary.And(part);
+                if (stopped = part.Canceled)
+                {
+                    break;
+                }
+            }
+            if (stopped)
+            {
+                break;
+            }
+        }
+        return summary ?? new RunSummary(TimeSpan.Zero, cancel.IsCancellationRequested, false, null);
+    }
+
+    /// <summary>Runs test cases with these settings (<see cref="RunAsync"/>).</summary>
+    private async Task<RunSummary> RunWith(List<TestCase> chosen, string settings, Dictionary<(Guid, string), TestItem> running, Action<IReadOnlyList<TestOutcome>> outcomes,
+        Action<string>? log, ITestDebugLauncher? debugger, IReadOnlyDictionary<string, string>? environment, CancellationToken cancel, TestHostReload? reload = null)
+    {
+        DebugLauncher? launcher = debugger is null ? null : new DebugLauncher(debugger, environment, reload);
+        try
+        {
+            return await RunWith(chosen, settings, running, outcomes, log, launcher, cancel);
+        }
+        finally
+        {
+            // A hook no attach took (its host never started, or started no debugger) is let go here.
+            if (launcher is { Attached: false } && reload is not null)
+            {
+                reload.Hook.Dispose();
+            }
+        }
+    }
+
+    private async Task<RunSummary> RunWith(List<TestCase> chosen, string settings, Dictionary<(Guid, string), TestItem> running, Action<IReadOnlyList<TestOutcome>> outcomes,
+        Action<string>? log, DebugLauncher? debugger, CancellationToken cancel)
+    {
+        Run handler = new(running, outcomes, log);
+        VsTestConsoleWrapper session = console;
+        long began = Stopwatch.GetTimestamp();
+        // Not held: a debugged run waits here while stopped at a breakpoint.
+        Task run = BackgroundWork.Unheld(() =>
+        {
+            if (debugger is null)
+            {
+                session.RunTests(chosen, settings, new TestPlatformOptions(), handler);
+            }
+            else
+            {
+                session.RunTestsWithCustomTestHost(chosen, settings, new TestPlatformOptions(), handler, debugger);
+            }
+        });
+        // Not held, off the canceller's thread: the stop is said by the run's own end.
+        using (cancel.Register(() => IdeErrors.Observe(BackgroundWork.Unheld(session.CancelTestRun))))
+        {
+            try
+            {
+                await Told(run.WaitAsync(cancel));
+            }
+            catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+            {
+                return await StoppedAsync(session, run, handler, began);
+            }
+            return await handler.Done.Task;
+        }
+    }
+
+    /// <summary>A run told to stop, ended: as canceled once the test under way ends, else aborted, its test hosts ended, else
+    /// with vstest.console ended, its test hosts with it, and another session taken; what had run kept either way.</summary>
+    private async Task<RunSummary> StoppedAsync(VsTestConsoleWrapper session, Task run, Run handler, long began)
+    {
+        if (!await EndsWithin(run, CancelLimit))
+        {
+            IdeLog.Write(IdeLog.Tests, $"A run told to stop ran on {Durations.Said(Waits.Of(CancelLimit))}: aborted");
+            IdeErrors.Observe(BackgroundWork.Unheld(session.AbortTestRun));
+            if (!await EndsWithin(run, AbortLimit))
+            {
+                IdeLog.Write(IdeLog.Tests, $"A run aborted ran on {Durations.Said(Waits.Of(AbortLimit))}: vstest.console is ended, its test hosts with it");
+                IdeErrors.Observe(LetGoAsync(run));
+                await BackgroundWork.Unheld(() => End(session));
+                try
+                {
+                    console = await SessionAsync(consolePath, host);
+                }
+                catch (Exception failed) when (failed is InvalidOperationException or IOException)
+                {
+                    IdeLog.Write(IdeLog.Tests, $"vstest.console could not start again: {failed.Message}");
+                    IsUsable = false;
+                }
+            }
+        }
+        // Whatever the run's own end says, it was stopped: what it tells after this is no longer its.
+        RunSummary told = handler.Close(Stopwatch.GetElapsedTime(began));
+        return told with { Canceled = true, Aborted = false, Error = null };
+    }
+
+    /// <summary>A discovery or run let go once stopped, ending as it ends: a failure of its session (vstest.console ended or
+    /// gone, which its log said) is how such work ends, any other the IDE's.</summary>
+    private static async Task LetGoAsync(Task work)
+    {
+        try
+        {
+            await work;
+        }
+        catch (Exception error) when (error is IOException or InvalidOperationException or TestPlatformException)
+        {
+        }
+    }
+
+    /// <summary>Whether a run ends within its limit (scaled as the IDE's waits are), however it ends.</summary>
+    private static async Task<bool> EndsWithin(Task run, TimeSpan limit)
+    {
+        try
+        {
+            await run.WaitAsync(Waits.Of(limit));
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+        catch (Exception error) when (error is IOException or InvalidOperationException or TestPlatformException)
+        {
+            // Ended by a failure, which the run's log said.
+        }
+        return true;
+    }
+
+    /// <summary>A run's settings: the project's run settings file's, if it names one, with VSTest's design mode, as an IDE
+    /// runs it, and the environment, each variable an element as VSTest reads them, over the file's of the same name; a name
+    /// XML cannot hold is left out and said, as is a file that cannot be read; GdUnit4's Godot given <paramref name="godot"/>
+    /// ahead of the settings' own parameters, and run headless where <paramref name="headless"/> says. A worker's: it reads
+    /// the file.</summary>
+    private static string Settings(IReadOnlyDictionary<string, string>? environment, Action<string>? log, string? file, IReadOnlyList<string> godot, bool headless)
+    {
+        if (environment is not { Count: > 0 } && file is null && !headless && godot.Count == 0)
+        {
+            return RunSettings;
+        }
+        XElement root = new("RunSettings");
+        if (file is not null)
+        {
+            root = TestAssemblies.ReadRunSettings(file, log) ?? root;
+        }
+        XElement configuration = Child(root, "RunConfiguration");
+        configuration.SetElementValue("DesignMode", "true");
+        if (environment is { Count: > 0 })
+        {
+            XElement variables = Child(configuration, "EnvironmentVariables");
+            foreach ((string name, string value) in environment)
+            {
+                // The run settings' own Godot stands for GdUnit4's adapter: the IDE's fills in where they name none.
+                if (name == GodotTestRuns.BinaryVariable && variables.Element(name) is not null)
+                {
+                    continue;
+                }
+                try
+                {
+                    variables.SetElementValue(XmlConvert.VerifyName(name), value);
+                }
+                catch (XmlException)
+                {
+                    log?.Invoke($"The environment variable {name} cannot be given to the tests: VSTest names each in XML, which cannot hold that name");
+                }
+            }
+        }
+        if (headless || godot.Count > 0)
+        {
+            GdUnit4Settings.Given(root, godot, headless);
+        }
+        return root.ToString(SaveOptions.DisableFormatting);
+
+        static XElement Child(XElement parent, string name)
+        {
+            if (parent.Element(name) is not { } child)
+            {
+                parent.Add(child = new XElement(name));
+            }
+            return child;
+        }
+    }
+
+    /// <summary>VSTest's failure told as the IDE's: the controller knows no VSTest type.</summary>
+    private static async Task Told(Task work)
+    {
+        try
+        {
+            await work;
+        }
+        catch (TestPlatformException failed)
+        {
+            throw new InvalidOperationException(failed.Message, failed);
+        }
+    }
+
+    public void Dispose() => End(console);
+
+    /// <summary>Ends a session: vstest.console told to end, and ended a moment later if it has not, its test hosts with it.</summary>
+    private static void End(VsTestConsoleWrapper session)
+    {
+        try
+        {
+            session.EndSession();
+        }
+        catch (Exception error) when (error is IOException or InvalidOperationException or ObjectDisposedException)
+        {
+        }
+    }
+
+    /// <summary>VSTest's test cases told as the IDE's tests, each with the project and framework of the assembly it is
+    /// in, and kept to be run by the id of the test told. VSTest names an assembly and a source file as it was given or
+    /// as the PDB says: the tree's are canonical.</summary>
+    private IReadOnlyList<TestItem> Tell(IReadOnlyList<TestAssembly> assemblies, IReadOnlyList<TestCase> found)
+    {
+        Dictionary<string, TestAssembly> bySource = assemblies.GroupBy(a => a.Path, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Last(), StringComparer.Ordinal);
+        IEnumerable<(TestAssembly, TestCase)> inAssemblies = found
+            .Select(test => (Assembly: bySource.GetValueOrDefault(cases.Canonical(test.Source)), Test: test))
+            .Where(pair => pair.Assembly is not null)
+            .Select(pair => (pair.Assembly!, pair.Test));
+        return cases.Tell(assemblies, inAssemblies, test => test.Id.ToString(), Told, (_, test) => test);
+    }
+
+    /// <summary>A test case as the IDE's test: by its method as its adapter names it apart from its display, else by its full
+    /// name, which a data row's arguments may follow, a case named in place of its method being a row of that method.</summary>
+    private TestItem Told(TestAssembly assembly, TestCase test)
+    {
+        string? path = string.IsNullOrEmpty(test.CodeFilePath) ? null : cases.Canonical(test.CodeFilePath);
+        string? managed = ManagedName(test);
+        (string Name, string Row)? named = managed is null && CaseMethod(assembly, test, path) is { } method
+            ? TestItem.NamedCase(test.FullyQualifiedName, test.DisplayName, method) : null;
+        string name = named?.Name ?? managed ?? test.FullyQualifiedName;
+        return new(assembly.Project.Path, name, test.DisplayName)
+        {
+            Framework = assembly.Framework,
+            Row = named?.Row ?? TestItem.RowOf(name, test.DisplayName),
+            Path = path,
+            Line = test.LineNumber,
+            Traits = [.. test.Traits.Select(t => new KeyValuePair<string, string>(t.Name, t.Value))],
+        };
+    }
+
+    /// <summary>The name of the method a test case runs, where its full name may say another: as its adapter tells it, else
+    /// as the code declares it at the case's line; null where neither says. Its adapter's class beside it is left: that is
+    /// the method's declaring type, where the case's may be another's that inherits it, or an instance of it.</summary>
+    private static string? CaseMethod(TestAssembly assembly, TestCase test, string? path)
+    {
+        foreach (TestProperty property in test.Properties)
+        {
+            if (property.Id == NUnitMethod)
+            {
+                return test.GetPropertyValue(property) as string;
+            }
+        }
+        return path is null ? null : assembly.Declared?.MethodAt(path, test.LineNumber, test.FullyQualifiedName);
+    }
+
+    /// <summary>A test case's method as its adapter names it apart from its display (MSTest's and xUnit's adapters do), its
+    /// type's full name and the method's without its parameters: a case its framework names otherwise is its method's
+    /// all the same. Null where the adapter names none.</summary>
+    private static string? ManagedName(TestCase test)
+    {
+        string? type = null;
+        string? method = null;
+        foreach (TestProperty property in test.Properties)
+        {
+            if (property.Id == ManagedType)
+            {
+                type = test.GetPropertyValue(property) as string;
+            }
+            else if (property.Id == ManagedMethod)
+            {
+                method = test.GetPropertyValue(property) as string;
+            }
+        }
+        if (type is not { Length: > 0 } || method is not { Length: > 0 })
+        {
+            return null;
+        }
+        int end = method.AsSpan().IndexOfAny('(', '`');
+        return $"{type}.{(end < 0 ? method : method[..end])}";
+    }
+
+    /// <summary>The test case properties VSTest's adapters name a test's type and method by.</summary>
+    private const string ManagedType = "TestCase.ManagedType";
+
+    private const string ManagedMethod = "TestCase.ManagedMethod";
+
+    /// <summary>The test case property NUnit's adapter names a case's method by.</summary>
+    private const string NUnitMethod = "NUnit.MethodName";
+
+    private static TestOutcome Outcome(TestItem test, VsResult result) => new(test, StateOf(result.Outcome), result.Duration)
+    {
+        DisplayName = result.DisplayName ?? result.TestCase.DisplayName,
+        Message = result.ErrorMessage,
+        StackTrace = FailureStacks.Once(result.ErrorStackTrace, result.ErrorMessage),
+        Output = string.Concat(result.Messages.Select(m => m.Text)) is { Length: > 0 } output ? output : null,
+        // An adapter writes each attachment to a file and names it by a URI, the test's name for it as its description.
+        Attachments = [.. result.Attachments.SelectMany(set => set.Attachments).Select(a =>
+            TestAttachment.Of(a.Description ?? string.Empty, a.Uri.IsAbsoluteUri && a.Uri.IsFile ? a.Uri.LocalPath : a.Uri.OriginalString))],
+    };
+
+    private static TestState StateOf(VsOutcome outcome) => outcome switch
+    {
+        VsOutcome.Passed => TestState.Passed,
+        VsOutcome.Failed => TestState.Failed,
+        VsOutcome.Skipped => TestState.Skipped,
+        _ => TestState.NotRun,
+    };
+
+    /// <summary>What one discovery came to: the test cases found; whether VSTest aborted it, as a test host that cannot start
+    /// does; the assemblies it says it looked through whole (none where it names none); the warnings and errors it said, and
+    /// its errors as one text.</summary>
+    private sealed record Looked(IReadOnlyList<TestCase> Found, bool Aborted, IReadOnlyList<string> Whole, IReadOnlyList<string> Notable, string Said);
+
+    private sealed class Discovery(Action<string>? log) : ITestDiscoveryEventsHandler2
+    {
+        private readonly List<TestCase> found = [];
+        private readonly List<string> notable = [];
+        private readonly List<string> errors = [];
+
+        public TaskCompletionSource<Looked> Done { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void HandleDiscoveredTests(IEnumerable<TestCase>? discoveredTestCases)
+        {
+            lock (found)
+            {
+                found.AddRange(discoveredTestCases ?? []);
+            }
+        }
+
+        public void HandleDiscoveryComplete(DiscoveryCompleteEventArgs discoveryCompleteEventArgs, IEnumerable<TestCase>? lastChunk)
+        {
+            HandleDiscoveredTests(lastChunk);
+            lock (found)
+            {
+                IdeLog.Write(IdeLog.Tests, $"Discovery {(discoveryCompleteEventArgs.IsAborted ? "aborted" : "complete")}: {Plural.Of(found.Count, "test")} found");
+                Done.TrySetResult(new Looked([.. found], discoveryCompleteEventArgs.IsAborted, [.. discoveryCompleteEventArgs.FullyDiscoveredSources ?? []],
+                    [.. notable], string.Join("\n", errors)));
+            }
+        }
+
+        public void HandleLogMessage(TestMessageLevel level, string? message)
+        {
+            if (message is not null && level != TestMessageLevel.Informational)
+            {
+                lock (found)
+                {
+                    notable.Add(message);
+                    if (level == TestMessageLevel.Error)
+                    {
+                        errors.Add(message);
+                    }
+                }
+            }
+            Said(level, message, log);
+        }
+
+        public void HandleRawMessage(string rawMessage) => Raw(rawMessage);
+    }
+
+    private sealed class Run(IReadOnlyDictionary<(Guid, string), TestItem> running, Action<IReadOnlyList<TestOutcome>> outcomes, Action<string>? log) : ITestRunEventsHandler
+    {
+        private readonly List<TestOutcome> all = [];
+
+        /// <summary>Whether the run was let go of once stopped (<see cref="Close"/>): what VSTest tells after is no run's.</summary>
+        private bool closed;
+
+        private RunSummary? ended;
+
+        /// <summary>The tests VSTest last said were running, and the last error it said: what a run broken off is said by.</summary>
+        private IReadOnlyList<TestCase> active = [];
+
+        private string? lastError;
+
+        /// <summary>What GdUnit4's adapter said, read for why its tests that need Godot's engine never ran.</summary>
+        private readonly GdUnit4Log gdUnit = new();
+
+        public TaskCompletionSource<RunSummary> Done { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>The run let go of: how it ended if it has, else what it told before, in the time given.</summary>
+        public RunSummary Close(TimeSpan elapsed)
+        {
+            lock (all)
+            {
+                closed = true;
+                return ended ?? new RunSummary(elapsed, true, false, null) { Outcomes = [.. all] };
+            }
+        }
+
+        public void HandleTestRunStatsChange(TestRunChangedEventArgs? testRunChangedArgs)
+        {
+            if (testRunChangedArgs?.ActiveTests is { } now)
+            {
+                lock (all)
+                {
+                    active = [.. now];
+                }
+            }
+            List<TestOutcome> batch = [.. (testRunChangedArgs?.NewTestResults ?? [])
+                .Select(r => running.TryGetValue((r.TestCase.Id, r.TestCase.Source), out TestItem? test) ? Told(Outcome(test, r), r) : null)
+                .OfType<TestOutcome>()];
+            if (batch.Count == 0)
+            {
+                return;
+            }
+            lock (all)
+            {
+                if (closed)
+                {
+                    return;
+                }
+                all.AddRange(batch);
+            }
+            outcomes(batch);
+        }
+
+        public void HandleTestRunComplete(TestRunCompleteEventArgs testRunCompleteArgs, TestRunChangedEventArgs? lastChunkArgs, ICollection<AttachmentSet>? runContextAttachments, ICollection<string>? executorUris)
+        {
+            HandleTestRunStatsChange(lastChunkArgs);
+            if (testRunCompleteArgs.Error is { } error)
+            {
+                log?.Invoke(error.Message);
+            }
+            RunSummary summary;
+            lock (all)
+            {
+                string? why = testRunCompleteArgs.Error?.Message ?? (testRunCompleteArgs.IsAborted && !testRunCompleteArgs.IsCanceled ? BrokenOff() : null);
+                summary = new RunSummary(testRunCompleteArgs.ElapsedTimeInRunningTests, testRunCompleteArgs.IsCanceled, testRunCompleteArgs.IsAborted, why)
+                {
+                    Outcomes = [.. all],
+                };
+                ended ??= closed ? null : summary;
+            }
+            string how = testRunCompleteArgs.IsCanceled ? "stopped" : testRunCompleteArgs.IsAborted ? "aborted" : "complete";
+            IdeLog.Write(IdeLog.Tests, $"Run {how}: {Plural.Of(summary.Outcomes.Count, "result")} in {Durations.Said(testRunCompleteArgs.ElapsedTimeInRunningTests)}"
+                + (summary.Error is { } failed ? $": {failed}" : string.Empty));
+            Done.TrySetResult(summary);
+        }
+
+        public int LaunchProcessWithDebuggerAttached(TestProcessStartInfo testProcessStartInfo) => -1;
+
+        public void HandleLogMessage(TestMessageLevel level, string? message)
+        {
+            string? cause = null;
+            if (message is not null)
+            {
+                lock (all)
+                {
+                    lastError = level == TestMessageLevel.Error ? message : lastError;
+                    cause = gdUnit.Heard(message);
+                }
+            }
+            Said(level, message, log);
+            if (cause is not null)
+            {
+                log?.Invoke(cause);
+            }
+        }
+
+        /// <summary>A test's outcome with why it never ran where GdUnit4 said its runner's build failed: a failure with no
+        /// time or frames of its own in that test assembly.</summary>
+        private TestOutcome Told(TestOutcome outcome, VsResult result)
+        {
+            if (result.Outcome != VsOutcome.Failed || result.Duration != TimeSpan.Zero || !string.IsNullOrEmpty(result.ErrorStackTrace))
+            {
+                return outcome;
+            }
+            string? why;
+            lock (all)
+            {
+                why = gdUnit.Why(Path.GetFileNameWithoutExtension(result.TestCase.Source));
+            }
+            return why is null ? outcome : outcome with { Message = outcome.Message is { Length: > 0 } message ? $"{message}\n{why}" : why };
+        }
+
+        public void HandleRawMessage(string rawMessage) => Raw(rawMessage);
+
+        /// <summary>Why a run broke off with no error of its own (its test host crashed): the last error VSTest said, and the
+        /// test running then, as VSTest last named it, else the one test asked that told nothing; under the lock.</summary>
+        private string? BrokenOff()
+        {
+            HashSet<TestItem> told = new(all.Select(outcome => outcome.Test), ReferenceEqualityComparer.Instance);
+            List<TestItem> then = [.. active.Select(test => running.GetValueOrDefault((test.Id, test.Source))).OfType<TestItem>().Where(test => !told.Contains(test))];
+            if (then.Count == 0 && running.Values.Where(test => !told.Contains(test)).ToList() is [{ } only])
+            {
+                then = [only];
+            }
+            string? named = then.Count == 0 ? null : $"while {string.Join(", ", then.Select(test => test.FullyQualifiedName))} ran";
+            return lastError is null ? named : named is null ? lastError : $"{lastError}, {named}";
+        }
+    }
+
+    /// <summary>VSTest's way to debug: it hands over the test host it would start, and the IDE starts it under its
+    /// debugger instead, or attaches to the one it started, with Hot Reload and its hook where the host was started for
+    /// them (<paramref name="reload"/>, taken by the first attach). VSTest waits on its own thread for each answer.</summary>
+    private sealed class DebugLauncher(ITestDebugLauncher debugger, IReadOnlyDictionary<string, string>? environment, TestHostReload? reload) : ITestHostLauncher3
+    {
+        private int attached;
+
+        /// <summary>Whether an attach took the reload's hook.</summary>
+        public bool Attached => Volatile.Read(ref attached) == 1;
+
+        public bool IsDebug => true;
+
+        public int LaunchTestHost(TestProcessStartInfo defaultTestHostStartInfo) => LaunchTestHost(defaultTestHostStartInfo, CancellationToken.None);
+
+        // VSTest's interface answers with the process id, on VSTest's own thread.
+        public int LaunchTestHost(TestProcessStartInfo defaultTestHostStartInfo, CancellationToken cancellationToken) =>
+            Synchronously.Run(() => debugger.LaunchAsync(new TestHostStart(
+                defaultTestHostStartInfo.FileName ?? throw new InvalidOperationException("VSTest gave no test host"),
+                Passenger.App.Run.CommandLine.Split(defaultTestHostStartInfo.Arguments),
+                defaultTestHostStartInfo.WorkingDirectory,
+                EnvironmentOf(defaultTestHostStartInfo))));
+
+        private Dictionary<string, string> EnvironmentOf(TestProcessStartInfo start)
+        {
+            Dictionary<string, string> merged = start.EnvironmentVariables?.Where(variable => variable.Value is not null)
+                .ToDictionary(variable => variable.Key, variable => variable.Value!) ?? [];
+            foreach ((string name, string value) in environment ?? new Dictionary<string, string>())
+            {
+                merged[name] = value;
+            }
+            return merged;
+        }
+
+        public bool AttachDebuggerToProcess(int pid) => AttachDebuggerToProcess(pid, CancellationToken.None);
+
+        // VSTest starts a .NET test host itself and waits on this, on its own thread, before it runs a test in it.
+        public bool AttachDebuggerToProcess(int pid, CancellationToken cancellationToken) =>
+            Synchronously.Run(() => debugger.AttachAsync(pid, Interlocked.Exchange(ref attached, 1) == 0 ? reload : null));
+
+        public bool AttachDebuggerToProcess(AttachDebuggerInfo attachDebuggerInfo, CancellationToken cancellationToken) =>
+            AttachDebuggerToProcess(attachDebuggerInfo.ProcessId, cancellationToken);
+    }
+
+    /// <summary>What VSTest or a test adapter said: a warning or an error is notable.</summary>
+    private static void Said(TestMessageLevel level, string? message, Action<string>? log)
+    {
+        if (message is not null)
+        {
+            TestRunners.Said(level != TestMessageLevel.Informational, level.ToString(), message, log);
+        }
+    }
+
+    /// <summary>A message from vstest.console as it came, for the trace.</summary>
+    private static void Raw(string message)
+    {
+        if (IdeLog.Traces)
+        {
+            IdeLog.Write(IdeLog.Tests, $"<-- {message}");
+        }
+    }
+}

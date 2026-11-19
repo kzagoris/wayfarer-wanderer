@@ -1,11 +1,12 @@
 # Wayfarer Wanderer
 
-The desktop host embeds Passenger's editor. Git records its source revision at
-`vendor/passenger`. Install the .NET SDK named in `global.json` and Python 3,
-then build from a recursive clone in its own directory.
+The desktop host embeds Passenger's editor and shell. Passenger's source is
+copied into `vendor/passenger` (see [Passenger copy](#passenger-copy)). Install
+the .NET SDK named in `global.json` and Python 3, then build from a clone in its
+own directory.
 
 ```sh
-git clone --recurse-submodules https://github.com/kzagoris/wayfarer-wanderer.git
+git clone https://github.com/kzagoris/wayfarer-wanderer.git
 cd wayfarer-wanderer
 dotnet --version
 dotnet restore WayfarerWanderer.slnx --locked-mode --configfile vendor/passenger/nuget.config
@@ -18,8 +19,30 @@ python3 tools/check-trx.py artifacts/test-results/editorhost.trx \
   WayfarerWanderer.Tests.EditorHostTests.PasteShortcutUsesWindowClipboard
 ```
 
-After switching revisions, run `git submodule update --init --recursive` before restore.
 On this workstation, `mise exec dotnet@11.0.100 -- dotnet` selects the pinned SDK.
+
+## Passenger copy
+
+`vendor/passenger` is an ordinary folder of Wayfarer's history, not a
+submodule. It keeps only the parts of
+[Passenger](https://github.com/Zaneris/passenger) that Wayfarer's build uses.
+[`vendor/passenger.json`](vendor/passenger.json) names the upstream commit it
+was copied from and the paths it keeps. Nothing is pushed back to Passenger.
+Wayfarer's own changes to the copy are edited and committed in place.
+
+```sh
+python3 tools/import-passenger.py status        # Wayfarer's changes against upstream
+python3 tools/import-passenger.py diff [PATH]   # the same as a diff
+python3 tools/import-passenger.py update        # bring in upstream main (or: update v0.5.0)
+```
+
+`update` fetches upstream into `artifacts/passenger-upstream.git` and copies
+upstream's changes to kept paths. Files Wayfarer never changed are taken as they
+are. Files Wayfarer changed are three-way merged, and any conflict is left with
+markers and listed. Afterwards run
+`dotnet restore WayfarerWanderer.slnx --force-evaluate --configfile vendor/passenger/nuget.config`
+to refresh the lock files, then build, test and commit. After editing the keep
+rules, `prune` deletes what they no longer keep.
 
 ## Editor themes and publish check
 

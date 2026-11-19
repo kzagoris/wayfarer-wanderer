@@ -1,0 +1,508 @@
+using System.Text.Json;
+using System.Xml.Linq;
+using Microsoft.CodeAnalysis.CSharp;
+using Passenger.Core;
+using Passenger.Packages;
+using Passenger.Xaml.Metadata;
+
+namespace Passenger.Xaml.Projects;
+
+/// <summary>What MSBuild's evaluation says of where a project's restore and build put things, wherever its obj and output
+/// folders were moved: its assets file, the package folder it restores into, the version it takes of each package (central
+/// versions included), the assembly its build makes, and what its C# is parsed with.</summary>
+public sealed record ProjectEvaluation(string? AssetsFile, string? PackageRoot, IReadOnlyDictionary<string, string> Versions, string? TargetPath = null)
+{
+    /// <summary>What its C# files are parsed with: the preprocessor symbols and C# version it compiles them with; null for
+    /// none known.</summary>
+    public CSharpParseOptions? Parsing { get; init; }
+
+    /// <summary>The target framework chosen of a multi-targeted project's, as the project names it: the one its XAML is read
+    /// against and previewed from (<see cref="TargetPath"/> and <see cref="Parsing"/> are that framework's); null for a
+    /// project of one.</summary>
+    public string? TargetFramework { get; init; }
+
+    /// <summary>The reference pack of each shared framework that framework references, as the SDK names it.</summary>
+    public IReadOnlyList<ReferencePack> Packs { get; init; } = [];
+}
+
+/// <summary>A shared framework's reference pack as the SDK names it (<c>Microsoft.Android.Ref.37</c> for
+/// <c>Microsoft.Android</c>), and its version, null for one a workload installs.</summary>
+public sealed record ReferencePack(string Framework, string Name, string? Version);
+
+/// <summary>What a project's XAML is compiled against, read without MSBuild: the assemblies its restore resolved
+/// (<c>project.assets.json</c>: each package's compile assets, the framework's reference pack), its project references,
+/// its own C# files and the usings its SDK adds to them, and the items a dialect reads from its project file
+/// (Avalonia's <c>AvaloniaResource</c>). A project not yet restored has no assemblies until it is.</summary>
+public sealed record ProjectInputs(
+    string ProjectPath,
+    string AssemblyName,
+    string? TargetFramework,
+    IReadOnlyList<string> References,
+    IReadOnlyList<string> ProjectReferences,
+    IReadOnlyList<string> SourceFiles,
+    IReadOnlyList<string> ImplicitUsings,
+    string? AssetsFile,
+    IReadOnlyList<string> Packages)
+{
+    public string Folder => Path.GetDirectoryName(ProjectPath)!;
+
+    /// <summary>Whether the project references a package, by its id.</summary>
+    public bool Uses(string package) => Packages.Contains(package, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The version of each package its restore resolved, by id.</summary>
+    public IReadOnlyDictionary<string, string> PackageVersions { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The assembly the project's build makes, as MSBuild's evaluation names it; null without one.</summary>
+    public string? TargetPath { get; init; }
+
+    /// <summary>What its C# files are parsed with, as MSBuild's evaluation gives it (<see cref="ProjectEvaluation.Parsing"/>);
+    /// null without one.</summary>
+    public CSharpParseOptions? Parsing { get; init; }
+
+    /// <summary>The target framework chosen of a multi-targeted project's (<see cref="ProjectEvaluation.TargetFramework"/>),
+    /// whose restore it is read from and whose build alone is previewed; null for a project of one.</summary>
+    public string? ChosenFramework { get; init; }
+
+    /// <summary>Where each package its restore resolved is, by id: the folder of its version in the package cache.</summary>
+    public IReadOnlyDictionary<string, string> PackageFolders { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The shared frameworks its restore says it references, a profile's own name kept
+    /// (<c>Microsoft.NETCore.App</c>, <c>Microsoft.WindowsDesktop.App.WPF</c>).</summary>
+    public IReadOnlyList<string> FrameworkReferences { get; init; } = [];
+
+    /// <summary>A property as the project sets it: its own file's, else the nearest Directory.Build.props' above it in the
+    /// person's folders (<see cref="FoldersUp"/>); null when neither sets it plainly (without other properties in it).</summary>
+    public string? PropertyValue(string name)
+    {
+        if (Property(Load(ProjectPath), name) is { } own)
+        {
+            return own;
+        }
+        foreach (string at in FoldersUp.From(Folder))
+        {
+            if (FoldersUp.Found(at, "Directory.Build.props") is { } props && File.Exists(props))
+            {
+                return Property(Load(props), name);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Reads a project's inputs; <paramref name="dotnetRoot"/> is the folder of the <c>dotnet</c> that builds it,
+    /// whose <c>packs/</c> hold the framework's reference assemblies, and <paramref name="evaluation"/> what MSBuild's evaluation
+    /// says of where its restore and build put things, when there is one, which is taken before what the folders suggest.</summary>
+    public static ProjectInputs Read(string projectPath, string? dotnetRoot, ProjectEvaluation? evaluation = null)
+    {
+        string folder = Path.GetDirectoryName(projectPath)!;
+        XDocument? project = Load(projectPath);
+        string assemblyName = Property(project, "AssemblyName") ?? Path.GetFileNameWithoutExtension(projectPath);
+        string? assets = evaluation?.AssetsFile is { Length: > 0 } evaluated && File.Exists(evaluated) ? evaluated : FindAssets(projectPath);
+        List<string> references = [];
+        List<string> projectReferences = [];
+        List<string> packages = [];
+        string? framework = null;
+        string? chosen = evaluation?.TargetFramework;
+        Assets? read = assets is null ? null : ReadAssets(assets, chosen);
+        if (read is not null)
+        {
+            framework = read.Framework;
+            references.AddRange(read.Compile);
+            projectReferences.AddRange(read.Projects.Select(p => PathNames.Canonical(Path.Combine(folder, p))).Distinct(PathNames.Comparer));
+            packages.AddRange(read.Packages);
+            foreach (string shared in read.FrameworkReferences)
+            {
+                // The SDK's own name for the framework's pack where the evaluation gives it, a workload's (Microsoft.Android.Ref.37) included.
+                ReferencePack? named = evaluation?.Packs.FirstOrDefault(p => string.Equals(p.Framework, shared, StringComparison.OrdinalIgnoreCase));
+                references.AddRange(FrameworkAssemblies(dotnetRoot, read, named?.Name ?? PackOf(shared), named?.Version));
+            }
+        }
+        // The project file's own references, should the project not be restored yet.
+        foreach (XElement reference in Elements(project, "ProjectReference"))
+        {
+            if (reference.Attribute("Include")?.Value is { Length: > 0 } include && ProjectItems.PathOf(folder, include) is { Glob: false } named
+                && PathNames.Canonical(named.Path) is var full && !projectReferences.Contains(full, PathNames.Comparer))
+            {
+                projectReferences.Add(full);
+            }
+        }
+        Dictionary<string, string> versions = read is null ? new(StringComparer.OrdinalIgnoreCase) : new(read.Versions, StringComparer.OrdinalIgnoreCase);
+        foreach (XElement package in Elements(project, "PackageReference"))
+        {
+            if (package.Attribute("Include")?.Value is not { Length: > 0 } id)
+            {
+                continue;
+            }
+            if (!packages.Contains(id, StringComparer.OrdinalIgnoreCase))
+            {
+                packages.Add(id);
+            }
+            if (ProjectItems.Value(package, "Version") is { Length: > 0 } version)
+            {
+                versions.TryAdd(id, version.Trim());
+            }
+        }
+        foreach ((string id, string version) in evaluation?.Versions ?? new Dictionary<string, string>())
+        {
+            if (!packages.Contains(id, StringComparer.OrdinalIgnoreCase))
+            {
+                packages.Add(id);
+            }
+            versions.TryAdd(id, version);
+        }
+        Dictionary<string, string> folders = read is null ? new(StringComparer.OrdinalIgnoreCase) : new(read.Folders, StringComparer.OrdinalIgnoreCase);
+        FindInCache(folders, versions, [evaluation?.PackageRoot, .. read?.PackageFolders ?? []], folder);
+        // Two profiles of one framework (WPF's and Windows Forms') share its pack.
+        return new ProjectInputs(projectPath, assemblyName, framework, [.. references.Distinct(StringComparer.Ordinal)], projectReferences, SourceFilesOf(folder),
+            ImplicitUsingsOf(assets, framework, assemblyName), assets, packages)
+        {
+            PackageVersions = versions,
+            PackageFolders = folders,
+            TargetPath = evaluation?.TargetPath is { Length: > 0 } built ? built : null,
+            Parsing = evaluation?.Parsing,
+            FrameworkReferences = read?.FrameworkReferences ?? [],
+            ChosenFramework = chosen,
+        };
+    }
+
+    /// <summary>The folder of each package the restore's assets did not place, at the version the project takes, from the
+    /// first package folder that holds it, the package cache the project's folder restores into last: what a project with
+    /// no assets to read, or assets Passenger could not find, has.</summary>
+    private static void FindInCache(Dictionary<string, string> folders, IReadOnlyDictionary<string, string> versions, IEnumerable<string?> roots, string folder)
+    {
+        List<string> places = [.. roots.OfType<string>().Where(r => r.Length > 0).Distinct(PathNames.Comparer)];
+        bool cached = false;
+        foreach ((string id, string version) in versions)
+        {
+            // A range or a floating version names no one folder.
+            if (folders.ContainsKey(id) || version.IndexOfAny(['*', '[', '(', ',', '$']) >= 0)
+            {
+                continue;
+            }
+            // Read only once a package is still to be found, as reading it reads the folder's configs.
+            if (!cached)
+            {
+                cached = true;
+                if (NuGetSettings.PackageCache(folder) is { Length: > 0 } cache && !places.Contains(cache, PathNames.Comparer))
+                {
+                    places.Add(cache);
+                }
+            }
+            if (places.Select(p => Path.Combine(p, id.ToLowerInvariant(), version.ToLowerInvariant())).FirstOrDefault(Directory.Exists) is { } found)
+            {
+                folders[id] = found;
+            }
+        }
+    }
+
+    /// <summary>The files an item type of the project file includes (<c>AvaloniaResource</c>), its globs expanded and its
+    /// removes taken away, as paths from the project's folder with forward slashes.</summary>
+    public IReadOnlyList<string> Items(string itemType)
+    {
+        XDocument? project = Load(ProjectPath);
+        Dictionary<string, string> included = new(StringComparer.Ordinal);
+        foreach (XElement item in Elements(project, itemType))
+        {
+            foreach (ItemPath include in Named(item.Attribute("Include")?.Value))
+            {
+                foreach ((string name, string path) in Found(include))
+                {
+                    included.TryAdd(name, path);
+                }
+            }
+            foreach (ItemPath remove in Named(item.Attribute("Remove")?.Value).Select(Canonical))
+            {
+                foreach (string name in included.Where(i => ItemPaths.Matches(remove, i.Value, PathNames.CaseIgnoredIn)).Select(i => i.Key).ToList())
+                {
+                    included.Remove(name);
+                }
+            }
+        }
+        return [.. included.Keys.Order(StringComparer.Ordinal)];
+    }
+
+    /// <summary>The paths a value of the project file names from its folder, those MSBuild expands left out.</summary>
+    private static IEnumerable<ItemPath> Named(string? value) => ItemPaths.Parts(value).Select(p => ItemPaths.Read(p.Replace('\\', '/'))).OfType<ItemPath>();
+
+    /// <summary>A path from the project's folder made canonical, as a walk names the files it finds.</summary>
+    private ItemPath Canonical(ItemPath written) => written with { Path = PathNames.Canonical(Path.Combine(Folder, written.Path)) };
+
+    /// <summary>The files a path from the project's folder names (<c>Assets/**</c>, <c>Assets/*.png</c>) as MSBuild names
+    /// them, each with its canonical path: a plain name as written, a glob's folder as written and what its wildcards found
+    /// as the disk names it, in the folders a project's wildcards enter (<see cref="ProjectFolders.Enters"/>).</summary>
+    private IEnumerable<(string Name, string Path)> Found(ItemPath written)
+    {
+        ItemPath whole = Canonical(written);
+        if (!written.Glob)
+        {
+            if (File.Exists(whole.Path))
+            {
+                yield return (written.Whole, whole.Path);
+            }
+            yield break;
+        }
+        string head = written.Path.Length == 0 ? string.Empty : $"{written.Path}/";
+        foreach (string file in PathNames.FilesUnder(whole.Path, ProjectFolders.Enters).SelectMany(f => f.Files))
+        {
+            if (ItemPaths.Matches(whole, file, PathNames.CaseIgnoredIn))
+            {
+                yield return (head + PathNames.Relative(file, whole.Path), file);
+            }
+        }
+    }
+
+    private static XDocument? Load(string path)
+    {
+        try
+        {
+            return XDocument.Load(path);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+        {
+            return null;
+        }
+    }
+
+    private static IEnumerable<XElement> Elements(XDocument? project, string name) =>
+        project?.Descendants().Where(e => e.Name.LocalName == name) ?? [];
+
+    private static string? Property(XDocument? project, string name) =>
+        Elements(project, name).Select(e => e.Value.Trim()).LastOrDefault(v => v.Length > 0 && !v.Contains("$(", StringComparison.Ordinal));
+
+    /// <summary>The project's <c>project.assets.json</c>: in its <c>obj/</c>, or under an artifacts folder above it in the
+    /// person's folders (<c>UseArtifactsOutput</c>'s <c>artifacts/obj/&lt;project&gt;/</c>, <see cref="FoldersUp"/>).</summary>
+    public static string? FindAssets(string projectPath)
+    {
+        string folder = Path.GetDirectoryName(projectPath)!;
+        string own = Path.Combine(folder, "obj", "project.assets.json");
+        if (File.Exists(own))
+        {
+            return own;
+        }
+        string name = Path.GetFileNameWithoutExtension(projectPath);
+        foreach (string at in FoldersUp.From(folder))
+        {
+            if (FoldersUp.Found(at, Path.Combine("artifacts", "obj", name, "project.assets.json")) is { } artifacts && File.Exists(artifacts))
+            {
+                return artifacts;
+            }
+        }
+        return null;
+    }
+
+    private sealed record Assets(string Framework, List<string> Compile, List<string> Projects, List<string> FrameworkReferences, List<string> Packages,
+        Dictionary<string, string> Versions, Dictionary<string, string> Folders)
+    {
+        /// <summary>The package folders the restore used, nearest first.</summary>
+        public IReadOnlyList<string> PackageFolders { get; init; } = [];
+
+        /// <summary>The packs the restore downloaded rather than found beside the SDK, by id and version
+        /// (<c>Microsoft.WindowsDesktop.App.Ref</c> on a system without it).</summary>
+        public IReadOnlyList<(string Id, string Version)> Downloads { get; init; } = [];
+    }
+
+    /// <summary>The restore's assets for one target: the framework chosen (<paramref name="chosen"/>, as the project names it)
+    /// where the restore has it, else its first target without a runtime, which is what the project compiles against.</summary>
+    private static Assets? ReadAssets(string path, string? chosen)
+    {
+        try
+        {
+            using FileStream stream = File.OpenRead(path);
+            using JsonDocument json = JsonDocument.Parse(stream);
+            JsonElement root = json.RootElement;
+            if (JsonMembers.Object(root, "targets") is not { } targets || JsonMembers.Object(root, "libraries") is not { } libraries)
+            {
+                return null;
+            }
+            IReadOnlyList<JsonProperty> frameworks = JsonMembers.Properties(JsonMembers.Object(root, "project"), "frameworks");
+            JsonProperty[] bare = [.. targets.EnumerateObject().Where(t => !t.Name.Contains('/', StringComparison.Ordinal) && t.Value.ValueKind == JsonValueKind.Object)];
+            if (bare.Length == 0)
+            {
+                return null;
+            }
+            int index = chosen is null ? -1 : Array.FindIndex(bare, t => Names(t.Name, chosen));
+            // A target the restore names by its long name (.NETCoreApp,Version=v10.0) is the project's framework in the same place.
+            int place = chosen is null ? -1 : IndexOf(frameworks, f => Names(f.Name, chosen) || Names(JsonMembers.Text(f.Value, "targetAlias") ?? string.Empty, chosen));
+            if (index < 0 && place >= 0 && frameworks.Count == bare.Length)
+            {
+                index = place;
+            }
+            JsonProperty target = bare[Math.Max(index, 0)];
+            // Its frameworkReferences and downloads, in the project's entry for the same framework.
+            int entry = index < 0 ? 0 : place >= 0 ? place : frameworks.Count == bare.Length ? index : 0;
+            JsonElement? framed = entry < frameworks.Count ? frameworks[entry].Value : null;
+            string framework = FrameworkNames.Short(target.Name);
+            string[] packageFolders = [.. JsonMembers.Properties(root, "packageFolders").Select(f => f.Name)];
+            List<string> compile = [];
+            List<string> projects = [];
+            List<string> packages = [];
+            Dictionary<string, string> versions = new(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, string> found = new(StringComparer.OrdinalIgnoreCase);
+            foreach (JsonProperty library in target.Value.EnumerateObject())
+            {
+                string type = JsonMembers.Text(library.Value, "type") ?? string.Empty;
+                if (JsonMembers.Object(libraries, library.Name) is not { } described)
+                {
+                    continue;
+                }
+                string relative = JsonMembers.Text(described, "path") ?? string.Empty;
+                if (type == "project")
+                {
+                    if (JsonMembers.Text(described, "msbuildProject") is { } projectFile)
+                    {
+                        projects.Add(projectFile.Replace('\\', '/'));
+                    }
+                    continue;
+                }
+                string[] idAndVersion = library.Name.Split('/');
+                packages.Add(idAndVersion[0]);
+                if (idAndVersion.Length > 1)
+                {
+                    versions[idAndVersion[0]] = idAndVersion[1];
+                }
+                if (packageFolders.Select(f => Path.Combine(f, relative)).FirstOrDefault(Directory.Exists) is { } inCache)
+                {
+                    found[idAndVersion[0]] = inCache;
+                }
+                foreach (JsonProperty asset in JsonMembers.Properties(library.Value, "compile"))
+                {
+                    if (!asset.Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                    foreach (string packageFolder in packageFolders)
+                    {
+                        string full = Path.Combine(packageFolder, relative, asset.Name);
+                        if (File.Exists(full))
+                        {
+                            compile.Add(full);
+                            break;
+                        }
+                    }
+                }
+            }
+            List<string> frameworkReferences = [.. JsonMembers.Properties(framed, "frameworkReferences").Select(f => f.Name)];
+            List<(string, string)> downloads = [];
+            foreach (JsonElement dependency in JsonMembers.Items(framed, "downloadDependencies"))
+            {
+                if (JsonMembers.Text(dependency, "name") is { } name && JsonMembers.Text(dependency, "version") is { } bounds)
+                {
+                    downloads.Add((name, bounds.Trim('[', ']', '(', ')').Split(',')[0].Trim()));
+                }
+            }
+            return new Assets(framework, compile, projects, frameworkReferences, packages, versions, found) { PackageFolders = packageFolders, Downloads = downloads };
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
+
+        static bool Names(string name, string framework) =>
+            name.Equals(framework, StringComparison.OrdinalIgnoreCase) || FrameworkNames.Short(name).Equals(framework, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int IndexOf(IReadOnlyList<JsonProperty> properties, Func<JsonProperty, bool> match)
+    {
+        for (int i = 0; i < properties.Count; i++)
+        {
+            if (match(properties[i]))
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /// <summary>The reference pack of a shared framework by its name, where no evaluation names it: a profile shares its
+    /// framework's (<c>Microsoft.WindowsDesktop.App.WPF</c>'s is <c>Microsoft.WindowsDesktop.App.Ref</c>).</summary>
+    private static string PackOf(string framework) => (FrameworkNames.IsWindowsDesktop(framework) ? FrameworkNames.WindowsDesktop : framework) + ".Ref";
+
+    /// <summary>A reference pack's assemblies: the pack the restore downloaded into a package folder, else the SDK's own
+    /// (<c>packs/Microsoft.NETCore.App.Ref/10.0.x/ref/net10.0/</c>), at the version the SDK names, else the newest of the
+    /// target's major version, else the newest of any. A target's platform is not part of the pack's folder.</summary>
+    private static IEnumerable<string> FrameworkAssemblies(string? dotnetRoot, Assets read, string pack, string? version)
+    {
+        string target = FrameworkNames.VersionOf(read.Framework) is { Major: >= 5 } net ? $"net{net.Major}.{net.Minor}" : read.Framework;
+        foreach ((string id, string downloaded) in read.Downloads.Where(d => string.Equals(d.Id, pack, StringComparison.OrdinalIgnoreCase)))
+        {
+            foreach (string folder in read.PackageFolders)
+            {
+                string reference = Path.Combine(folder, id.ToLowerInvariant(), downloaded.ToLowerInvariant(), "ref", target);
+                if (Directory.Exists(reference))
+                {
+                    return Directory.EnumerateFiles(reference, "*.dll");
+                }
+            }
+        }
+        string packs = dotnetRoot is null ? string.Empty : Path.Combine(dotnetRoot, "packs", pack);
+        if (dotnetRoot is null || !Directory.Exists(packs))
+        {
+            return [];
+        }
+        int? major = FrameworkNames.Major(target);
+        List<(string Version, string Folder)> versions = [.. VersionOrder.NewestFirst(Directory.EnumerateDirectories(packs)).Select(d => (Version: Path.GetFileName(d), Folder: d))];
+        // The version the SDK names first; a workload's pack, versioned by the platform's own numbers, at its newest.
+        IEnumerable<(string Version, string Folder)> named = version is null ? [] : versions.Where(v => string.Equals(v.Version, version, StringComparison.OrdinalIgnoreCase));
+        foreach ((_, string folder) in named.Concat(versions.Where(v => major is not null && VersionOrder.Major(v.Version) == major)).Concat(versions))
+        {
+            string reference = Path.Combine(folder, "ref", target);
+            if (Directory.Exists(reference))
+            {
+                return Directory.EnumerateFiles(reference, "*.dll");
+            }
+            // A target newer than the pack: its newest framework's folder.
+            string? newest = Directory.Exists(Path.Combine(folder, "ref")) ? Directory.EnumerateDirectories(Path.Combine(folder, "ref")).Order(StringComparer.Ordinal).LastOrDefault() : null;
+            if (newest is not null)
+            {
+                return Directory.EnumerateFiles(newest, "*.dll");
+            }
+        }
+        return [];
+    }
+
+    /// <summary>Whether a C# file is one of the project's own, as <see cref="SourceFiles"/> reads them, there now or not.</summary>
+    public bool Compiles(string path) => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && ProjectFolders.Holds(Folder, path);
+
+    /// <summary>The project's own C# files: those in its own folders (<see cref="ProjectFolders.Under"/>).</summary>
+    private static List<string> SourceFilesOf(string folder) => [.. ProjectFolders.Under(folder).SelectMany(f => FilesIn(f, "*.cs"))];
+
+    /// <summary>A folder's files a pattern names, none for a folder that cannot be read.</summary>
+    internal static IReadOnlyList<string> FilesIn(string folder, string pattern)
+    {
+        try
+        {
+            return [.. Directory.EnumerateFiles(folder, pattern)];
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>The usings the SDK writes into the project's <c>GlobalUsings.g.cs</c> beside its assets file, read as the
+    /// project's own C# is: the one in a folder of the framework read (<paramref name="framework"/>) first.</summary>
+    private static IReadOnlyList<string> ImplicitUsingsOf(string? assets, string? framework, string assemblyName)
+    {
+        if (assets is null || Path.GetDirectoryName(assets) is not { } obj || !Directory.Exists(obj))
+        {
+            return [];
+        }
+        string[] written = [.. Directory.EnumerateFiles(obj, "*.GlobalUsings.g.cs", SearchOption.AllDirectories)];
+        string? generated = written.FirstOrDefault(f => framework is not null && InFolderOf(f, framework, obj)) ?? written.FirstOrDefault();
+        return generated is null ? [] : SourceTypes.Read(generated, File.ReadAllText(generated), assemblyName, CSharpParseOptions.Default).GlobalUsings;
+    }
+
+    /// <summary>Whether a build's file lies in a folder of a target framework's under <paramref name="within"/>: <c>net10.0/</c>,
+    /// or an artifacts folder's <c>debug_net10.0/</c>, letter case ignored.</summary>
+    public static bool InFolderOf(string file, string framework, string within)
+    {
+        for (string? folder = Path.GetDirectoryName(file); folder is { Length: > 0 } && PathNames.IsUnder(folder, within); folder = Path.GetDirectoryName(folder))
+        {
+            string name = Path.GetFileName(folder);
+            if (name.Equals(framework, StringComparison.OrdinalIgnoreCase) || name.EndsWith("_" + framework, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+}

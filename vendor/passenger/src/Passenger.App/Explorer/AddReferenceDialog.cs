@@ -1,0 +1,101 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Threading;
+
+namespace Passenger.App.Explorer;
+
+/// <summary>A project the Add Reference dialog offers: checked while the project references it, and not offered when it
+/// references the project itself, directly or through others (a reference back would be a cycle MSBuild refuses).</summary>
+public sealed class ReferenceChoice(string path, string name, string where, bool chosen, bool circular) : Observable, ICheckChoice
+{
+    private bool isChosen = chosen;
+
+    public string Path { get; } = path;
+
+    public string Name { get; } = name;
+
+    /// <summary>Where it is, and why it cannot be chosen when it cannot.</summary>
+    public string Detail { get; } = circular ? $"{where} (references this project)" : where;
+
+    public bool CanChoose { get; } = !circular;
+
+    public bool IsChosen
+    {
+        get => isChosen;
+        set => Set(ref isChosen, value && CanChoose);
+    }
+}
+
+/// <summary>Add Reference for a project: the solution's other projects, each with a check box, those it references
+/// already checked. Space checks or unchecks the row chosen, Enter is OK and Escape cancels; it closes with the
+/// projects checked, or null when cancelled.</summary>
+public sealed class AddReferenceDialog : IdeWindow
+{
+    private readonly ListBox list;
+
+    public AddReferenceDialog(string project, IReadOnlyList<ReferenceChoice> choices)
+    {
+        Choices = choices;
+        Title = "Add Reference";
+        Width = 520;
+        Height = 420;
+        MinWidth = 360;
+        MinHeight = 240;
+        WindowStartupLocation = WindowStartupLocation.CenterOwner;
+
+        list = new ListBox { Classes = { StyleClasses.Tree }, ItemsSource = choices };
+        ReusedRows.Use(list, CheckRows.Of);
+        list.SelectedItem = choices.FirstOrDefault(c => c.CanChoose);
+        // Enter takes the choices as the dialog's default button does; Space flips the chosen row's box.
+        ListKeys.Act(list, new ListActs
+        {
+            Enter = Accept,
+            Keys = e =>
+            {
+                if (e.Key != Key.Space || e.KeyModifiers != KeyModifiers.None || list.SelectedItem is not ReferenceChoice { CanChoose: true } choice)
+                {
+                    return false;
+                }
+                choice.IsChosen = !choice.IsChosen;
+                return true;
+            },
+        });
+        Border rows = new() { Classes = { StyleClasses.Framed }, Child = list };
+
+        Button ok = DialogFooter.Default();
+        ok.Click += (_, _) => Accept();
+        TextBlock heading = new()
+        {
+            [DockPanel.DockProperty] = Dock.Top,
+            Text = $"Projects {project} references",
+            FontWeight = FontWeight.SemiBold,
+            Margin = new Thickness(0, 0, 0, 10),
+        };
+        Content = DialogFooter.Page(new DockPanel { Margin = new Thickness(16), Children = { heading, rows } }, DialogFooter.OkCancel(ok, () => Close(null)));
+        Opened += (_, _) => Dispatcher.UIThread.Post(FocusChosen, DispatcherPriority.Loaded);
+    }
+
+    public IReadOnlyList<ReferenceChoice> Choices { get; }
+
+    /// <summary>Closes as OK does, with the projects checked.</summary>
+    public void Accept() => Close((IReadOnlyList<string>)[.. Choices.Where(c => c.IsChosen).Select(c => c.Path)]);
+
+    /// <summary>Gives the row chosen the keys.</summary>
+    private void FocusChosen()
+    {
+        if (list.SelectedIndex >= 0)
+        {
+            list.ScrollIntoView(list.SelectedIndex);
+            list.UpdateLayout();
+            list.ContainerFromIndex(list.SelectedIndex)?.Focus();
+        }
+        else
+        {
+            list.Focus();
+        }
+    }
+}

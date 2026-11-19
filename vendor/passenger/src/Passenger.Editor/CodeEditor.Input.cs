@@ -1,0 +1,762 @@
+using Avalonia;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Input.TextInput;
+using Avalonia.Interactivity;
+using Avalonia.Media;
+using Avalonia.Media.TextFormatting;
+using Avalonia.VisualTree;
+using Passenger.Text;
+
+namespace Passenger.Editor;
+
+public sealed partial class CodeEditor
+{
+    /// <summary>Wheel and trackpad travel per unit of delta.</summary>
+    private const double WheelStep = 50;
+
+    /// <summary>How long the pointer rests before a hover card is asked for.</summary>
+    private static readonly TimeSpan HoverDelay = TimeSpan.FromMilliseconds(500);
+
+    private KeymapDispatcher? ownKeys;
+    private Avalonia.Threading.DispatcherTimer? hover;
+    private Point hoverAt;
+    private bool hovering;
+    private Drag drag;
+    private EditorInputMethod? inputMethod;
+
+    private EditorInputMethod InputMethod => inputMethod ??= new EditorInputMethod(this);
+
+    /// <summary>The text the input method is composing, at the primary caret or on Vim's command line; empty when it is
+    /// composing none.</summary>
+    private string Composition => inputMethod?.Composition ?? string.Empty;
+
+    /// <summary>The text the input method is composing at the primary caret, drawn there; empty when it is composing none
+    /// or composes on Vim's command line.</summary>
+    private string Preedit => vim?.CommandLine is null ? Composition : string.Empty;
+
+    /// <summary>Where in the composition the input method's cursor is; null at its end.</summary>
+    private int? PreeditCursor => inputMethod?.CompositionCursor;
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (e.Handled || ownKeys is null)
+        {
+            return;
+        }
+        if (!ownKeys.IsPending && PressVim(e, out string? asked, out int repeat))
+        {
+            ownKeys.Heard(e);
+            for (int i = 0; asked is not null && i < repeat; i++)
+            {
+                TryExecute(asked);
+            }
+            e.Handled = true;
+            return;
+        }
+        string? action = ownKeys.Press(e, out bool consumed, out bool shifted);
+        if (action is not null && (!shifted || EditorActions.IsMovement(action)) && TryExecute(action, shifted))
+        {
+            e.Handled = true;
+        }
+        else if (consumed && action is null)
+        {
+            e.Handled = true;
+        }
+    }
+
+    protected override void OnTextInput(TextInputEventArgs e)
+    {
+        base.OnTextInput(e);
+        if (e.Handled || string.IsNullOrEmpty(e.Text))
+        {
+            return;
+        }
+        if (vim is { CommandLine: not null })
+        {
+            // What is typed (a key's, an input method's, a dead key's) goes on the command line, whatever the file allows.
+            e.Handled = true;
+            if (Printable(e.Text) is { Length: > 0 } onLine)
+            {
+                TypeOnVimCommandLine(onLine);
+            }
+            return;
+        }
+        if (IsReadOnly)
+        {
+            // Outside Vim's insert mode the text is a command's, taken at the key press.
+            if (vim is not { Mode: not Editor.VimMode.Insert } && Printable(e.Text).Length > 0)
+            {
+                RefuseTyping();
+                e.Handled = true;
+            }
+            return;
+        }
+        if (vim is { Mode: not Editor.VimMode.Insert })
+        {
+            // Keys outside insert mode are commands, taken at the key press; their text must not type.
+            e.Handled = true;
+            return;
+        }
+        string typed = Printable(e.Text);
+        if (typed.Length == 0)
+        {
+            return;
+        }
+        inputMethod?.Committed();
+        e.Handled = true;
+        if (PassesEndTag(typed))
+        {
+            TypedOverEndTag?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+        Apply(TextEditing.Type(document.Snapshot, selections, typed));
+        EditPlan? closing = ClosesTags ? TextEditing.CloseTag(document.Snapshot, selections, typed, Markup) : null;
+        if (closing is not null)
+        {
+            Apply(closing);
+            KeepTypingOver(closing.EndTags);
+        }
+        if (closing?.EndTags is { Ahead: true })
+        {
+            TypedOverEndTag?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+        Typed?.Invoke(this, typed);
+    }
+
+    /// <summary>Text typed while the editor refuses changes: a composition it ended is drawn no more, and the window hears
+    /// of it (<see cref="TypingRefusedEvent"/>).</summary>
+    private void RefuseTyping()
+    {
+        if (Composition.Length > 0)
+        {
+            inputMethod!.Committed();
+            RedrawChanged();
+            FollowInputMethod();
+        }
+        RaiseEvent(new RoutedEventArgs(TypingRefusedEvent, this));
+    }
+
+    private static readonly System.Buffers.SearchValues<char> ControlCharacters = System.Buffers.SearchValues.Create(
+        "\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\u0008\u0009\u000A\u000B\u000C\u000D\u000E\u000F\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001A\u001B\u001C\u001D\u001E\u001F\u007F");
+
+    /// <summary>What was typed less its control characters: the text itself when it holds none, as a key's does.</summary>
+    private static string Printable(string text)
+    {
+        if (text.AsSpan().IndexOfAny(ControlCharacters) < 0)
+        {
+            return text;
+        }
+        Span<char> kept = text.Length <= 256 ? stackalloc char[text.Length] : new char[text.Length];
+        int count = 0;
+        foreach (char c in text)
+        {
+            if (!ControlCharacters.Contains(c))
+            {
+                kept[count++] = c;
+            }
+        }
+        return new string(kept[..count]);
+    }
+
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        base.OnPointerPressed(e);
+        // A press on a scrollbar that its thumb and track leave (beside the thumb) is the bar's, not the text's under it.
+        if ((e.Source as Visual)?.FindAncestorOfType<ScrollBar>(includeSelf: true) is { } bar && (bar == vertical || bar == horizontal))
+        {
+            e.Handled = true;
+            return;
+        }
+        PointerPoint point = e.GetCurrentPoint(this);
+        if (point.Properties.IsRightButtonPressed && point.Position.X < GutterWidth && GutterClicked is not null && ShowLineNumbers)
+        {
+            int line = LineAtY(point.Position.Y);
+            if (line < document.Snapshot.LineCount)
+            {
+                GutterClick click = new(line, e.KeyModifiers, point.Position, Context: true);
+                if (!PressColumns(click, e.Pointer))
+                {
+                    GutterClicked(this, click);
+                }
+                e.Handled = true;
+            }
+            return;
+        }
+        if (point.Properties.IsRightButtonPressed && point.Position.X >= GutterWidth)
+        {
+            // The caret goes to a right-click, unless the click is in the selection it would act on.
+            Focus();
+            int at = OffsetAt(point.Position);
+            if (!selections.Items.Any(s => !s.IsEmpty && s.Start <= at && at <= s.End))
+            {
+                SetSelections(SelectionSet.Single(at), reveal: false);
+            }
+            ContextMenuRequested?.Invoke(this, point.Position);
+            e.Handled = true;
+            return;
+        }
+        MouseShortcut gesture = MouseShortcut.Of(e);
+        Keymap? gestures = point.Position.X >= GutterWidth ? GesturesKeymap : null;
+        string? clicked = gestures?.ActionFor(gesture);
+        string? dragged = gestures?.DragFor(gesture);
+        string? action = clicked ?? dragged;
+        bool left = gesture.Button == MouseButton.Left;
+        // The middle button does only what the keymap gives its gesture, and on the text alone.
+        if (!left && (gesture.Button != MouseButton.Middle || action is null))
+        {
+            CancelChoices();
+            return;
+        }
+        Focus();
+        if (left && point.Position.X >= GutterWidth && ClickChoice(OffsetAt(point.Position)))
+        {
+            e.Handled = true;
+            return;
+        }
+        CancelChoices();
+        if (left && ClickFold(point.Position))
+        {
+            e.Handled = true;
+            return;
+        }
+        if (left)
+        {
+            PressLink(point.Position, e.KeyModifiers, e.ClickCount);
+        }
+        document.BreakUndoGroup();
+        TextSnapshot text = document.Snapshot;
+        int offset = OffsetAt(point.Position, out bool beforeWrap);
+        KeyModifiers mods = e.KeyModifiers;
+
+        int pressed = LineAtY(point.Position.Y);
+        if (point.Position.X < GutterWidth && ShowLineNumbers && pressed < text.LineCount)
+        {
+            drag = default;
+            if (PressColumns(new GutterClick(pressed, mods, point.Position, Context: false), e.Pointer))
+            {
+                e.Handled = true;
+                return;
+            }
+        }
+        if (point.Position.X < GutterWidth && GutterClicked is not null && ShowLineNumbers)
+        {
+            if (pressed < text.LineCount)
+            {
+                GutterClicked(this, new GutterClick(pressed, mods, point.Position, Context: false));
+            }
+            drag = default;
+            e.Handled = true;
+            return;
+        }
+        if (point.Position.X < GutterWidth)
+        {
+            int line = text.GetLineFromOffset(offset);
+            drag = new Drag(DragMode.Lines, text.GetLineStart(line), point.Position);
+            ExtendLines(text, offset, mods.HasFlag(KeyModifiers.Shift));
+        }
+        else if (clicked == EditorActions.AddOrRemoveCaret)
+        {
+            SelectionSet without = selections.RemoveAt(offset);
+            if (without == selections && selections.Count >= SelectionSet.MaxCount)
+            {
+                CaretLimitReached?.Invoke(this, EventArgs.Empty);
+            }
+            else
+            {
+                SetSelections(without != selections ? without : selections.Add(Selection.At(offset)), reveal: false);
+            }
+            drag = default;
+            e.Handled = true;
+            return;
+        }
+        else if (clicked == EditorActions.ColumnSelectionFromCaret)
+        {
+            // From the middle of the caret's row, so the row is the caret's wherever the press is.
+            Point from = PointOf(selections.Primary.Caret) + new Vector(0, metrics.LineHeight / 2);
+            drag = new Drag(DragMode.Column, offset, from);
+            SetSelections(ColumnSelection(text, from, point.Position), reveal: false);
+        }
+        else if (dragged == EditorActions.ColumnSelectionDrag)
+        {
+            drag = new Drag(DragMode.Column, offset, point.Position, Clicked: clicked, Before: selections);
+            SetSelections(SelectionSet.Single(offset), reveal: false);
+        }
+        else if (dragged == EditorActions.AddColumnSelectionDrag)
+        {
+            drag = new Drag(DragMode.Column, offset, point.Position, Kept: selections, Clicked: clicked, Before: selections);
+            SetSelections(WithColumn(selections, text, point.Position, point.Position), reveal: false);
+        }
+        else if (clicked is not null)
+        {
+            SetSelections(SelectionSet.Single(offset), reveal: false);
+            ActionRequested?.Invoke(this, clicked);
+            drag = default;
+            e.Handled = true;
+            return;
+        }
+        else if (e.ClickCount == 2)
+        {
+            TextRange word = TextNavigation.WordAt(text, offset);
+            drag = new Drag(DragMode.Words, word.Start, point.Position, word.End);
+            SetSelections(SelectionSet.Single(new Selection(word.Start, word.End)), reveal: false);
+        }
+        else if (e.ClickCount >= 3)
+        {
+            int line = text.GetLineFromOffset(offset);
+            drag = new Drag(DragMode.Lines, text.GetLineStart(line), point.Position);
+            ExtendLines(text, offset, extend: false);
+        }
+        else
+        {
+            bool extend = mods.HasFlag(KeyModifiers.Shift);
+            Selection primary = selections.Primary;
+            drag = new Drag(DragMode.Characters, extend ? primary.Anchor : offset, point.Position);
+            LeanFor(point.Position, offset);
+            nextWrapLeaning = beforeWrap ? [offset] : null;
+            SetSelections(SelectionSet.Single(extend ? new Selection(primary.Anchor, offset) : Selection.At(offset)), reveal: false);
+        }
+        e.Pointer.Capture(this);
+        e.Handled = true;
+    }
+
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        base.OnPointerMoved(e);
+        Point position = e.GetPosition(this);
+        RestartHover(position);
+        Cursor = position.X < GutterWidth || drag.Mode == DragMode.Gutter ? Cursor.Default : IbeamCursor;
+        FollowLinks(position, drag.Mode != DragMode.None && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed);
+        bool inGutter = position.X < GutterWidth;
+        if (inGutter != overGutter)
+        {
+            overGutter = inGutter;
+            RedrawChanged();
+        }
+        PointerPointProperties held = e.GetCurrentPoint(this).Properties;
+        if (drag.Mode == DragMode.None || !(held.IsLeftButtonPressed || held.IsMiddleButtonPressed))
+        {
+            return;
+        }
+        // Dragging past an edge scrolls toward it, by how far past the pointer is.
+        double overshoot = position.Y < 0 ? position.Y : position.Y > Bounds.Height ? position.Y - Bounds.Height : 0;
+        if (overshoot != 0)
+        {
+            ScrollTo(scroll + new Vector(0, overshoot));
+        }
+        TextSnapshot text = document.Snapshot;
+        int offset = OffsetAt(position, out bool beforeWrap);
+        switch (drag.Mode)
+        {
+            case DragMode.Characters:
+                nextWrapLeaning = beforeWrap ? [offset] : null;
+                SetSelections(SelectionSet.Single(new Selection(drag.Anchor, offset)), reveal: true);
+                break;
+            case DragMode.Words:
+                TextRange word = TextNavigation.WordAt(text, offset);
+                SetSelections(SelectionSet.Single(offset < drag.Anchor
+                    ? new Selection(drag.AnchorEnd, word.Start)
+                    : new Selection(drag.Anchor, Math.Max(word.End, drag.AnchorEnd))), reveal: true);
+                break;
+            case DragMode.Lines:
+                ExtendLines(text, offset, extend: true);
+                break;
+            case DragMode.Column:
+                SetSelections(drag.Kept is { } kept ? WithColumn(kept, text, drag.Start, position) : ColumnSelection(text, drag.Start, position), reveal: true);
+                break;
+            case DragMode.Gutter:
+                dragging?.Drag(Math.Clamp(LineAtY(position.Y), 0, text.LineCount - 1));
+                Redraw();
+                break;
+        }
+    }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        base.OnPointerReleased(e);
+        if (drag.Mode == DragMode.Gutter && dragging is { } column)
+        {
+            DropColumn(column, e.KeyModifiers, e.GetPosition(this));
+        }
+        ReleaseLink(e.GetPosition(this));
+        Drag released = drag;
+        drag = default;
+        e.Pointer.Capture(null);
+        if (released.Clicked is { } clicked && Stayed(released.Start, e.GetPosition(this)))
+        {
+            Click(released, clicked);
+        }
+    }
+
+    /// <summary>Whether a press was let go where it was made, so it was a click, not the drag its gesture also starts.</summary>
+    private static bool Stayed(Point pressed, Point released) => Math.Abs(released.X - pressed.X) < 4 && Math.Abs(released.Y - pressed.Y) < 4;
+
+    /// <summary>A click its gesture's drag shares: on the selection the press fell inside, else at the press; where the
+    /// host does not run it, the press stays a column's start.</summary>
+    private void Click(Drag released, string action)
+    {
+        SelectionSet before = released.Before ?? selections;
+        bool inside = before.Items.Any(s => !s.IsEmpty && s.Start <= released.Anchor && released.Anchor <= s.End);
+        SetSelections(inside ? before : SelectionSet.Single(released.Anchor), reveal: false);
+        if (ClickRuns?.Invoke(action) != true)
+        {
+            SetSelections(SelectionSet.Single(released.Anchor), reveal: false);
+        }
+    }
+
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        base.OnPointerExited(e);
+        if (overGutter)
+        {
+            overGutter = false;
+            Redraw();
+        }
+        hoverTimer.Stop();
+        EndHover();
+        // A pointer back where it left rests anew.
+        hoverAt = new Point(double.NaN, double.NaN);
+        HideFoldPreview();
+        hovered.Release();
+    }
+
+    /// <summary>Whether Ctrl+wheel (Cmd+wheel on macOS) asks for a bigger or smaller font rather than scrolling.</summary>
+    public bool ZoomsWithWheel { get; set; }
+
+    /// <summary>The wheel turned with Ctrl (Cmd on macOS) while <see cref="ZoomsWithWheel"/>: by how many points the host
+    /// makes the font bigger (or, below zero, smaller).</summary>
+    public event EventHandler<int>? ZoomRequested;
+
+    /// <summary>What a trackpad's small turns add up to, until they make a point of zoom.</summary>
+    private double wheelZoom;
+
+    protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
+    {
+        base.OnPointerWheelChanged(e);
+        if (ZoomsWithWheel && e.KeyModifiers.HasFlag(Keystroke.Command))
+        {
+            wheelZoom += e.Delta.Y;
+            int points = (int)Math.Truncate(wheelZoom);
+            if (points != 0)
+            {
+                wheelZoom -= points;
+                ZoomRequested?.Invoke(this, points);
+            }
+            e.Handled = true;
+            return;
+        }
+        Vector delta = e.Delta;
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift) && delta.X == 0)
+        {
+            delta = new Vector(delta.Y, 0);
+        }
+        ScrollTo(scroll - delta * WheelStep);
+        e.Handled = true;
+    }
+
+    private Avalonia.Threading.DispatcherTimer hoverTimer => hover ??= new Avalonia.Threading.DispatcherTimer(HoverDelay, Avalonia.Threading.DispatcherPriority.Background, (_, _) =>
+    {
+        hover!.Stop();
+        if (drag.Mode != DragMode.None || !IsPointerOver)
+        {
+            return;
+        }
+        if (hoverAt.X < GutterWidth)
+        {
+            int rested = LineAtY(hoverAt.Y);
+            if (ShowLineNumbers && rested < document.Snapshot.LineCount && GutterHovered is not null)
+            {
+                hovering = true;
+                GutterHovered(this, new GutterClick(rested, KeyModifiers.None, hoverAt, Context: false));
+            }
+            return;
+        }
+        if (PlaceholderAt(hoverAt) is { } placeholder)
+        {
+            ShowFoldPreview(placeholder.Line, placeholder.Chip);
+            return;
+        }
+        TextSnapshot text = document.Snapshot;
+        if (AnnotationAt(hoverAt) is { } annotation && annotation.Line < text.LineCount)
+        {
+            hovering = true;
+            LineSpan rested = text.GetLine(annotation.Line);
+            Hovered?.Invoke(this, new HoverEventArgs(rested.Start + rested.Length, hoverAt, annotation: annotation));
+            return;
+        }
+        (int line, int row) = Rows.LineOfRow(RowAtY(hoverAt.Y));
+        if (line < 0 || line >= text.LineCount)
+        {
+            return;
+        }
+        int offset = OffsetAt(hoverAt);
+        // Past the end of a row is not over any code.
+        RowSpan span = RowSpanOf(text, line, row);
+        LineView view = ViewOf(text, span);
+        if (hoverAt.X - TextLeft + scroll.X > span.Indent + XWith(view, GapsOn(span), span.Length, afterHints: false) + metrics.CharWidth)
+        {
+            return;
+        }
+        hovering = true;
+        Hovered?.Invoke(this, new HoverEventArgs(offset, hoverAt, HintUnder(hoverAt)));
+    });
+
+    private void RestartHover(Point position)
+    {
+        if (Math.Abs(position.X - hoverAt.X) < 2 && Math.Abs(position.Y - hoverAt.Y) < 2)
+        {
+            return;
+        }
+        hoverAt = position;
+        // The card stays while the pointer stays on its placeholder.
+        if (preview is { } shown && !shown.Chip.Contains(position))
+        {
+            HideFoldPreview();
+        }
+        EndHover();
+        hoverTimer.Stop();
+        hoverTimer.Start();
+    }
+
+    private void EndHover()
+    {
+        if (hovering)
+        {
+            hovering = false;
+            HoverEnded?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>The offset under a point in the control, its row clamped to the document.</summary>
+    private int OffsetAt(Point point) => OffsetAt(point, out _);
+
+    /// <summary>The offset under a point, and whether a caret there stands before a wrap: past a wrapped row's end.</summary>
+    private int OffsetAt(Point point, out bool beforeWrap)
+    {
+        beforeWrap = false;
+        TextSnapshot text = document.Snapshot;
+        if (point.Y + scroll.Y < 0)
+        {
+            return 0;
+        }
+        int row = RowAtY(point.Y);
+        if (row >= RowCount)
+        {
+            return text.Length;
+        }
+        return OffsetAtRow(text, row, point.X - TextLeft + scroll.X, out beforeWrap);
+    }
+
+    /// <summary>A whole-line selection from the drag's first line to the line under
+    /// <paramref name="offset"/>, including its break.</summary>
+    private void ExtendLines(TextSnapshot text, int offset, bool extend)
+    {
+        int anchorLine = text.GetLineFromOffset(extend ? drag.Anchor : offset);
+        int line = text.GetLineFromOffset(offset);
+        LineSpan top = text.GetLine(Math.Min(anchorLine, line));
+        LineSpan bottom = text.GetLine(Math.Max(anchorLine, line));
+        Selection selection = line >= anchorLine
+            ? new Selection(top.Start, bottom.EndIncludingBreak)
+            : new Selection(bottom.EndIncludingBreak, top.Start);
+        SetSelections(SelectionSet.Single(selection), reveal: true);
+    }
+
+    /// <summary>A column selection, as a column drag makes it: a selection on every row between the press and the pointer,
+    /// spanning the same columns on each; on the most rows toward the pointer an editor keeps carets on, or
+    /// <paramref name="most"/>.</summary>
+    private SelectionSet ColumnSelection(TextSnapshot text, Point start, Point end, int most = SelectionSet.MaxCount)
+    {
+        int count = Math.Max(1, RowCount);
+        int firstRow = Math.Clamp(start.Y + scroll.Y < 0 ? 0 : RowAtY(start.Y), 0, count - 1);
+        int lastRow = Math.Clamp(end.Y + scroll.Y < 0 ? 0 : RowAtY(end.Y), 0, count - 1);
+        double fromX = start.X - TextLeft + scroll.X;
+        double toX = end.X - TextLeft + scroll.X;
+        List<Selection> rows = [];
+        int step = lastRow >= firstRow ? 1 : -1;
+        if (Math.Abs(lastRow - firstRow) >= most)
+        {
+            firstRow = lastRow - (step * (most - 1));
+            CaretLimitReached?.Invoke(this, EventArgs.Empty);
+        }
+        for (int row = firstRow; ; row += step)
+        {
+            rows.Add(new Selection(OffsetAtRow(text, row, fromX, out _), OffsetAtRow(text, row, toX, out _)));
+            if (row == lastRow)
+            {
+                break;
+            }
+        }
+        return SelectionSet.Create(rows, rows.Count - 1);
+    }
+
+    /// <summary>A column selection's rows beside the carets kept from before the drag, its last row the primary, as many as
+    /// an editor keeps carets on.</summary>
+    private SelectionSet WithColumn(SelectionSet kept, TextSnapshot text, Point start, Point end)
+    {
+        SelectionSet column = ColumnSelection(text, start, end, Math.Max(1, SelectionSet.MaxCount - kept.Count));
+        return SelectionSet.Create([.. kept.Items, .. column.Items], kept.Count + column.PrimaryIndex);
+    }
+
+    /// <summary>The keymap a press's gesture runs by: the editor's own keymap, else its window's.</summary>
+    private Keymap? GesturesKeymap => ownKeys?.Keymap ?? GetValue(GesturesProperty)?.Invoke();
+
+    /// <summary>Drops a composition under way, the platform's input method's too, so it is never finished into a
+    /// document it was not begun in.</summary>
+    private void EndComposition() => inputMethod?.Discard();
+
+    /// <summary>Where a caret is drawn: its row, and its x on it; the primary's, while a composition shows there, at the
+    /// input method's cursor in it.</summary>
+    private (int Row, double X) CaretPlace(TextSnapshot text, int caret)
+    {
+        (int row, double x) = Place(text, caret, LeansBack(caret));
+        if (Preedit.Length > 0 && PreeditCursor is { } at && at < Preedit.Length && caret == selections.Primary.Caret)
+        {
+            TextLine composed = PreeditLabel();
+            x += composed.GetDistanceFromCharacterHit(new CharacterHit(at)) - composed.WidthIncludingTrailingWhitespace;
+        }
+        return (row, x);
+    }
+
+    /// <summary>Tells a focused editor's input method what moved: the caret's line, the selection in it, where the
+    /// caret is drawn. Not while the carets are still the text's before a change (mid-edit, or while those who heard of
+    /// someone else's edit first move what they show through it), which they may lie past the end of.</summary>
+    private void FollowInputMethod()
+    {
+        if (inputMethod is not null && IsFocused && ReferenceEquals(caretsText, document.Snapshot))
+        {
+            inputMethod.Follow();
+        }
+    }
+
+    private enum DragMode
+    {
+        None,
+        Characters,
+        Words,
+        Lines,
+        Column,
+
+        /// <summary>What a column of the gutter took to drag, carried from line to line.</summary>
+        Gutter,
+    }
+
+    /// <summary>A press being dragged: how it selects, where it began (as an offset, and as a point
+    /// for column selection), for words the end of the first word, the carets a column is added beside, and the click
+    /// its gesture runs if let go where it began, with the carets before the press.</summary>
+    private readonly record struct Drag(DragMode Mode, int Anchor, Point Start, int AnchorEnd = 0, SelectionSet? Kept = null, string? Clicked = null,
+        SelectionSet? Before = null);
+
+    /// <summary>What the platform's input method (accents, CJK composition) reads and writes: the
+    /// caret's line as the surrounding text, the selection in it, which it may set to type over (press and hold's accents
+    /// replace the letter held), and its composition drawn inline at the caret; while Vim's command line is open, its
+    /// text, its end and the stretch at its end to type over, the composition shown on it.</summary>
+    private sealed class EditorInputMethod(CodeEditor editor) : ViewInputMethod(editor)
+    {
+        /// <summary>Where on the command line's text the input method chose to type over from, with the text it chose in;
+        /// null for nowhere.</summary>
+        private (int From, string Text)? commandLineChoice;
+
+        public override bool SupportsSurroundingText => true;
+
+        /// <summary>The text typed on Vim's command line after its prompt; null while none is open.</summary>
+        private string? CommandLineText => editor.vim?.CommandLine is { } line ? line[1..] : null;
+
+        /// <summary>Where on the command line's text the next committed text begins, typing over what is after it, and
+        /// forgotten; -1 to type at its end, as where the line changed since the choice.</summary>
+        public int TakeCommandLineChoice()
+        {
+            int choice = commandLineChoice is { } chosen && chosen.Text == CommandLineText ? chosen.From : -1;
+            commandLineChoice = null;
+            return choice;
+        }
+
+        /// <summary>How much of the caret's line either side of it the input method is given: the whole of a line of
+        /// code, a stretch around the caret of a long one.</summary>
+        private const int Around = 1024;
+
+        public override string SurroundingText
+        {
+            get
+            {
+                if (CommandLineText is { } typed)
+                {
+                    return typed;
+                }
+                (TextSnapshot text, LineSpan line, int start) = Surrounding();
+                int end = Math.Min(line.End, Math.Max(start, editor.selections.Primary.Caret) + Around);
+                return text.GetText(start, end - start);
+            }
+        }
+
+        public override Rect CursorRectangle
+        {
+            get
+            {
+                if (CommandLineText is not null && editor.VimCommandLineEnd?.Invoke() is { } end)
+                {
+                    return end;
+                }
+                (int row, double at) = editor.CaretPlace(editor.document.Snapshot, editor.selections.Primary.Caret);
+                double x = editor.TextLeft - editor.scroll.X + at;
+                double y = (row * editor.metrics.LineHeight) - editor.scroll.Y;
+                return new Rect(x, y, 2, editor.metrics.LineHeight);
+            }
+        }
+
+        public override TextSelection Selection
+        {
+            get
+            {
+                if (CommandLineText is { } typed)
+                {
+                    return new TextSelection(commandLineChoice is { } chosen && chosen.Text == typed ? chosen.From : typed.Length, typed.Length);
+                }
+                (_, _, int start) = Surrounding();
+                Selection primary = editor.selections.Primary;
+                return new TextSelection(Math.Max(0, primary.Anchor - start), primary.Caret - start);
+            }
+            set
+            {
+                if (CommandLineText is { } typed)
+                {
+                    int from = Math.Clamp(Math.Min(value.Start, value.End), 0, typed.Length);
+                    commandLineChoice = from < typed.Length && Math.Max(value.Start, value.End) >= typed.Length ? (from, typed) : null;
+                    return;
+                }
+                (TextSnapshot text, _, int start) = Surrounding();
+                Selection primary = editor.selections.Primary;
+                int anchor = Math.Clamp(start + value.Start, 0, text.Length) - primary.Caret;
+                int caret = Math.Clamp(start + value.End, 0, text.Length) - primary.Caret;
+                if (anchor == primary.Anchor - primary.Caret && caret == 0)
+                {
+                    return;
+                }
+                // Every caret moves as the primary does, so press and hold's accent replaces the letter at each.
+                editor.document.BreakUndoGroup();
+                editor.SetSelections(editor.selections.With(s => new Selection(
+                    Math.Clamp(s.Caret + anchor, 0, text.Length), Math.Clamp(s.Caret + caret, 0, text.Length))), reveal: true);
+            }
+        }
+
+        protected override void Composed()
+        {
+            if (CommandLineText is not null)
+            {
+                editor.VimModeChanged?.Invoke(editor, EventArgs.Empty);
+            }
+            editor.RedrawChanged();
+            editor.FollowInputMethod();
+        }
+
+        /// <summary>The text, the caret's line, and where the stretch of it the input method is given begins.</summary>
+        private (TextSnapshot Text, LineSpan Line, int Start) Surrounding()
+        {
+            TextSnapshot text = editor.document.Snapshot;
+            int caret = editor.selections.Primary.Caret;
+            LineSpan line = text.GetLine(text.GetLineFromOffset(caret));
+            return (text, line, Math.Max(line.Start, Math.Min(caret, line.End) - Around));
+        }
+    }
+}

@@ -1,0 +1,321 @@
+using System.Globalization;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Media;
+using Avalonia.Media.Immutable;
+using Avalonia.Media.TextFormatting;
+
+namespace Passenger.Editor;
+
+/// <summary>The gutter: the host's columns left of the line numbers, the numbers, the host's columns right of them and the
+/// folds' chevrons against the code. The numbers keep a margin each side (<see cref="GutterPadLeft"/>,
+/// <see cref="GutterPadRight"/>) that the columns beside them take first. A press on the gutter is offered to each column
+/// in turn, left to right, and one none takes is the host's (<see cref="GutterClicked"/>); a column draws only the lines on
+/// screen, the outermost first, so one reaching into its neighbour nearer the numbers is drawn over it.</summary>
+public sealed partial class CodeEditor
+{
+    private IReadOnlyList<IGutterColumn> leftColumns = [];
+    private IReadOnlyList<IGutterColumn> rightColumns = [];
+
+    /// <summary>The room left and right of the numbers, as the columns there last measured themselves.</summary>
+    private (double Left, double Right) columnRoom = (GutterPadLeft, GutterPadRight);
+
+    private GutterFrame? gutterFrame;
+    private LineTints? lineTints;
+
+    /// <summary>The column a press was taken to drag by, while it drags.</summary>
+    private IGutterColumn? dragging;
+
+    /// <summary>The brushes the columns draw with, by token: the look's own, by which a change is told, and its immutable
+    /// copy, drawn with.</summary>
+    private readonly Dictionary<string, (IBrush Found, IBrush Drawn)> gutterBrushes = [];
+    private readonly Dictionary<(string Key, double Scale, bool Bold), TextRunProperties> gutterRuns = [];
+    private readonly Dictionary<(string Key, double Thickness, PenLineCap Cap, PenLineJoin Join), IPen> gutterPens = [];
+    private readonly Dictionary<Color, IBrush> gutterColours = [];
+    private readonly LabelCache<(string Text, string Key, double Scale, bool Bold)> gutterLabels = new();
+
+    /// <summary>Sets the host's columns: those left of the numbers, outermost first, and those right of them, nearest first.</summary>
+    public void SetGutterColumns(IReadOnlyList<IGutterColumn> left, IReadOnlyList<IGutterColumn> right)
+    {
+        foreach (IGutterColumn column in Columns())
+        {
+            column.Changed -= OnColumnChanged;
+        }
+        leftColumns = left;
+        rightColumns = right;
+        foreach (IGutterColumn column in Columns())
+        {
+            column.Changed += OnColumnChanged;
+        }
+        MeasureColumns();
+        InvalidateArrange();
+        Redraw();
+    }
+
+    /// <summary>Every column, left to right.</summary>
+    private IEnumerable<IGutterColumn> Columns() => leftColumns.Concat(rightColumns);
+
+    private void OnColumnChanged(object? sender, EventArgs e)
+    {
+        if (MeasureColumns())
+        {
+            InvalidateArrange();
+        }
+        Redraw();
+    }
+
+    /// <summary>Measures the columns at the font in force: whether the room they take changed.</summary>
+    private bool MeasureColumns()
+    {
+        GutterFont font = new(metrics.CharWidth, metrics.LineHeight);
+        double left = 0;
+        double right = 0;
+        for (int i = 0; i < leftColumns.Count; i++)
+        {
+            left += leftColumns[i].Width(font);
+        }
+        for (int i = 0; i < rightColumns.Count; i++)
+        {
+            right += rightColumns[i].Width(font);
+        }
+        (double Left, double Right) room = (Math.Max(GutterPadLeft, left), Math.Max(GutterPadRight, right));
+        if (room == columnRoom)
+        {
+            return false;
+        }
+        columnRoom = room;
+        return true;
+    }
+
+    /// <summary>A column's strip: its left edge, in the editor's coordinates, and its width.</summary>
+    private (double Left, double Width) StripOf(IGutterColumn target)
+    {
+        GutterFont font = new(metrics.CharWidth, metrics.LineHeight);
+        double x = columnRoom.Left;
+        for (int i = leftColumns.Count - 1; i >= 0; i--)
+        {
+            double width = leftColumns[i].Width(font);
+            x -= width;
+            if (leftColumns[i] == target)
+            {
+                return (x, width);
+            }
+        }
+        x = NumbersRight + columnRoom.Right;
+        for (int i = rightColumns.Count - 1; i >= 0; i--)
+        {
+            double width = rightColumns[i].Width(font);
+            x -= width;
+            if (rightColumns[i] == target)
+            {
+                return (x, width);
+            }
+        }
+        return (0, 0);
+    }
+
+    /// <summary>Offers a press to the columns from the <paramref name="from"/>th, left to right, until one takes it: whether
+    /// one did. One taken to drag holds the pointer until it lets go.</summary>
+    private bool PressColumns(GutterClick click, IPointer? pointer, int from = 0)
+    {
+        int index = 0;
+        foreach (IGutterColumn column in Columns())
+        {
+            if (index++ < from)
+            {
+                continue;
+            }
+            (double left, double width) = StripOf(column);
+            switch (column.Press(new GutterPress(click, click.Position.X - left, width)))
+            {
+                case GutterAnswer.Taken:
+                    return true;
+                case GutterAnswer.Dragging:
+                    dragging = column;
+                    drag = new Drag(DragMode.Gutter, click.Line, click.Position);
+                    pointer?.Capture(this);
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>The drag a column took let go: one that came to nothing is the click it began as, which the columns after it
+    /// and then the host hear.</summary>
+    private void DropColumn(IGutterColumn column, KeyModifiers modifiers, Point at)
+    {
+        dragging = null;
+        GutterClick click = new(drag.Anchor, modifiers, at, Context: false);
+        (double left, double width) = StripOf(column);
+        bool done = column.Drop(new GutterPress(click, at.X - left, width));
+        Redraw();
+        if (!done && !PressColumns(click, null, Columns().TakeWhile(c => c != column).Count() + 1))
+        {
+            GutterClicked?.Invoke(this, click);
+        }
+    }
+
+    internal double GutterTopOf(int line) => TopOf(line) - gutterTop;
+
+    internal double GutterBottomOf(int line) => BottomOf(line) - gutterTop;
+
+    internal bool GutterHides(int line) => IsHidden(line);
+
+    /// <summary>A token's brush in the look in force, immutable, kept until the look changes; transparent for one the look
+    /// lacks.</summary>
+    internal IBrush GutterBrush(string key)
+    {
+        if (!gutterBrushes.TryGetValue(key, out (IBrush Found, IBrush Drawn) brush))
+        {
+            IBrush found = Tokens.Brush(this, key);
+            gutterBrushes[key] = brush = (found, found.ToImmutable());
+        }
+        return brush.Drawn;
+    }
+
+    /// <summary>A pen of a token's brush in the look in force, kept until the look changes, immutable as a frame keeps it.</summary>
+    internal IPen GutterPen(string key, double thickness, PenLineCap cap, PenLineJoin join)
+    {
+        if (!gutterPens.TryGetValue((key, thickness, cap, join), out IPen? pen))
+        {
+            gutterPens[(key, thickness, cap, join)] = pen = new ImmutablePen((IImmutableBrush)GutterBrush(key).ToImmutable(), thickness, lineCap: cap, lineJoin: join);
+        }
+        return pen;
+    }
+
+    /// <summary>A colour's brush, kept for the colours the screen shows, a few hundred at most.</summary>
+    internal IBrush GutterColour(Color colour)
+    {
+        if (!gutterColours.TryGetValue(colour, out IBrush? brush))
+        {
+            if (gutterColours.Count >= 256)
+            {
+                gutterColours.Clear();
+            }
+            gutterColours[colour] = brush = new ImmutableSolidColorBrush(colour);
+        }
+        return brush;
+    }
+
+
+    /// <summary>Whether a brush the columns drew with is another in the resources now (a colour scheme laid over them).</summary>
+    private bool GutterBrushesChanged()
+    {
+        foreach ((string key, (IBrush found, IBrush _)) in gutterBrushes)
+        {
+            if (!ReferenceEquals(Tokens.Brush(this, key), found))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    internal TextLine GutterLabel(string text, string key, double scale, bool bold) =>
+        gutterLabels.TryGet((text, key, scale, bold), out TextLine? label) ? label : gutterLabels.Add((text, key, scale, bold), Format(text, [], GutterRun(key, scale, bold)));
+
+    private TextRunProperties GutterRun(string key, double scale, bool bold)
+    {
+        if (!gutterRuns.TryGetValue((key, scale, bold), out TextRunProperties? run))
+        {
+            IBrush brush = GutterBrush(key);
+            gutterRuns[(key, scale, bold)] = run = scale == 1 && !bold ? RunWith(brush)
+                : new GenericTextRunProperties(new Typeface(FontFamily, FontStyle.Normal, bold ? FontWeight.Bold : FontWeight.Normal), FontSize * scale,
+                    foregroundBrush: brush, fontFeatures: ligatures ? null : NoLigatures);
+        }
+        return run;
+    }
+
+    /// <summary>Lets go of the brushes, runs and labels the columns drew with, and measures them again, for a new look or font.</summary>
+    private void ForgetGutterLook()
+    {
+        gutterBrushes.Clear();
+        gutterRuns.Clear();
+        gutterPens.Clear();
+        gutterFrame?.ForgetShapes();
+        gutterLabels.Clear();
+        MeasureColumns();
+    }
+
+    /// <summary>The tints the columns lay behind the lines on screen, asked for once a frame.</summary>
+    private LineTints TintsOf(int first, int last)
+    {
+        LineTints tints = lineTints ??= new LineTints(this);
+        tints.Begin(first, last);
+        if (ShowLineNumbers && last >= first)
+        {
+            for (int i = 0; i < leftColumns.Count; i++)
+            {
+                leftColumns[i].Tint(tints);
+            }
+            for (int i = 0; i < rightColumns.Count; i++)
+            {
+                rightColumns[i].Tint(tints);
+            }
+        }
+        return tints;
+    }
+
+    /// <summary>The gutter beside a row the frame shows, at the top of the row's visual, clipped to it: the columns, as
+    /// one line's frame, then on a line's first row the fold's chevron and its number unless a column covered it. A
+    /// wrapped line's other rows draw what the columns draw down beside them.</summary>
+    private void DrawGutterRow(DrawingContext context, RowSlot slot, RowSpan span)
+    {
+        if (!ShowLineNumbers)
+        {
+            return;
+        }
+        int line = span.Line;
+        double lineHeight = metrics.LineHeight;
+        double right = NumbersRight;
+        gutterTop = slot.Row * lineHeight;
+        GutterFrame frame = gutterFrame ??= new GutterFrame(this);
+        frame.Begin(context, right, lineHeight, lineHeight, metrics.CharWidth, line, line, frameText!.LineCount);
+        if (span.Row == 0)
+        {
+            frame.Shown.Add(new GutterLine(line, 0));
+        }
+        GutterFont font = new(metrics.CharWidth, lineHeight);
+        double x = right + columnRoom.Right;
+        for (int i = rightColumns.Count - 1; i >= 0; i--)
+        {
+            double width = rightColumns[i].Width(font);
+            x -= width;
+            frame.Strip(x, width);
+            rightColumns[i].Draw(frame);
+        }
+        x = columnRoom.Left;
+        for (int i = leftColumns.Count - 1; i >= 0; i--)
+        {
+            x -= leftColumns[i].Width(font);
+        }
+        for (int i = 0; i < leftColumns.Count; i++)
+        {
+            double width = leftColumns[i].Width(font);
+            frame.Strip(x, width);
+            leftColumns[i].Draw(frame);
+            x += width;
+        }
+        if (span.Row == 0)
+        {
+            DrawFoldMarkers(context, line, frameGutter);
+        }
+        foreach (GutterLine shown in frame.Lines)
+        {
+            if (frame.Covers(shown.Line))
+            {
+                continue;
+            }
+            bool current = caretLines.Contains(shown.Line);
+            // Found without a closure made for each number each frame.
+            if (!numbers.TryGet((shown.Line + 1, current), out TextLine? number))
+            {
+                number = numbers.Add((shown.Line + 1, current), Format((shown.Line + 1).ToString(CultureInfo.InvariantCulture), [], current ? numberRuns.Current : numberRuns.Other));
+            }
+            double y = shown.Top + (lineHeight - number.Height) / 2;
+            number.Draw(context, new Point(right - number.WidthIncludingTrailingWhitespace, y));
+        }
+        frame.End();
+    }
+}
