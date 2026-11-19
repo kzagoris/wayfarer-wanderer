@@ -151,7 +151,7 @@ user's tree; the bridge test asserts none appear.
 The JetBrains IntelliJ server can serve Java and Kotlin from one model. The
 installed, unlicensed 271.2085.0 build did not complete Java on Maven within five
 minutes, and Java support there needs a paid licence. The decision (2026-11-19)
-is to support both. The open backend above remains the default, and a setting
-selects the IntelliJ server for developers with a JetBrains subscription. See
-"Language backend setting" in the specification and task 10 of the
-implementation plan.
+is to support both. The first release ships only the open backend above. A later
+release (milestone 4) adds a setting that selects the IntelliJ server for
+developers with a JetBrains subscription. See "Language backend setting" in the
+specification and task 10 of the implementation plan.
