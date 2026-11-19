@@ -9,7 +9,8 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.regex.*;
 
-// The IDE owns the target process. This adapter attaches only to its loopback JDWP port.
+// The IDE owns the target process. The adapter listens on loopback and the target connects out
+// to it (server=n), so the target never exposes a JDWP port. The adapter accepts one connection.
 class WayfarerDebugAdapter {
     private VirtualMachine vm;
     private ThreadReference stopped;
@@ -18,6 +19,8 @@ class WayfarerDebugAdapter {
     private final Map<Path, List<Integer>> breakpoints = new LinkedHashMap<>();
     private final Map<Path, ClassPrepareRequest> onPrepare = new HashMap<>();
     private final Wire wire = new Wire();
+    private ListeningConnector listener;
+    private Map<String, Connector.Argument> listening;
 
     public static void main(String[] args) throws Exception {
         new WayfarerDebugAdapter().serve();
@@ -56,19 +59,30 @@ class WayfarerDebugAdapter {
         switch (command) {
             case "initialize":
                 return Map.of("supportsConfigurationDoneRequest", true);
-            case "attach":
-                AttachingConnector connector =
-                        Bootstrap.virtualMachineManager().attachingConnectors().stream()
-                                .filter(c -> c.name().equals("com.sun.jdi.SocketAttach"))
+            case "listen":
+                listener =
+                        Bootstrap.virtualMachineManager().listeningConnectors().stream()
+                                .filter(c -> c.name().equals("com.sun.jdi.SocketListen"))
                                 .findFirst()
                                 .orElseThrow();
-                var params = connector.defaultArguments();
-                params.get("hostname").setValue("127.0.0.1");
-                params.get("port").setValue(args.get("port").toString());
-                params.get("timeout").setValue("10000");
+                listening = listener.defaultArguments();
+                listening.get("localAddress").setValue("127.0.0.1");
+                listening.get("port").setValue("0");
+                listening.get("timeout").setValue("30000");
+                String address = listener.startListening(listening);
+                return Map.of(
+                        "port", Integer.parseInt(address.substring(address.lastIndexOf(':') + 1)));
+            case "attach":
+                if (listener == null) throw new IllegalStateException("Send listen before attach");
                 for (Object root : (List<?>) args.get("sourcePaths"))
                     roots.add(Path.of((String) root));
-                vm = connector.attach(params);
+                try {
+                    vm = listener.accept(listening);
+                } finally {
+                    // One connection only: whoever comes second is refused.
+                    listener.stopListening(listening);
+                    listener = null;
+                }
                 break;
             case "setBreakpoints":
                 return setBreakpoints(args);

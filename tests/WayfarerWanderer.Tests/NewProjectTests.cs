@@ -439,7 +439,7 @@ public sealed class NewProjectTests
         LaunchName = "Run starter"
     };
 
-    private static string JdkHome()
+    internal static string JdkHome()
     {
         string? home = Environment.GetEnvironmentVariable("JAVA_HOME");
         if (!string.IsNullOrWhiteSpace(home))

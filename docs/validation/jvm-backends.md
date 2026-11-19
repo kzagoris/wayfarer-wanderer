@@ -30,10 +30,11 @@ Groovy and Kotlin settings are both recognized.
 The editor now uses Passenger's DAP client and the Java Debug Interface (JDI)
 from the tooling JDK. The repository ships the adapter as Java source. A
 trusted launch builds the selected module with its project wrapper and
-resolves its runtime classpath. Wayfarer starts the configured target JVM
-suspended on an ephemeral loopback JDWP port, starts the adapter, installs
-source breakpoints, and resumes the target. Closing the session stops both
-owned processes.
+resolves its runtime classpath. Wayfarer starts the adapter, which listens on
+an ephemeral loopback port. It then starts the configured target JVM suspended,
+with `server=n`, so the target connects out to the adapter. The adapter
+installs source breakpoints and resumes the target.
+Closing the session stops both owned processes.
 
 On Windows x64 with Temurin 24.0.2 the following cases ran through the adapter.
 
@@ -78,10 +79,15 @@ source and redistributes no adapter binary. JDI is part of the user's JDK
 (GPLv2 with the Classpath Exception). It needs no JDT LS plug-in, so the
 debugger does not depend on the semantic backend.
 
-**Known limit.** The target listens for JDWP on an ephemeral loopback port
-with no authentication until the adapter attaches. Any local process can
-connect during that window. Moving the listener into the adapter (`server=n`)
-is still open.
+**JDWP exposure.** JDWP has no authentication, so the target never listens.
+The adapter listens on an ephemeral loopback port, accepts one connection and
+then stops listening. A local process that connects first gets no control over
+the user's program. The real target then finds the port closed and exits
+before its `main` runs, so the session fails rather than being hijacked.
+`JvmDebugAdapterTests` covers a second JVM being refused and a connected target
+staying suspended until `configurationDone`. Wayfarer does not check which JVM
+connected. A check would need a method call inside the target before `main`,
+which depends on JDK launcher internals.
 
 ## Measurements
 

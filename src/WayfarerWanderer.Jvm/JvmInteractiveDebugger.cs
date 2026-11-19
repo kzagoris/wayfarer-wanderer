@@ -41,23 +41,9 @@ public sealed class JvmInteractiveDebugger : IAsyncDisposable
             JvmModule module = snapshot.Module(configuration.Module)
                 ?? throw new InvalidDataException($"Unknown module '{configuration.Module}'.");
             ProcessStartInfo launch = await DirectJvmLaunchAdapter.ResolvedCommandAsync(snapshot, configuration, cancel).ConfigureAwait(false);
-            launch.ArgumentList.Insert(0, "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:0");
-            launch.RedirectStandardOutput = launch.RedirectStandardError = true;
-            target = await ChildProcesses.StartAsync(launch).ConfigureAwait(false);
-            ChildProcesses.HoldFamily(target);
-            TaskCompletionSource<int> ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            void TargetLine(string line)
-            {
-                const string prefix = "Listening for transport dt_socket at address:";
-                if (line.StartsWith(prefix, StringComparison.Ordinal) &&
-                    int.TryParse(line.AsSpan(prefix.Length), out int port) && ready.TrySetResult(port)) return;
-                Output?.Invoke(line);
-            }
-            targetOutput = ChildProcesses.Hear(target, TargetLine, TargetLine);
-            Task exited = target.WaitForExitAsync();
-            Task first = await Task.WhenAny(ready.Task, exited).WaitAsync(TimeSpan.FromSeconds(30), cancel).ConfigureAwait(false);
-            if (first == exited) throw new InvalidOperationException($"Java exited with code {target.ExitCode} before opening the debug port.");
 
+            // The adapter listens and the target connects out to it, so the target never exposes a
+            // JDWP port. The adapter accepts one connection and then stops listening.
             string source = Path.Combine(AppContext.BaseDirectory, "Debug", "WayfarerDebugAdapter.java");
             string? toolingHome = snapshot.ToolingToolchain.Home;
             string toolingJava = string.IsNullOrWhiteSpace(toolingHome) ? launch.FileName :
@@ -72,9 +58,25 @@ public sealed class JvmInteractiveDebugger : IAsyncDisposable
             dap.OnEvent<JsonElement>("stopped", body => _ = InspectAsync(dap, body.GetProperty("threadId").GetInt64()));
             dap.Start();
             await dap.RequestAsync("initialize", new { adapterID = "wayfarer-jdi", linesStartAt1 = true, pathFormat = "path" }, cancel).ConfigureAwait(false);
+            var listening = await dap.RequestAsync<JsonElement>("listen", new { }, cancel).ConfigureAwait(false);
+            int port = listening.GetProperty("port").GetInt32();
+
+            launch.ArgumentList.Insert(0, $"-agentlib:jdwp=transport=dt_socket,server=n,suspend=y,address=127.0.0.1:{port}");
+            launch.RedirectStandardOutput = launch.RedirectStandardError = true;
+            target = await ChildProcesses.StartAsync(launch).ConfigureAwait(false);
+            ChildProcesses.HoldFamily(target);
+            targetOutput = ChildProcesses.Hear(target, line => Output?.Invoke(line), line => Output?.Invoke(line));
+            Task exited = target.WaitForExitAsync();
+
             string[] roots = [.. module.SourceRoots.Concat(snapshot.Modules.SelectMany(m => m.SourceRoots))
                 .Select(r => r.Path).Distinct(PathNames.Comparer)];
-            await dap.RequestAsync("attach", new { port = await ready.Task.ConfigureAwait(false), sourcePaths = roots }, cancel).ConfigureAwait(false);
+            Task attach = dap.RequestAsync("attach", new { sourcePaths = roots }, cancel);
+            if (await Task.WhenAny(attach, exited).WaitAsync(TimeSpan.FromSeconds(45), cancel).ConfigureAwait(false) == exited)
+            {
+                _ = attach.ContinueWith(t => t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+                throw new InvalidOperationException($"Java exited with code {target.ExitCode} before the debugger attached.");
+            }
+            await attach.ConfigureAwait(false);
             foreach (var (path, lines) in breakpoints)
                 await SetBreakpointsAsync(dap, path, lines, cancel).ConfigureAwait(false);
             await dap.RequestAsync("configurationDone", new { }, cancel).ConfigureAwait(false);
