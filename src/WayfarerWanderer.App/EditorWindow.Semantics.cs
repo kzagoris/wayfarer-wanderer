@@ -64,7 +64,7 @@ public sealed partial class EditorWindow
         catch (OperationCanceledException) { }
         catch (Exception error)
         {
-            tools.SelectedIndex = 0;
+            ToolDock.ShowBehind(Shell.ToolWindowIds.Build);
             BuildTool.Append(error.Message);
         }
         finally { semanticBusy = false; }

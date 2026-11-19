@@ -24,6 +24,7 @@ public sealed class StateStore
         Root = root;
         this.key = key;
         Settings = SettingsStore.Kept(new StateDocument<AppSettings>(Path.Combine(root, SettingsFile)));
+        Layout = new(Path.Combine(root, "layout.json"));
         Placement = new(Path.Combine(root, "windowPlacement.json"));
         // Before this process writes any: a change is written a moment after it is made, and only through this store.
         UsedBefore = File.Exists(Path.Combine(root, SettingsFile)) || Directory.Exists(Path.Combine(root, "workspaces"));
@@ -42,6 +43,9 @@ public sealed class StateStore
     public string Root { get; }
 
     public SettingsStore Settings { get; }
+
+    /// <summary>The tool windows' layout as it was changed last, which the window opens on.</summary>
+    public StateDocument<Docking.DockLayout> Layout { get; }
 
     public StateDocument<WindowPlacementState> Placement { get; }
 
@@ -102,6 +106,7 @@ public sealed class StateStore
     public void Flush()
     {
         Settings.Flush();
+        Layout.Flush();
         Placement.Flush();
         foreach ((ProjectState documents, _) in projects.Values)
         {

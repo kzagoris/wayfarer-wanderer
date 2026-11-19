@@ -65,9 +65,13 @@ public sealed class EditorActions
 
     public EditorAction this[string id] => views[id];
 
+    /// <summary>The actions a query finds: Wayfarer's own, and those others put in the registry (the dock's Show actions).</summary>
     public IEnumerable<EditorAction> Find(string query) =>
-        Registry.Find(query).Select(found => views.GetValueOrDefault(found.Id)).OfType<EditorAction>();
+        Registry.Find(query).Select(found => views.GetValueOrDefault(found.Id) ?? View(found));
 
     public bool TryExecute(string? id) =>
-        id != null && views.ContainsKey(id) && Registry.Run(id) is null;
+        id != null && Registry[id] is not null && Registry.Run(id) is null;
+
+    private EditorAction View(IdeAction action) =>
+        new(action.Id, action.Title, () => action.CanRun(Registry.Context()), () => Registry.Run(action.Id));
 }

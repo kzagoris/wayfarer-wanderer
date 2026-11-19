@@ -6,13 +6,13 @@ using Passenger.Editor;
 using Passenger.Text;
 using Passenger.Core;
 using WayfarerWanderer.App.Shell;
+using WayfarerWanderer.App.Shell.Docking;
 using WayfarerWanderer.Jvm;
 
 namespace WayfarerWanderer.App;
 
 public sealed partial class EditorWindow : Window
 {
-    private readonly TabControl tools;
     private int workspaceRequest;
     public CodeEditor Editor { get; } = new();
     public BreakpointColumn Breakpoints { get; }
@@ -20,6 +20,8 @@ public sealed partial class EditorWindow : Window
     public BuildToolWindow BuildTool { get; } = new();
     public TestToolWindow TestsTool { get; } = new();
     public DebugToolWindow DebugTool { get; } = new();
+    /// <summary>The tool windows' dock, around the editor: Build, Tests and Debug start at the bottom.</summary>
+    public DockHost ToolDock { get; } = new();
     public ProjectSession? Session { get; private set; }
     public Border TrustBanner { get; }
 
@@ -141,21 +143,9 @@ public sealed partial class EditorWindow : Window
                 return;
             e.Handled = true;
         }, RoutingStrategies.Tunnel);
-        tools = new TabControl()
-        {
-            Height = 170,
-            IsVisible = false,
-            Items =
-            {
-                new TabItem { Header = "Build", Content = BuildTool },
-                new TabItem { Header = "Tests", Content = TestsTool },
-                new TabItem { Header = "Debug", Content = DebugTool }
-            }
-        };
-        DockPanel.SetDock(menu, Dock.Top);
+        AddToolWindows(new Grid { Children = { Editor, palette } });
         DockPanel.SetDock(TrustBanner, Dock.Top);
-        DockPanel.SetDock(tools, Dock.Bottom);
-        Content = new DockPanel { Children = { menu, TrustBanner, tools, new Grid { Children = { Editor, palette } } } };
+        Content = new DockPanel { Children = { menu, TrustBanner, ToolDock } };
         KeyDown += (_, e) => e.Handled = Actions.TryExecute(keys.ActionFor(new Shortcut(Keystroke.From(e))));
         Opened += (_, _) => Editor.Focus();
         Closing += CloseSession;
@@ -186,8 +176,31 @@ public sealed partial class EditorWindow : Window
             catch (OperationCanceledException) when (request != workspaceRequest || closing) { return; }
         }
         if (request != workspaceRequest || closing) return;
-        tools.IsVisible = true;
+        // A first start shows Build as the folder opens; after that the layout kept says what is open.
+        if (EditorApplication.State?.Layout.IsKept != true && !ToolDock.Windows.Any(w => w.IsShown))
+        {
+            ToolDock.ShowBehind(ToolWindowIds.Build);
+        }
         Title = $"Wayfarer Wanderer - {Path.GetFileName(Path.TrimEndingDirectorySeparator(root))}";
+    }
+
+    /// <summary>Puts the editor in the dock's centre and Build, Tests and Debug at its bottom, each shown by its own action;
+    /// the person's window opens on the layout kept last and keeps each change.</summary>
+    private void AddToolWindows(Control center)
+    {
+        ToolDock.Center = center;
+        ToolDock.Actions = Actions.Registry;
+        ToolDock.Add(new ToolWindow(ToolWindowIds.Build, "Build", IconKeys.Build, BuildTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowBuild });
+        ToolDock.Add(new ToolWindow(ToolWindowIds.Tests, "Tests", IconKeys.Tests, TestsTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowTests });
+        ToolDock.Add(new ToolWindow(ToolWindowIds.Debug, "Debug", IconKeys.Debug, DebugTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowDebug });
+        if (EditorApplication.State is { } state)
+        {
+            if (state.Layout.IsKept)
+            {
+                ToolDock.Apply(state.Layout.Value);
+            }
+            ToolDock.LayoutChanged += (_, _) => state.Layout.Set(ToolDock.Capture());
+        }
     }
 
     private void ToggleClickedLine(int line)

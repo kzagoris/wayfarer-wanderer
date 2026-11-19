@@ -236,7 +236,7 @@ public class EditorWindowTests
                     WayfarerWanderer.App.EditorActions.NewProject
                 },
                 id => Assert.True(window.Actions[id].Available(), id));
-            Assert.True(window.GetVisualDescendants().OfType<TabControl>().Single().IsVisible);
+            Assert.True(window.ToolDock.IsShown(WayfarerWanderer.App.Shell.ToolWindowIds.Build));
         }
         finally
         {

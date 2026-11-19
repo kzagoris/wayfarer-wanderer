@@ -58,8 +58,18 @@ public sealed record IdeAction(string Id, string Title, string Group, Action<Act
 
 /// <summary>Where an action runs: the editor and its caret, and what has the keys (the editor, a text box, a tool window).
 /// Made as the action is asked for, before a menu or popup takes the keys.</summary>
-public sealed class ActionContext(CodeEditor editor, object? focused)
+public sealed class ActionContext(CodeEditor editor, object? focused, Docking.ToolWindow? toolWindow = null)
 {
+    /// <summary>The tool window with the keys, or whose own button asks, if one is.</summary>
+    public Docking.ToolWindow? ToolWindow => toolWindow;
+
+    /// <summary>What is chosen in that tool window (its rows, as that window gives them), or null.</summary>
+    public object? Row => toolWindow?.Chosen?.Invoke();
+
+    /// <summary>The same place with a tool window's own button asking, which runs its action on that window without taking
+    /// the keys.</summary>
+    public ActionContext In(Docking.ToolWindow window) => new(editor, focused, window);
+
     /// <summary>The window's code editor.</summary>
     public CodeEditor Editor => editor;
 

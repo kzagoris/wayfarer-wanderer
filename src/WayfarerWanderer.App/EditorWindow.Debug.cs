@@ -109,7 +109,7 @@ public sealed partial class EditorWindow
 
     private void DebugCurrent()
     {
-        tools.SelectedIndex = 2;
+        ToolDock.ShowBehind(Shell.ToolWindowIds.Debug);
         if (Session is not { } session) return;
         if (CurrentLaunch() is not { } configuration)
         {
