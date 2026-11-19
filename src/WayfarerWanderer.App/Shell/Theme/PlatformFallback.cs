@@ -3,7 +3,7 @@ using Avalonia.Media;
 using Avalonia.Media.Fonts;
 using SkiaSharp;
 
-namespace WayfarerWanderer.App.Shell.Theme;
+namespace WayfarerWanderer.App.Shell;
 
 /// <summary>The platform's own font fallback (DirectWrite, CoreText, fontconfig) as Skia, which draws every window, asks it,
 /// for <see cref="Passenger.Editor.FallbackFonts"/>: the face it names for a character, as the system's collection gives that

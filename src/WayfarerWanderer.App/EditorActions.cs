@@ -1,5 +1,10 @@
+using Passenger.Editor;
+using WayfarerWanderer.App.Shell;
+
 namespace WayfarerWanderer.App;
 
+/// <summary>One of the window's actions as its menus, Find Action and its keys see it: whether it can run now, and running
+/// it when it can. A view of the <see cref="IdeAction"/> the window's <see cref="ActionRegistry"/> holds.</summary>
 public sealed record EditorAction(string Id, string Title, Func<bool> Available, Action Execute)
 {
     public bool TryExecute()
@@ -12,43 +17,57 @@ public sealed record EditorAction(string Id, string Title, Func<bool> Available,
     }
 }
 
+/// <summary>The window's actions, held in the shell's <see cref="ActionRegistry"/>: one registry for the menus, Find Action
+/// and the keys. Ids shared with the shell's keymap presets (<see cref="AppActions"/>) take the presets' shortcuts.</summary>
 public sealed class EditorActions
 {
-    public const string ToggleBreakpoint = "app.debug.toggleBreakpoint";
-    public const string Build = "app.build";
-    public const string RunTests = "app.tests.run";
-    public const string Run = "app.run";
-    public const string Debug = "app.debug";
-    public const string Continue = "app.debug.continue";
-    public const string StepInto = "app.debug.stepInto";
-    public const string StepOver = "app.debug.stepOver";
-    public const string StepOut = "app.debug.stepOut";
-    public const string OpenWorkspace = "app.workspace.open";
-    public const string OpenSource = "app.file.open";
-    public const string SaveSource = "app.file.save";
-    public const string Stop = "app.stop";
-    public const string NewProject = "app.project.new";
-    private readonly Dictionary<string, EditorAction> actions;
+    public const string ToggleBreakpoint = AppActions.ToggleBreakpoint;
+    public const string Build = AppActions.Build;
+    public const string RunTests = AppActions.RunTests;
+    public const string Run = AppActions.RunProgram;
+    public const string Debug = AppActions.Debug;
+    public const string Continue = AppActions.Resume;
+    public const string StepInto = AppActions.StepInto;
+    public const string StepOver = AppActions.StepOver;
+    public const string StepOut = AppActions.StepOut;
+    public const string OpenWorkspace = AppActions.OpenFolder;
+    public const string OpenSource = AppActions.Open;
+    public const string SaveSource = AppActions.Save;
+    public const string Stop = AppActions.Stop;
+    public const string NewProject = AppActions.NewProject;
 
-    public EditorActions(Func<bool> hasDocument, Action toggle)
+    /// <summary>The group Find Action lists Wayfarer's own actions under.</summary>
+    private const string Group = "Wayfarer";
+
+    private readonly Dictionary<string, EditorAction> views = new(StringComparer.Ordinal);
+
+    public EditorActions(Func<bool> hasDocument, Action toggle, Func<ActionContext> context, Func<Keymap> keymap)
     {
-        var breakpoint = new EditorAction(ToggleBreakpoint, "Toggle Breakpoint", hasDocument, toggle);
-        actions = new() { [breakpoint.Id] = breakpoint };
+        Registry = new ActionRegistry(context, keymap, new ActionWork());
+        Add(new EditorAction(ToggleBreakpoint, "Toggle Breakpoint", hasDocument, toggle));
     }
+
+    /// <summary>The registry every action is in.</summary>
+    public ActionRegistry Registry { get; }
 
     public void Add(EditorAction action)
     {
-        if (!actions.TryAdd(action.Id, action))
+        if (views.ContainsKey(action.Id))
         {
             throw new ArgumentException($"The action '{action.Id}' is already registered.", nameof(action));
         }
+        Registry.Add(new IdeAction(action.Id, action.Title, Group, _ => action.Execute())
+        {
+            WhyNot = _ => action.Available() ? null : $"{action.Title} is not available here",
+        });
+        views[action.Id] = action;
     }
 
-    public EditorAction this[string id] => actions[id];
+    public EditorAction this[string id] => views[id];
 
     public IEnumerable<EditorAction> Find(string query) =>
-        actions.Values.Where(action => action.Title.Contains(query, StringComparison.OrdinalIgnoreCase));
+        Registry.Find(query).Select(found => views.GetValueOrDefault(found.Id)).OfType<EditorAction>();
 
     public bool TryExecute(string? id) =>
-        id != null && actions.TryGetValue(id, out var action) && action.TryExecute();
+        id != null && views.ContainsKey(id) && Registry.Run(id) is null;
 }

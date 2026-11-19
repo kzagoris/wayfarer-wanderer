@@ -5,6 +5,7 @@ using Avalonia.Layout;
 using Passenger.Editor;
 using Passenger.Text;
 using Passenger.Core;
+using WayfarerWanderer.App.Shell;
 using WayfarerWanderer.Jvm;
 
 namespace WayfarerWanderer.App;
@@ -34,7 +35,8 @@ public sealed partial class EditorWindow : Window
         Editor.IsVisible = document != null;
 
         Breakpoints = new BreakpointColumn(ToggleClickedLine);
-        Actions = new EditorActions(() => Editor.IsVisible, ToggleCurrentBreakpoint);
+        Actions = new EditorActions(() => Editor.IsVisible, ToggleCurrentBreakpoint,
+            () => new ActionContext(Editor, FocusManager?.GetFocusedElement()), () => keys);
         Editor.SetGutterColumns([Breakpoints], []);
 
         var action = Actions[EditorActions.ToggleBreakpoint];
@@ -203,7 +205,7 @@ public sealed partial class EditorWindow : Window
         Actions.Add(new EditorAction(EditorActions.Stop, "Stop", () => Session?.IsRunning == true, () =>
             UnawaitedWork.Observe(Session!.CancelAsync())));
         AddDebugAndFileActions();
-        Actions.Add(new EditorAction(EditorActions.NewProject, "New ProjectÃ¢â‚¬Â¦", () => true, () =>
+        Actions.Add(new EditorAction(EditorActions.NewProject, "New Project…", () => true, () =>
             UnawaitedWork.Observe(new NewProjectAction().RunAsync(this))));
     }
 

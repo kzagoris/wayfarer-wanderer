@@ -70,9 +70,9 @@ public sealed partial class EditorWindow
         AddStep(EditorActions.StepInto, "Step Into", debug => debug.StepIntoAsync());
         AddStep(EditorActions.StepOver, "Step Over", debug => debug.StepOverAsync());
         AddStep(EditorActions.StepOut, "Step Out", debug => debug.StepOutAsync());
-        Actions.Add(new EditorAction(EditorActions.OpenWorkspace, "Open Workspaceâ€¦", () => true,
+        Actions.Add(new EditorAction(EditorActions.OpenWorkspace, "Open Workspace…", () => true,
             () => UnawaitedWork.Observe(PickWorkspaceAsync())));
-        Actions.Add(new EditorAction(EditorActions.OpenSource, "Open Sourceâ€¦", () => true,
+        Actions.Add(new EditorAction(EditorActions.OpenSource, "Open Source…", () => true,
             () => UnawaitedWork.Observe(PickSourceAsync())));
         Actions.Add(new EditorAction(EditorActions.SaveSource, "Save Source", () => SourcePath != null, SaveSource));
     }
