@@ -240,6 +240,22 @@ public class EditorWindowTests
                 },
                 id => Assert.True(window.Actions[id].Available(), id));
             Assert.True(window.ToolDock.IsShown(WayfarerWanderer.App.Shell.ToolWindowIds.Build));
+            // Building, testing or running brings the tool window its output goes to into view.
+            foreach (var (action, shown) in new[]
+            {
+                (WayfarerWanderer.App.EditorActions.Build, WayfarerWanderer.App.Shell.ToolWindowIds.Build),
+                (WayfarerWanderer.App.EditorActions.RunTests, WayfarerWanderer.App.Shell.ToolWindowIds.Tests),
+                (WayfarerWanderer.App.EditorActions.Run, WayfarerWanderer.App.Shell.ToolWindowIds.Build),
+            })
+            {
+                foreach (var tool in window.ToolDock.Windows)
+                    window.ToolDock.Hide(tool.Id);
+                Assert.True(window.Actions.TryExecute(action), action);
+                Assert.True(window.ToolDock.IsShown(shown), $"{action} shows {shown}");
+                await window.Session.CancelAsync();
+                for (int wait = 0; window.Session.IsRunning && wait < 200; wait++)
+                    await Task.Delay(50, TestContext.Current.CancellationToken);
+            }
         }
         finally
         {

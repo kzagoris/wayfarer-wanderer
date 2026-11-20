@@ -307,6 +307,7 @@ public sealed partial class EditorWindow : Window
 
     private void BuildCurrent()
     {
+        ToolDock.ShowBehind(ToolWindowIds.Build);
         JvmModule? module = Session?.Snapshot?.Modules.FirstOrDefault();
         if (module is not null)
         {
@@ -316,6 +317,7 @@ public sealed partial class EditorWindow : Window
 
     private void TestCurrent()
     {
+        ToolDock.ShowBehind(ToolWindowIds.Tests);
         JvmModule? module = Session?.Snapshot?.Modules.FirstOrDefault(candidate =>
             candidate.SourceRoots.Any(root => root.Kind is JvmSourceKind.TestJava or JvmSourceKind.TestKotlin));
         if (module is not null)
@@ -327,6 +329,8 @@ public sealed partial class EditorWindow : Window
 
     private void RunCurrent()
     {
+        // The program's output goes to Build, as a build's does.
+        ToolDock.ShowBehind(ToolWindowIds.Build);
         if (CurrentLaunch() is { } configuration)
             UnawaitedWork.Observe(Session!.RunAsync(configuration));
     }
