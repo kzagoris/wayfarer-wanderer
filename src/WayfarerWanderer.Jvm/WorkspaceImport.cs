@@ -4,11 +4,6 @@ using Passenger.Core;
 
 namespace WayfarerWanderer.Jvm;
 
-public interface IWorkspaceImporter
-{
-    Task<WorkspaceSnapshot> ImportAsync(string workspaceRoot, long generation, CancellationToken cancellationToken);
-}
-
 public interface IWorkspaceImportAdapter
 {
     bool CanImport(string workspaceRoot);

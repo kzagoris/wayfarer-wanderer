@@ -44,6 +44,30 @@ public static class ProjectJdk
         }
     }
 
+    /// <summary>The Maven profiles the project asks for beyond Maven's own activation (<c>mavenProfiles</c>; a leading
+    /// <c>-</c> turns one off), none when it names none.</summary>
+    public static IReadOnlyList<string> MavenProfiles(string projectRoot)
+    {
+        string file = FileOf(projectRoot);
+        if (!File.Exists(file))
+        {
+            return [];
+        }
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(file));
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                   document.RootElement.TryGetProperty("mavenProfiles", out JsonElement profiles) &&
+                   profiles.ValueKind == JsonValueKind.Array
+                ? [.. profiles.EnumerateArray().Where(p => p.ValueKind == JsonValueKind.String).Select(p => p.GetString()!).Where(p => p.Length > 0)]
+                : [];
+        }
+        catch (Exception failure) when (failure is JsonException or IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
+    }
+
     /// <summary>The JDK Maven, Gradle and the program run on: the recorded one, else <c>JAVA_HOME</c>.</summary>
     public static string? HomeOf(string projectRoot) =>
         Recorded(projectRoot) ??
