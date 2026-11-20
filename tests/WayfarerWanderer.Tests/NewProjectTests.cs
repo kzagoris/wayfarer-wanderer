@@ -115,7 +115,7 @@ public sealed class NewProjectTests
         WorkspaceTrust.Trust(generated.Destination);
         try
         {
-            WorkspaceSnapshot snapshot = await new WorkspaceImporter().ImportAsync(
+            WorkspaceSnapshot snapshot = await new ProjectHostImporter().ImportAsync(
                 generated.Destination,
                 1,
                 TestContext.Current.CancellationToken);
@@ -159,7 +159,7 @@ public sealed class NewProjectTests
         WorkspaceTrust.Trust(generated.Destination);
         try
         {
-            WorkspaceSnapshot snapshot = await new WorkspaceImporter().ImportAsync(
+            WorkspaceSnapshot snapshot = await new ProjectHostImporter().ImportAsync(
                 generated.Destination,
                 1,
                 TestContext.Current.CancellationToken);
@@ -463,7 +463,7 @@ public sealed class NewProjectTests
     {
         string destination = result.Destination;
         Assert.True(File.Exists(Path.Combine(destination, "src", "com", "example", "wanderer", "App.java")));
-        Assert.Equal("wanderer-starter.iml", Path.GetFileName(IdeaProject.ModuleFile(destination)));
+        Assert.Equal("wanderer-starter.iml", Path.GetFileName(Directory.GetFiles(destination, "*.iml").SingleOrDefault()));
         Assert.Contains("JAVA_MODULE", File.ReadAllText(Path.Combine(destination, "wanderer-starter.iml")));
         Assert.Contains($"JDK_{JdkMajor(options.JdkHome)}", File.ReadAllText(Path.Combine(destination, ".idea", "misc.xml")));
         Assert.Contains("$PROJECT_DIR$/wanderer-starter.iml", File.ReadAllText(Path.Combine(destination, ".idea", "modules.xml")));

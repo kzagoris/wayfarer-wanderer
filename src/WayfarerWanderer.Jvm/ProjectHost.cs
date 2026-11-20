@@ -614,13 +614,19 @@ public sealed class ProjectHostImporter : IWorkspaceImporter
     /// <summary>Modules evaluated so far, raised on the host's reader thread.</summary>
     public event Action<ImportProgress>? Progress;
 
+    /// <summary>Where each good model is kept for a warm reopen (<see cref="WorkspaceModelCache"/>); null keeps none.</summary>
+    public string? CacheFile { get; init; }
+
+    /// <summary>A Gradle or Maven installation to use where a workspace has no wrapper; null for none.</summary>
+    public string? BuildTool { get; init; }
+
     public async Task<WorkspaceSnapshot> ImportAsync(string workspaceRoot, long generation, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         string root = Path.GetFullPath(workspaceRoot);
         JvmProjectHost host = await ProjectHosts.ForAsync(root, cancellationToken).ConfigureAwait(false);
         int evaluated = 0;
-        HostImportParams parameters = new(root, generation, ProjectJdk.Recorded(root), ProjectJdk.MavenProfiles(root), null);
+        HostImportParams parameters = new(root, generation, ProjectJdk.Recorded(root), ProjectJdk.MavenProfiles(root), BuildTool);
         JsonElement answer = await host.RequestAsync(HostProtocol.Import, parameters, partial =>
         {
             string? module = partial.Deserialize<HostTargetEvaluated>(HostProtocol.Json)?.Target.Id;
@@ -628,6 +634,11 @@ public sealed class ProjectHostImporter : IWorkspaceImporter
         }, cancellationToken).ConfigureAwait(false);
         HostWorkspaceResult result = answer.Deserialize<HostWorkspaceResult>(HostProtocol.Json)
             ?? throw new ProjectHostFailed("The JVM project host answered the import with nothing.");
-        return HostModel.ToSnapshot(result, host.Ready.Java);
+        WorkspaceSnapshot snapshot = HostModel.ToSnapshot(result, host.Ready.Java);
+        if (CacheFile is { } file)
+        {
+            WorkspaceModelCache.Write(file, result, host.Ready.Java);
+        }
+        return snapshot;
     }
 }

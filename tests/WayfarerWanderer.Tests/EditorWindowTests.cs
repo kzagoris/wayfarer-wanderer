@@ -228,7 +228,9 @@ public class EditorWindowTests
             await window.OpenWorkspaceAsync(root, TestContext.Current.CancellationToken);
             Assert.NotNull(window.Session);
             Assert.Equal(root, window.Session.Root);
-            Assert.Equal(3, window.Session.Snapshot!.Modules.Count);
+            // The reactor's own pom is a module beside library, app and service, as Maven evaluates it.
+            Assert.Equal(4, window.Session.Snapshot!.Modules.Count);
+            Assert.All(new[] { "library", "app", "service" }, name => Assert.Contains(window.Session.Snapshot.Modules, module => module.Name == name));
             Assert.All(
                 new[]
                 {

@@ -19,7 +19,7 @@ public sealed class KotlinClassBridgeTests
         {
             JvmFixtures.Copy("maven", root);
             WorkspaceTrust.Trust(root);
-            WorkspaceSnapshot snapshot = await new WorkspaceImporter().ImportAsync(root, 1, cancel);
+            WorkspaceSnapshot snapshot = await new ProjectHostImporter().ImportAsync(root, 1, cancel);
             Assert.True(KotlinClassBridge.Applies(snapshot));
             string service = Path.Combine(root, "service/src/main/java/example/Service.java");
             string greeting = Path.Combine(root, "library/src/main/kotlin/example/Greeting.kt");

@@ -181,10 +181,13 @@ public sealed partial class EditorWindow : Window
         // Git reads the folder while it is imported; the folder is open once both are done.
         Task git = OpenVcsAsync(root);
         Session.PausedAt += OpenFrame;
+        ProjectSession opened = Session;
+        // A build file changed and the folder was imported again: the tree shows the new model, or the kept one stale.
+        opened.SnapshotChanged += () => { if (Session == opened) Explorer.Update(opened.Snapshot); };
         TrustBanner.IsVisible = !Session.IsTrusted;
         if (Session.IsTrusted)
         {
-            try { await Session.ImportAsync(cancellationToken); }
+            try { await Session.OpenAsync(cancellationToken); }
             catch (OperationCanceledException) when (request != workspaceRequest || closing)
             {
                 IdeErrors.Observe(git);
@@ -343,7 +346,7 @@ public sealed partial class EditorWindow : Window
         }
         Session.Trust();
         KeepTrust(Session.Root);
-        await Session.ImportAsync();
+        await Session.OpenAsync();
         TrustBanner.IsVisible = false;
         Explorer.Update(Session.Snapshot);
     }

@@ -112,7 +112,7 @@ public sealed class NewProjectDialogTests : IDisposable
         Assert.Null(dialog.Problem);
         ProjectGenerationResult made = Assert.IsType<ProjectGenerationResult>(dialog.Created);
         Assert.Equal(Path.Combine(folder, "Course"), made.Destination);
-        Assert.Equal(Path.Combine(made.Destination, "course.iml"), IdeaProject.ModuleFile(made.Destination));
+        Assert.Equal(Path.Combine(made.Destination, "course.iml"), Directory.GetFiles(made.Destination, "*.iml").SingleOrDefault());
         Assert.True(File.Exists(Path.Combine(made.Destination, "src", "com", "example", "course", "App.java")));
         Assert.False(dialog.IsVisible);
     }

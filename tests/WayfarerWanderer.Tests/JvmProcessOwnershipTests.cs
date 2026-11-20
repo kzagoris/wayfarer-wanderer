@@ -118,7 +118,7 @@ public sealed class JvmProcessOwnershipTests
         {
             JvmFixtures.Copy(buildTool, root);
             WorkspaceTrust.Trust(root);
-            WorkspaceSnapshot snapshot = await new WorkspaceImporter().ImportAsync(root, 1, cancel);
+            WorkspaceSnapshot snapshot = await new ProjectHostImporter().ImportAsync(root, 1, cancel);
             JvmModule app = snapshot.Module("app")!;
             var config = new JvmLaunchConfiguration { Module = "app", MainClass = app.MainClasses.Single().ClassName };
 

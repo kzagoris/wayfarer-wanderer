@@ -145,6 +145,9 @@ internal static class Program
             return 2;
         }
 
+        // What the JVM project host says on its error stream goes to the IDE's log, as Passenger logs its host.
+        WayfarerWanderer.Jvm.JvmProjectHost.ErrorLine += (process, line) =>
+            Shell.IdeLog.Write(Shell.IdeLog.Ide, $"JVM project host (process {process}): {line}");
         return BuildAvaloniaApp().UsePlatformDetect().StartWithClassicDesktopLifetime(args);
     }
 }

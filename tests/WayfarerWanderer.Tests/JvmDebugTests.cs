@@ -25,7 +25,7 @@ public sealed class JvmDebugTests
         {
             CopyFixture(fixture, root);
             WorkspaceTrust.Trust(root);
-            var snapshot = await new WorkspaceImporter().ImportAsync(root, 1, cancel);
+            var snapshot = await new ProjectHostImporter().ImportAsync(root, 1, cancel);
             var config = new JvmLaunchConfiguration { Module = "service", MainClass = "example.Service", Arguments = ["--server.port=0"] };
             string handler = Path.Combine(root, "service", "src", "main", "java", "example", "Service.java");
             string callee = Path.Combine(root, "library", "src", "main", language, "example", filename);

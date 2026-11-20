@@ -16,7 +16,7 @@ public sealed class JvmTrustCollection
 public sealed class JvmRuntimeFoundationTests
 {
     [Fact]
-    public async Task UntrustedImportAndBuildStartNoChildren()
+    public async Task UntrustedBuildStartsNoChildren()
     {
         string root = TestDirectory();
         WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root) ?? root);
@@ -26,9 +26,6 @@ public sealed class JvmRuntimeFoundationTests
         ChildProcesses.Started += started;
         try
         {
-            WorkspaceImporter importer = new();
-            await Assert.ThrowsAsync<UntrustedFolderException>(
-                async () => await importer.ImportAsync(root, 1, TestContext.Current.CancellationToken));
             WorkspaceSnapshot snapshot = Snapshot(root);
             JvmBuild build = new();
             JvmBuildRequest request = new(root, "app", "test", []);
@@ -41,72 +38,6 @@ public sealed class JvmRuntimeFoundationTests
             ChildProcesses.Started -= started;
             Directory.Delete(root, recursive: true);
         }
-    }
-
-    [Theory]
-    [InlineData("maven", JvmBuildSystem.Maven, 3)]
-    [InlineData("gradle", JvmBuildSystem.Gradle, 3)]
-    public async Task ImportsFixtureModulesAfterTrust(string fixture, JvmBuildSystem buildSystem, int moduleCount)
-    {
-        string root = TestDirectory();
-        CopyTree(Fixture("jvm", fixture), root);
-        WorkspaceTrust.Trust(root);
-        try
-        {
-            WorkspaceImporter importer = new();
-            WorkspaceSnapshot snapshot = await importer.ImportAsync(root, 12, TestContext.Current.CancellationToken);
-            Assert.Equal(12, snapshot.Generation);
-            Assert.Equal(buildSystem, snapshot.BuildSystem);
-            Assert.Equal(moduleCount, snapshot.Modules.Count);
-            Assert.All(snapshot.Modules, module => Assert.True(Directory.Exists(module.Root)));
-            Assert.Contains(snapshot.Modules, module => module.SourceRoots.Count > 0);
-            Assert.Contains(snapshot.Modules, module => module.Tasks.Contains("test", StringComparer.Ordinal));
-            if (buildSystem == JvmBuildSystem.Maven)
-            {
-                Assert.Contains(snapshot.MainClasses, main => main.ClassName == "example.Main");
-            }
-            else
-            {
-                Assert.Contains(snapshot.MainClasses, main => main.ClassName == "example.Service");
-            }
-        }
-        finally
-        {
-            WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root));
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Fact]
-    public void DropsOlderImportRepliesAndKeepsGoodSnapshotStale()
-    {
-        WorkspaceSnapshotState state = new();
-        long first = state.BeginImport();
-        WorkspaceSnapshot initial = Snapshot(TestDirectory()) with { Generation = first };
-        Assert.True(state.Accept(initial));
-        long second = state.BeginImport();
-        Assert.True(state.IsStale);
-        Assert.False(state.Accept(initial));
-        Assert.Same(initial, state.Current);
-        Assert.True(state.Accept(Snapshot("current") with { Generation = second }));
-        Assert.False(state.IsStale);
-        Directory.Delete(initial.Root, recursive: true);
-    }
-
-    [Fact]
-    public async Task CancelsSupersededImportAndPublishesOnlyLatestSnapshot()
-    {
-        ControlledImporter importer = new();
-        WorkspaceImportSession session = new(importer);
-        Task<WorkspaceSnapshot?> first = session.RefreshAsync("old", TestContext.Current.CancellationToken);
-        await importer.FirstStarted.Task;
-        Task<WorkspaceSnapshot?> second = session.RefreshAsync("new", TestContext.Current.CancellationToken);
-        WorkspaceSnapshot? old = await first;
-        WorkspaceSnapshot? latest = await second;
-        Assert.Null(old);
-        Assert.Same(latest, session.State.Current);
-        Assert.NotNull(latest);
-        Assert.Equal("new", latest.Root);
     }
 
     [Fact]
@@ -239,8 +170,12 @@ public sealed class JvmRuntimeFoundationTests
         WorkspaceTrust.Trust(root);
         try
         {
-            WorkspaceSnapshot snapshot = await new WorkspaceImporter().ImportAsync(root, 1, TestContext.Current.CancellationToken);
-            Assert.Equal(jdk, snapshot.ToolingToolchain.Home);
+            // The host records the JDK the import ran Maven on; the wrapper and the run take it from the snapshot.
+            JvmToolchain chosen = new(jdk, 21, null);
+            WorkspaceSnapshot snapshot = Snapshot(root) with
+            {
+                Modules = [new JvmModule(".", "app", root, [], new JvmClasspath([], [], []), chosen, chosen, chosen, ["compile"], [new JvmMainClass("example.Main", string.Empty)])],
+            };
             Assert.All(snapshot.Modules, module => Assert.Equal(jdk, module.RuntimeToolchain.Home));
 
             ProcessResult built = await new JvmBuild().RunAsync(
@@ -254,10 +189,6 @@ public sealed class JvmRuntimeFoundationTests
                 new JvmLaunchConfiguration { Name = "Run", Module = ".", MainClass = "example.Main" });
             Assert.Equal(jdk, run.Environment["JAVA_HOME"]);
 
-            File.Delete(ProjectJdk.FileOf(root));
-            WorkspaceSnapshot unrecorded = await new WorkspaceImporter().ImportAsync(root, 2, TestContext.Current.CancellationToken);
-            string? environment = Environment.GetEnvironmentVariable("JAVA_HOME");
-            Assert.Equal(string.IsNullOrEmpty(environment) ? null : environment, unrecorded.ToolingToolchain.Home);
         }
         finally
         {
@@ -316,9 +247,11 @@ public sealed class JvmRuntimeFoundationTests
             Assert.Equal(JvmBuildSystem.Idea, snapshot.BuildSystem);
             Assert.Equal(4, snapshot.Generation);
             Assert.EndsWith("Course.iml", snapshot.BuildFile, StringComparison.Ordinal);
-            Assert.Equal(25, snapshot.ToolingToolchain.LanguageVersion);
-            Assert.Equal("openjdk-25", snapshot.ToolingToolchain.Vendor);
-            Assert.Equal(IdeaJdks.Home("openjdk-25"), snapshot.ToolingToolchain.Home);
+            Assert.Equal(25, module.CompileToolchain.LanguageVersion);
+            Assert.Equal("openjdk-25", module.CompileToolchain.Vendor);
+            // The JDK IntelliJ names when its table has it, else JAVA_HOME; never the tooling JVM that runs the host.
+            string? javaHome = Environment.GetEnvironmentVariable("JAVA_HOME");
+            Assert.True(module.CompileToolchain.Home is null ? string.IsNullOrEmpty(javaHome) : Directory.Exists(module.CompileToolchain.Home));
             Assert.Equal(sources, Assert.Single(module.SourceRoots).Path);
             Assert.Equal(JvmSourceKind.MainJava, module.SourceRoots[0].Kind);
             Assert.Equal("Main", Assert.Single(module.MainClasses).ClassName);
@@ -334,13 +267,13 @@ public sealed class JvmRuntimeFoundationTests
             WorkspaceSnapshot ready = WithJdk(snapshot);
             ProcessStartInfo compile = new IdeaJvmBuildAdapter().Command(ready, new JvmBuildRequest(root, "Course", "classes", []));
             string javac = OperatingSystem.IsWindows() ? "javac.exe" : "javac";
-            Assert.Equal(Path.Combine(ready.ToolingToolchain.Home!, "bin", javac), compile.FileName);
+            Assert.Equal(Path.Combine(ready.Modules[0].CompileToolchain.Home!, "bin", javac), compile.FileName);
             Assert.Equal(
                 ["--release", "25", "-d", output, Path.Combine(sources, "Helper.java"), Path.Combine(sources, "Main.java")],
                 compile.ArgumentList);
             string json = System.Text.Json.JsonSerializer.Serialize(IdeaLanguageSettings.Runtimes(ready));
             Assert.Contains("JavaSE-25", json, StringComparison.Ordinal);
-            Assert.Contains(System.Text.Json.JsonSerializer.Serialize(ready.ToolingToolchain.Home), json, StringComparison.Ordinal);
+            Assert.Contains(System.Text.Json.JsonSerializer.Serialize(ready.Modules[0].CompileToolchain.Home), json, StringComparison.Ordinal);
 
             InvalidDataException tests = await Assert.ThrowsAsync<InvalidDataException>(() =>
                 new JvmBuild(new RecordingRunner()).RunAsync(ready, new JvmBuildRequest(root, "Course", "test", []), cancellationToken: TestContext.Current.CancellationToken));
@@ -391,7 +324,7 @@ public sealed class JvmRuntimeFoundationTests
             {
                 Module = "Course",
                 MainClass = "Main",
-                JavaHome = snapshot.ToolingToolchain.Home ?? string.Empty,
+                JavaHome = snapshot.Modules[0].CompileToolchain.Home ?? string.Empty,
             };
             ProcessResult ran = await new JvmLaunch(runner).RunAsync(snapshot, configuration, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(0, ran.ExitCode);
@@ -403,9 +336,10 @@ public sealed class JvmRuntimeFoundationTests
             Assert.Contains(runner.Starts[1].ArgumentList, argument => argument.StartsWith(output, StringComparison.Ordinal));
 
             RecordingRunner debug = new();
-            IReadOnlyList<string> classpath = await JvmDebugClasspath.ResolveAsync(
+            ProcessStartInfo direct = await DirectJvmLaunchAdapter.ResolvedCommandAsync(
                 snapshot, configuration, TestContext.Current.CancellationToken, new JvmBuild(debug));
-            Assert.Equal(output, classpath[0]);
+            string classpath = direct.ArgumentList[direct.ArgumentList.IndexOf("-cp") + 1];
+            Assert.StartsWith(output, classpath, StringComparison.Ordinal);
             ProcessStartInfo debugCompile = Assert.Single(debug.Starts);
             Assert.EndsWith(OperatingSystem.IsWindows() ? "javac.exe" : "javac", debugCompile.FileName, StringComparison.Ordinal);
             Assert.DoesNotContain("gradle", debugCompile.FileName, StringComparison.Ordinal);
@@ -426,8 +360,11 @@ public sealed class JvmRuntimeFoundationTests
         WorkspaceTrust.Trust(root);
         try
         {
-            WorkspaceSnapshot snapshot = await new WorkspaceImporter().ImportAsync(root, 1, TestContext.Current.CancellationToken);
-            Assert.Equal(JvmBuildSystem.Maven, snapshot.BuildSystem);
+            // This pom has no wrapper: the host takes it for Maven, and says so, rather than reading the .iml.
+            ProjectHostFailed failed = await Assert.ThrowsAsync<ProjectHostFailed>(() =>
+                new ProjectHostImporter().ImportAsync(root, 1, TestContext.Current.CancellationToken));
+            Assert.Contains("Maven", failed.Reason, StringComparison.Ordinal);
+            await ProjectHosts.ReleaseAsync(root);
         }
         finally
         {
@@ -447,7 +384,7 @@ public sealed class JvmRuntimeFoundationTests
         try
         {
             await Assert.ThrowsAsync<UntrustedFolderException>(() =>
-                new WorkspaceImporter().ImportAsync(root, 1, TestContext.Current.CancellationToken));
+                new ProjectHostImporter().ImportAsync(root, 1, TestContext.Current.CancellationToken));
             WorkspaceSnapshot snapshot = Snapshot(root) with { BuildSystem = JvmBuildSystem.Idea };
             await Assert.ThrowsAsync<UntrustedFolderException>(() =>
                 new JvmBuild().RunAsync(snapshot, new JvmBuildRequest(root, "Course", "classes", []), cancellationToken: TestContext.Current.CancellationToken));
@@ -469,34 +406,15 @@ public sealed class JvmRuntimeFoundationTests
         WorkspaceTrust.Trust(root);
         try
         {
-            InvalidDataException error = await Assert.ThrowsAsync<InvalidDataException>(() =>
-                new WorkspaceImporter().ImportAsync(root, 1, TestContext.Current.CancellationToken));
-            Assert.Contains(".iml", error.Message, StringComparison.Ordinal);
+            ProjectHostFailed error = await Assert.ThrowsAsync<ProjectHostFailed>(() =>
+                new ProjectHostImporter().ImportAsync(root, 1, TestContext.Current.CancellationToken));
+            Assert.Contains(".iml", error.Reason, StringComparison.Ordinal);
+            Assert.Contains("Course", error.Reason, StringComparison.Ordinal);
+            await ProjectHosts.ReleaseAsync(root);
         }
         finally
         {
             Close(root);
-        }
-    }
-
-    [Fact]
-    public void IdeaJdkTableResolvesTheNamedHome()
-    {
-        string root = TestDirectory();
-        try
-        {
-            string jdk = Directory.CreateDirectory(Path.Combine(root, "fake-jdk")).FullName;
-            string options = Path.Combine(root, "config", "IntelliJIdeaTest", "options");
-            Directory.CreateDirectory(options);
-            File.WriteAllText(Path.Combine(options, "jdk.table.xml"), "<application><component name=\"ProjectJdkTable\"><jdk version=\"2\"><name value=\"openjdk-25\" /><homePath value=\"" + jdk + "\" /></jdk></component></application>");
-            Assert.Equal(jdk, IdeaJdks.Home("openjdk-25", Path.Combine(root, "config")));
-            string missing = IdeaJdks.Missing("openjdk-25");
-            Assert.Contains("openjdk-25", missing, StringComparison.Ordinal);
-            Assert.Contains("JAVA_HOME", missing, StringComparison.Ordinal);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
         }
     }
 
@@ -507,7 +425,9 @@ public sealed class JvmRuntimeFoundationTests
         WorkspaceTrust.Trust(root);
         try
         {
-            return (root, await new WorkspaceImporter().ImportAsync(root, 4, TestContext.Current.CancellationToken));
+            WorkspaceSnapshot snapshot = await new ProjectHostImporter().ImportAsync(root, 4, TestContext.Current.CancellationToken);
+            await ProjectHosts.ReleaseAsync(root);
+            return (root, snapshot);
         }
         catch
         {
@@ -518,19 +438,20 @@ public sealed class JvmRuntimeFoundationTests
 
     private static WorkspaceSnapshot WithJdk(WorkspaceSnapshot snapshot)
     {
-        if (snapshot.ToolingToolchain.Home is { } home && Directory.Exists(home))
+        JvmToolchain compile = snapshot.Modules[0].CompileToolchain;
+        if (compile.Home is { } home && Directory.Exists(home))
         {
             return snapshot;
         }
         string jdk = Directory.CreateDirectory(Path.Combine(snapshot.Root, "jdk")).FullName;
-        JvmToolchain toolchain = snapshot.ToolingToolchain with { Home = jdk };
+        JvmToolchain toolchain = compile with { Home = jdk };
         JvmModule module = snapshot.Modules[0] with
         {
             ImportToolchain = toolchain,
             CompileToolchain = toolchain,
             RuntimeToolchain = toolchain,
         };
-        return snapshot with { ToolingToolchain = toolchain, Modules = [module] };
+        return snapshot with { Modules = [module] };
     }
 
     private static void Close(string root)
@@ -614,26 +535,6 @@ public sealed class JvmRuntimeFoundationTests
             string target = Path.Combine(destination, Path.GetRelativePath(source, file));
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             File.Copy(file, target);
-        }
-    }
-
-    private sealed class ControlledImporter : IWorkspaceImporter
-    {
-        private int calls;
-
-        public TaskCompletionSource FirstStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public async Task<WorkspaceSnapshot> ImportAsync(
-            string workspaceRoot,
-            long generation,
-            CancellationToken cancellationToken)
-        {
-            if (Interlocked.Increment(ref calls) == 1)
-            {
-                FirstStarted.TrySetResult();
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            }
-            return Snapshot(workspaceRoot) with { Generation = generation };
         }
     }
 }

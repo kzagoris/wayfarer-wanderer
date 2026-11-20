@@ -75,16 +75,31 @@ public sealed class DirectJvmLaunchAdapter : IJvmLaunchAdapter
         return ChildProcesses.Command(java, arguments, workingDirectory, configuration.Environment);
     }
 
-    /// <summary>Builds with the project wrapper, asks it for the module's runtime classpath and launches the main class directly.</summary>
+    /// <summary>Compiles the module with the project's build (its classes and those it depends on), then launches the main
+    /// class directly on the runtime classpath and JDK the snapshot holds.</summary>
     public static async Task<ProcessStartInfo> ResolvedCommandAsync(
-        WorkspaceSnapshot snapshot, JvmLaunchConfiguration configuration, CancellationToken cancellationToken = default)
+        WorkspaceSnapshot snapshot,
+        JvmLaunchConfiguration configuration,
+        CancellationToken cancellationToken = default,
+        JvmBuild? build = null,
+        Action<ProcessOutput>? output = null)
     {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(configuration);
+        WorkspaceTrust.Check(snapshot.Root);
         JvmModule module = snapshot.Module(configuration.Module)
             ?? throw new InvalidDataException($"Unknown module '{configuration.Module}'.");
-        IReadOnlyList<string> runtime = await JvmDebugClasspath.ResolveAsync(snapshot, configuration, cancellationToken).ConfigureAwait(false);
-        JvmModule resolved = module with { Classpath = new JvmClasspath(module.Classpath.Compile, module.Classpath.Test, runtime) };
-        WorkspaceSnapshot launch = snapshot with { Modules = [.. snapshot.Modules.Select(m => m == module ? resolved : m)] };
-        return new DirectJvmLaunchAdapter().Command(launch, configuration);
+        ProcessResult compiled = await (build ?? new JvmBuild()).RunAsync(
+            snapshot, new JvmBuildRequest(snapshot.Root, module.Id, "classes", []), output, cancellationToken).ConfigureAwait(false);
+        if (compiled.ExitCode != 0)
+        {
+            throw new InvalidOperationException(string.Join(Environment.NewLine, compiled.Output.TakeLast(16).Select(line => line.Line)));
+        }
+        if (module.Classpath.Runtime.Count == 0 || module.Classpath.Runtime.Any(path => !Path.IsPathFullyQualified(path)))
+        {
+            throw new InvalidDataException($"Module '{module.Name}' has no runtime classpath in snapshot {snapshot.Generation}.");
+        }
+        return new DirectJvmLaunchAdapter().Command(snapshot, configuration);
     }
 
     private static string FirstNotEmpty(params string?[] values) =>

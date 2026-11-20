@@ -286,6 +286,8 @@ public sealed partial class EditorWindow
             // Trust is held by the folder trusting it trusts (its Git repository's top), so that is what is taken back.
             WorkspaceTrust.TakeBack(taken);
             WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(taken));
+            // A JVM project host serving the folder runs its build code: it ends with the trust.
+            IdeErrors.Observe(WayfarerWanderer.Jvm.ProjectHosts.EndServingAsync(taken, "trust in the folder was taken back"));
             kept = now.Untrusted.Contains(taken, PathNames.Comparer) ? kept.StoppedTrusting(taken) : kept.Forgotten(taken);
         }
         foreach (string forgotten in from.Untrusted.Where(f => !now.Untrusted.Contains(f, PathNames.Comparer) && !now.Trusted.Contains(f, PathNames.Comparer)))

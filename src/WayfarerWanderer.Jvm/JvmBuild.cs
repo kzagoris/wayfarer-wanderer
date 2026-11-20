@@ -12,7 +12,8 @@ public interface IJvmBuildAdapter
 
     bool CanBuild(string workspaceRoot);
 
-    ProcessStartInfo Command(JvmBuildRequest request);
+    /// <summary>The command that runs the request with the build the snapshot was imported from.</summary>
+    ProcessStartInfo Command(WorkspaceSnapshot snapshot, JvmBuildRequest request);
 }
 
 public abstract class JvmBuildAdapter : IJvmBuildAdapter
@@ -24,6 +25,8 @@ public abstract class JvmBuildAdapter : IJvmBuildAdapter
     protected abstract string WindowsWrapperName { get; }
 
     public bool CanBuild(string workspaceRoot) => File.Exists(WrapperPath(workspaceRoot));
+
+    public ProcessStartInfo Command(WorkspaceSnapshot snapshot, JvmBuildRequest request) => Command(request);
 
     public ProcessStartInfo Command(JvmBuildRequest request)
     {
@@ -105,9 +108,6 @@ public sealed class IdeaJvmBuildAdapter : IJvmBuildAdapter
 
     public bool CanBuild(string workspaceRoot) => true;
 
-    public ProcessStartInfo Command(JvmBuildRequest request) =>
-        Command(IdeaProject.Read(request.WorkspaceRoot, 0), request);
-
     public ProcessStartInfo Command(WorkspaceSnapshot snapshot, JvmBuildRequest request)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -125,7 +125,7 @@ public sealed class IdeaJvmBuildAdapter : IJvmBuildAdapter
         JvmToolchain toolchain = module.CompileToolchain;
         if (string.IsNullOrWhiteSpace(toolchain.Home) || !Directory.Exists(toolchain.Home))
         {
-            throw new InvalidDataException(IdeaJdks.Missing(toolchain.Vendor));
+            throw new InvalidDataException(MissingJdk(toolchain.Vendor));
         }
         string output = module.Classpath.Runtime.FirstOrDefault()
             ?? throw new InvalidDataException($"Module '{module.Name}' has no output directory.");
@@ -151,6 +151,15 @@ public sealed class IdeaJvmBuildAdapter : IJvmBuildAdapter
         arguments.AddRange(sources);
         string javac = Path.Combine(toolchain.Home, "bin", OperatingSystem.IsWindows() ? "javac.exe" : "javac");
         return ChildProcesses.Command(javac, arguments, module.Root);
+    }
+
+    /// <summary>Why an IntelliJ module has no JDK to compile with: the JDK it names, and JAVA_HOME.</summary>
+    public static string MissingJdk(string? jdkName)
+    {
+        string? javaHome = Environment.GetEnvironmentVariable("JAVA_HOME");
+        string named = string.IsNullOrWhiteSpace(jdkName) ? "(none)" : jdkName;
+        string fallback = string.IsNullOrWhiteSpace(javaHome) ? "(not set)" : javaHome;
+        return $"The IntelliJ JDK '{named}' was not found. JAVA_HOME is '{fallback}'.";
     }
 
     private static List<string> JavaSources(JvmModule module)
@@ -200,10 +209,10 @@ public sealed class JvmBuild
         }
         IJvmBuildAdapter adapter = adapters.FirstOrDefault(candidate => candidate.BuildSystem == snapshot.BuildSystem && candidate.CanBuild(request.WorkspaceRoot))
             ?? throw new FileNotFoundException($"No {snapshot.BuildSystem} wrapper was found in '{request.WorkspaceRoot}'.");
-        ProcessStartInfo start = adapter is IdeaJvmBuildAdapter idea
-            ? idea.Command(snapshot, request)
-            : adapter.Command(request);
-        ProjectJdk.Apply(start, snapshot.ToolingToolchain.Home);
+        ProcessStartInfo start = adapter.Command(snapshot, request);
+        // The wrapper runs on the JDK the import ran it on, never on the tooling JVM that runs the host.
+        JvmModule? module = snapshot.Module(request.Module) ?? snapshot.Modules.FirstOrDefault();
+        ProjectJdk.Apply(start, module?.ImportToolchain.Home);
         return await runner.RunAsync(start, output, cancellationToken).ConfigureAwait(false);
     }
 }

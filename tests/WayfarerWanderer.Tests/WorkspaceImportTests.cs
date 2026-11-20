@@ -313,6 +313,193 @@ public sealed class WorkspaceImportTests
         }
     }
 
+    [Fact]
+    public async Task AKeptModelWhoseInputsStandIsCurrentAndNothingImports()
+    {
+        string root = Directory.CreateTempSubdirectory("wayfarer-warm-").FullName;
+        WorkspaceTrust.Trust(root);
+        CountingImporter importer = new();
+        WorkspaceImportSession session = new(importer, KeepModel(root));
+        try
+        {
+            WorkspaceSnapshot? opened = await session.OpenAsync(root, TestContext.Current.CancellationToken);
+            Assert.NotNull(opened);
+            Assert.Same(opened, session.State.Current);
+            Assert.False(session.State.IsStale);
+            Assert.Equal(0, importer.Calls);
+            Assert.Equal(Path.Combine(root, "pom.xml"), opened.BuildInputs[0].Path);
+        }
+        finally
+        {
+            session.Dispose();
+            WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root));
+            Delete(root);
+        }
+    }
+
+    [Fact]
+    public async Task AKeptModelWhoseInputChangedIsStaleWhileItImports()
+    {
+        string root = Directory.CreateTempSubdirectory("wayfarer-warm-").FullName;
+        WorkspaceTrust.Trust(root);
+        string cache = KeepModel(root);
+        await File.AppendAllTextAsync(Path.Combine(root, "pom.xml"), "<!-- changed -->", TestContext.Current.CancellationToken);
+        GatedImporter importer = new();
+        WorkspaceImportSession session = new(importer, cache);
+        try
+        {
+            Task<WorkspaceSnapshot?> opening = session.OpenAsync(root, TestContext.Current.CancellationToken);
+            await importer.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.NotNull(session.State.Current);
+            Assert.True(session.State.IsStale);
+            Assert.True(session.IsImporting);
+            importer.Release.TrySetResult();
+            WorkspaceSnapshot? imported = await opening;
+            Assert.Same(imported, session.State.Current);
+            Assert.False(session.State.IsStale);
+        }
+        finally
+        {
+            session.Dispose();
+            WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root));
+            Delete(root);
+        }
+    }
+
+    [Fact]
+    public async Task NoKeptModelIsReadBeforeTrust()
+    {
+        string root = Directory.CreateTempSubdirectory("wayfarer-warm-").FullName;
+        WorkspaceTrust.Trust(root);
+        string cache = KeepModel(root);
+        WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root) ?? root);
+        CountingImporter importer = new();
+        WorkspaceImportSession session = new(importer, cache);
+        try
+        {
+            Assert.Null(WorkspaceModelCache.Read(cache, root));
+            await Assert.ThrowsAsync<UntrustedFolderException>(() => session.OpenAsync(root, TestContext.Current.CancellationToken));
+            Assert.Null(session.State.Current);
+            Assert.Equal(0, importer.Calls);
+        }
+        finally
+        {
+            session.Dispose();
+            Delete(root);
+        }
+    }
+
+    [Fact]
+    public async Task AChangedBuildInputAsksForAReimportOnceAfterTheDebounce()
+    {
+        string root = Directory.CreateTempSubdirectory("wayfarer-watch-").FullName;
+        WorkspaceTrust.Trust(root);
+        WorkspaceImportSession session = new(new CountingImporter(), KeepModel(root), TimeSpan.FromMilliseconds(100));
+        int changes = 0;
+        TaskCompletionSource changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.InputsChanged += () =>
+        {
+            Interlocked.Increment(ref changes);
+            changed.TrySetResult();
+        };
+        try
+        {
+            await session.OpenAsync(root, TestContext.Current.CancellationToken);
+            string pom = Path.Combine(root, "pom.xml");
+            // Writing the same bytes back with the same stamp is no change.
+            DateTime stamp = File.GetLastWriteTimeUtc(pom);
+            await File.WriteAllTextAsync(pom, await File.ReadAllTextAsync(pom, TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+            File.SetLastWriteTimeUtc(pom, stamp);
+            await Task.Delay(400, TestContext.Current.CancellationToken);
+            Assert.Equal(0, Volatile.Read(ref changes));
+            for (int i = 0; i < 3; i++)
+            {
+                await File.AppendAllTextAsync(pom, $"<!-- {i} -->", TestContext.Current.CancellationToken);
+            }
+            await changed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            await Task.Delay(400, TestContext.Current.CancellationToken);
+            Assert.Equal(1, Volatile.Read(ref changes));
+        }
+        finally
+        {
+            session.Dispose();
+            WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root));
+            Delete(root);
+        }
+    }
+
+    [Fact]
+    public async Task WorkWaitsForTheImportRunningForTheFolder()
+    {
+        string root = Directory.CreateTempSubdirectory("wayfarer-idle-").FullName;
+        WorkspaceTrust.Trust(root);
+        GatedImporter importer = new();
+        WorkspaceImportSession session = new(importer);
+        try
+        {
+            Task<WorkspaceSnapshot?> import = session.RefreshAsync(root, TestContext.Current.CancellationToken);
+            await importer.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
+            Task idle = session.WhenIdleAsync(TestContext.Current.CancellationToken);
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+            Assert.False(idle.IsCompleted);
+            using CancellationTokenSource cancel = new();
+            Task cancelled = session.WhenIdleAsync(cancel.Token);
+            await cancel.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+            importer.Release.TrySetResult();
+            await import;
+            await idle.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.False(session.IsImporting);
+        }
+        finally
+        {
+            session.Dispose();
+            WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root));
+            Delete(root);
+        }
+    }
+
+    /// <summary>Writes a pom.xml into <paramref name="root"/> and keeps a model of it, evaluated from that file, in a cache
+    /// file beside the folder; returns the cache file.</summary>
+    private static string KeepModel(string root)
+    {
+        string pom = Path.Combine(root, "pom.xml");
+        File.WriteAllText(pom, "<project/>");
+        FileInfo info = new(pom);
+        HostBuildInput input = new(pom, new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds(), info.Length);
+        HostWorkspaceResult result = new(3, root, "maven", pom, null, [], [input, new HostBuildInput(Path.Combine(root, ".mvn", "maven.config"), 0, -1)], null);
+        string cache = Path.Combine(root, ".state", WorkspaceModelCache.FileName);
+        WorkspaceModelCache.Write(cache, result, new HostJvm(root, "21", 21, "test"));
+        return cache;
+    }
+
+    private sealed class CountingImporter : IWorkspaceImporter
+    {
+        private int calls;
+
+        public int Calls => Volatile.Read(ref calls);
+
+        public Task<WorkspaceSnapshot> ImportAsync(string workspaceRoot, long generation, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref calls);
+            return Task.FromResult(Snapshot(workspaceRoot) with { Generation = generation });
+        }
+    }
+
+    private sealed class GatedImporter : IWorkspaceImporter
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<WorkspaceSnapshot> ImportAsync(string workspaceRoot, long generation, CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            return Snapshot(workspaceRoot) with { Generation = generation };
+        }
+    }
+
     private static async Task<bool> ExitsAsync(JvmProjectHost host)
     {
         for (int i = 0; i < 100 && !host.HasExited; i++)

@@ -1,5 +1,7 @@
 using Avalonia.Threading;
 using Passenger.Core;
+using WayfarerWanderer.App.Shell;
+using WayfarerWanderer.App.Shell.State;
 using WayfarerWanderer.Jvm;
 
 namespace WayfarerWanderer.App;
@@ -9,7 +11,7 @@ public sealed partial class ProjectSession : IAsyncDisposable
     private readonly CancellationTokenSource lifetime = new();
     private CancellationTokenSource? operation;
     private Task? disposal;
-    private readonly WorkspaceImportSession importer = new();
+    private readonly WorkspaceImportSession importer;
     private readonly JvmBuild build = new();
     private readonly JvmLaunch launch = new();
     private readonly LaunchConfigurationStore launches;
@@ -21,6 +23,54 @@ public sealed partial class ProjectSession : IAsyncDisposable
         TestWindow = testWindow;
         DebugWindow = debugWindow;
         launches = new LaunchConfigurationStore(Path.Combine(Root, ".wayfarer", "launches"));
+        // The last good model is kept in the IDE's state for this folder, never in the repository.
+        string? cacheFile = EditorApplication.State is { } state
+            ? Path.Combine(ProjectState.FolderOf(state.Root, Root), WorkspaceModelCache.FileName)
+            : null;
+        importer = new WorkspaceImportSession(cacheFile: cacheFile);
+        importer.InputsChanged += () => IdeErrors.Observe(ReimportAsync());
+    }
+
+    /// <summary>Raised on the UI thread when an import the window did not ask for (a build file changed) ends with a
+    /// model, current or kept stale.</summary>
+    public event Action? SnapshotChanged;
+
+    /// <summary>Whether the model shown is older than the build files: an import failed or is running.</summary>
+    public bool IsStale => importer.State.IsStale;
+
+    /// <summary>Opens the trusted folder with the model kept from the last run when it still stands, else imports it.</summary>
+    public async Task<WorkspaceSnapshot?> OpenAsync(CancellationToken cancellationToken = default)
+    {
+        using CancellationTokenSource combined = CancellationTokenSource.CreateLinkedTokenSource(
+            lifetime.Token, cancellationToken);
+        return await importer.OpenAsync(Root, combined.Token);
+    }
+
+    private async Task ReimportAsync()
+    {
+        try
+        {
+            await ImportAsync();
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!lifetime.IsCancellationRequested)
+            {
+                OnUi(() => SnapshotChanged?.Invoke());
+            }
+        }
+    }
+
+    /// <summary>The model a build, test or run uses: once any import of this folder has ended, so the two never run side
+    /// by side; the window's Cancel ends the wait.</summary>
+    private async Task<WorkspaceSnapshot> SnapshotForWorkAsync(CancellationToken cancellationToken)
+    {
+        await importer.WhenIdleAsync(cancellationToken);
+        return Snapshot ?? await ImportAsync(cancellationToken);
     }
 
     public string Root { get; }
@@ -54,7 +104,7 @@ public sealed partial class ProjectSession : IAsyncDisposable
         IReadOnlyList<string>? arguments = null,
         CancellationToken cancellationToken = default)
     {
-        WorkspaceSnapshot snapshot = Snapshot ?? await ImportAsync(cancellationToken);
+        WorkspaceSnapshot snapshot = await SnapshotForWorkAsync(cancellationToken);
         CancellationTokenSource running = BeginOperation(cancellationToken);
         try
         {
@@ -75,7 +125,7 @@ public sealed partial class ProjectSession : IAsyncDisposable
         TestSelector selector,
         CancellationToken cancellationToken = default)
     {
-        WorkspaceSnapshot snapshot = Snapshot ?? await ImportAsync(cancellationToken);
+        WorkspaceSnapshot snapshot = await SnapshotForWorkAsync(cancellationToken);
         TestInvocation invocation = new(Path.Combine(Root, ".wayfarer", "test-results"), Root, selector);
         CancellationTokenSource running = BeginOperation(cancellationToken);
         TestWindow.Reset();
@@ -107,7 +157,7 @@ public sealed partial class ProjectSession : IAsyncDisposable
         JvmLaunchConfiguration configuration,
         CancellationToken cancellationToken = default)
     {
-        WorkspaceSnapshot snapshot = Snapshot ?? await ImportAsync(cancellationToken);
+        WorkspaceSnapshot snapshot = await SnapshotForWorkAsync(cancellationToken);
         CancellationTokenSource running = BeginOperation(cancellationToken);
         try
         {
@@ -143,6 +193,9 @@ public sealed partial class ProjectSession : IAsyncDisposable
     {
         await lifetime.CancelAsync();
         await CancelAsync();
+        // The window lets its folder go: a project host that serves no other window's folder ends with it.
+        importer.Dispose();
+        await ProjectHosts.ReleaseAsync(Root);
         lifetime.Dispose();
     }
 

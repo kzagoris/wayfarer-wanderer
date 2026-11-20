@@ -27,7 +27,7 @@ public sealed class JvmMeasurementTests
         {
             JvmFixtures.Copy(buildTool, root);
             WorkspaceTrust.Trust(root);
-            var importer = new WorkspaceImporter();
+            var importer = new ProjectHostImporter();
             var clock = Stopwatch.StartNew();
             WorkspaceSnapshot snapshot = await importer.ImportAsync(root, 1, cancel);
             TimeSpan cold = clock.Elapsed;
