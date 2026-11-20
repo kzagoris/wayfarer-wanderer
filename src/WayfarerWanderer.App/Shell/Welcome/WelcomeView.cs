@@ -38,7 +38,7 @@ public sealed class WelcomeView : UserControl
         subtitle = new()
         {
             Classes = { StyleClasses.WelcomeSubtitle },
-            Text = $"Version {Product.Version}. Start a new Java or Kotlin project, or open a folder of one.",
+            Text = $"Version {OwnVersion.Shown}. Start a new Java or Kotlin project, or open a folder of one.",
             TextWrapping = TextWrapping.Wrap,
         };
         Grid hero = new() { Classes = { StyleClasses.WelcomeHero }, ColumnDefinitions = new ColumnDefinitions("Auto,*") };

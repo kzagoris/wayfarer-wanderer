@@ -11,7 +11,8 @@ namespace WayfarerWanderer.App.Shell.Settings;
 public sealed record TrustAnswers(TrustState Kept, Func<TrustState, TrustState, TrustState> Apply);
 
 /// <summary>The Trusted Folders page: each folder the person trusted or opened without trusting, its Trusted box trusting it or
-/// taking its trust back, and Forget, so it is asked of again as it next opens; each put in force by OK or Apply.</summary>
+/// taking its trust back, and Forget, so it is asked of again as it next opens; each put in force by OK or Apply, a folder
+/// in a Git repository trusted with the repository, which the page then lists in its place.</summary>
 public sealed partial class SettingsDialog
 {
     public const string TrustPage = "Trusted Folders";
@@ -36,8 +37,9 @@ public sealed partial class SettingsDialog
         Add(TrustPage, "Folders answered for", new StackPanel { MaxWidth = OptionRow.EditorWidth, Children = { TrustedFolders } },
             "workspace trust trusted untrusted restricted safe mode folders forget stop trusting code runs security",
             "A folder you trust has its code run as Wayfarer works on it: its Maven or Gradle build and wrapper, its tests, and the "
-            + "programs you run or debug from it. Clear Trusted to stop trusting a folder, and Forget to be asked again as it next opens. Taken back from the folder open in the window, "
-            + "its language servers end.");
+            + "programs you run or debug from it. A folder in a Git repository is trusted with the whole repository, which the page "
+            + "lists in its place. Clear Trusted to stop trusting a folder, and Forget to be asked again as it next opens. Taken back "
+            + "from the folder open in the window, its language servers end.");
     }
 
     /// <summary>The answers' change put in force, from those applied last to those the table has now.</summary>

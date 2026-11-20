@@ -2,6 +2,7 @@
 """Publish, inventory and package one Wayfarer Wanderer release target."""
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -10,6 +11,14 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def version():
+    """Wayfarer's own version, as Directory.Build.props declares it."""
+    found = re.search(r"<Version>([^<]+)</Version>", (ROOT / "Directory.Build.props").read_text(encoding="utf-8"))
+    if found is None:
+        raise SystemExit("Directory.Build.props declares no <Version>")
+    return found.group(1).strip()
 
 
 def command(arguments, *, cwd=ROOT):
@@ -44,7 +53,7 @@ def windows(publish, output, rid):
     prefix = [vpk] if vpk is not None else ["dotnet", "tool", "run", "vpk"]
     if vpk is None:
         command(["dotnet", "tool", "restore"])
-    command([*prefix, "pack", "--packId", "WayfarerWanderer", "--packVersion", "1.0.0",
+    command([*prefix, "pack", "--packId", "WayfarerWanderer", "--packVersion", version(),
              "--packDir", publish, "--mainExe", "WayfarerWanderer.App.exe",
              "--outputDir", output.parent, "--runtime", rid])
 

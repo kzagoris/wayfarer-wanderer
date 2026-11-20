@@ -240,20 +240,13 @@ public sealed partial class EditorWindow
         });
 
     /// <summary>The Trusted Folders page's change put in force and kept: a folder trusted anew is trusted, one whose trust
-    /// was taken back is trusted no longer (the open folder's language servers ending, its trust asked again).</summary>
+    /// was taken back is trusted no longer (the open folder's language servers ending, its trust asked again). Only what
+    /// the page changed since <paramref name="from"/> is put over the answers as kept now, so another Wayfarer's answer
+    /// meanwhile stays.</summary>
     private TrustState ApplyTrust(TrustState from, TrustState now)
     {
         StateStore state = EditorApplication.State!;
-        foreach (string taken in from.Trusted.Where(f => !now.Trusted.Contains(f, PathNames.Comparer)))
-        {
-            WorkspaceTrust.TakeBack(taken);
-        }
-        string[] added = [.. now.Trusted.Where(f => !from.Trusted.Contains(f, PathNames.Comparer))];
-        if (added.Length > 0)
-        {
-            WorkspaceTrust.Trust(added);
-        }
-        state.Trust.Set(now);
+        state.Trust.Set(PutInForce(state.Trust.Value, from, now));
         if (Session is { IsTrusted: false })
         {
             ResetSemanticSession();
@@ -262,12 +255,44 @@ public sealed partial class EditorWindow
         return state.Trust.Value;
     }
 
-    /// <summary>The open folder trusted by the person, kept among their answers.</summary>
+    /// <summary>What the Trusted Folders page changed from <paramref name="from"/> to <paramref name="now"/>, put in force
+    /// (<see cref="WorkspaceTrust"/>) and over the answers as <paramref name="kept"/> has them now: the answers to keep.</summary>
+    public static TrustState PutInForce(TrustState kept, TrustState from, TrustState now)
+    {
+        foreach (string taken in from.Trusted.Where(f => !now.Trusted.Contains(f, PathNames.Comparer)))
+        {
+            // Trust is held by the folder trusting it trusts (its Git repository's top), so that is what is taken back.
+            WorkspaceTrust.TakeBack(taken);
+            WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(taken));
+            kept = now.Untrusted.Contains(taken, PathNames.Comparer) ? kept.StoppedTrusting(taken) : kept.Forgotten(taken);
+        }
+        foreach (string forgotten in from.Untrusted.Where(f => !now.Untrusted.Contains(f, PathNames.Comparer) && !now.Trusted.Contains(f, PathNames.Comparer)))
+        {
+            kept = kept.Forgotten(forgotten);
+        }
+        foreach (string declined in now.Untrusted.Where(f => !from.Untrusted.Contains(f, PathNames.Comparer) && !from.Trusted.Contains(f, PathNames.Comparer)))
+        {
+            kept = kept.Declined(declined);
+        }
+        string[] added = [.. now.Trusted.Where(f => !from.Trusted.Contains(f, PathNames.Comparer)).Select(WorkspaceTrust.FolderToTrust)];
+        if (added.Length > 0)
+        {
+            WorkspaceTrust.Trust(added);
+            kept = added.Aggregate(kept, (answers, folder) => answers.With(folder));
+        }
+        return kept;
+    }
+
+    /// <summary>The folder a root's trust is held by and kept as: the top of its Git repository, else the root itself.</summary>
+    public static string TrustKeptFor(string root) => WorkspaceTrust.FolderToTrust(PathNames.Canonical(root));
+
+    /// <summary>The open folder trusted by the person, kept among their answers as the folder its trust is held by (the top
+    /// of its Git repository, as <see cref="WorkspaceTrust.Trust"/> trusts), so taking it back in Settings takes it back.</summary>
     private void KeepTrust(string root)
     {
         if (EditorApplication.State is { } state)
         {
-            state.Trust.Set(state.Trust.Value.With(PathNames.Canonical(root)));
+            state.Trust.Set(state.Trust.Value.With(TrustKeptFor(root)));
         }
     }
 

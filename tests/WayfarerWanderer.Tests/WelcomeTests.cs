@@ -6,7 +6,9 @@ using Avalonia.Input;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Styling;
+using Passenger.Core;
 using Passenger.Text;
+using WayfarerWanderer.App.Shell.State;
 using SkiaSharp;
 using WayfarerWanderer.App;
 using WayfarerWanderer.App.Shell;
@@ -33,6 +35,9 @@ public class WelcomeTests
             Assert.False(window.Editor.IsVisible);
             Assert.Contains("Welcome to Wayfarer Wanderer", window.Welcome.Heading);
             Assert.DoesNotContain("Passenger", window.Welcome.Heading);
+            // Wayfarer's own version, not the vendored libraries'.
+            Assert.Equal("0.1.0", OwnVersion.Shown);
+            Assert.Contains($"Version {OwnVersion.Shown}.", window.Welcome.Heading);
             Assert.Equal("New Project", Words(window.Welcome.NewProjectButton).First());
             Assert.Equal("Open Folder", Words(window.Welcome.OpenFolderButton).First());
 
@@ -129,6 +134,65 @@ public class WelcomeTests
             dialog.Close();
             window.SettingsKept.Update(_ => new AppSettings());
             window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public void MenusShowTheirShortcutsAndEveryActionHasItsOwnName()
+    {
+        var window = EditorApplication.CreateWindow(null);
+        window.Show();
+        try
+        {
+            MenuItem file = MenuNamed(window, "File");
+            MenuItem settings = file.Items.OfType<MenuItem>().Single(i => (string?)i.Tag == AppActions.ShowSettings);
+            var expected = AppActions.Keymap().ShortcutsFor(AppActions.ShowSettings).First(s => s.Second is null).First;
+            Assert.Equal(new KeyGesture(expected.Key, expected.Modifiers), settings.InputGesture);
+            MenuItem toggle = MenuNamed(window, "Run").Items.OfType<MenuItem>().Single(i => (string?)i.Tag == EditorActions.ToggleBreakpoint);
+            Assert.Equal(Key.F9, toggle.InputGesture?.Key);
+
+            // Find Action and Settings' Keymap page list each action by a name no other action has.
+            string[] titles = [.. window.Actions.Registry.Find("").Select(a => a.Title)];
+            Assert.Empty(titles.GroupBy(t => t).Where(g => g.Count() > 1).Select(g => g.Key));
+            Assert.Contains("Debug Tool Window", titles);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static MenuItem MenuNamed(Window window, string header) =>
+        window.GetVisualDescendantsOfType<Menu>().Single().Items.OfType<MenuItem>().Single(i => (string?)i.Header == header);
+
+    [Fact]
+    public void TrustTakenBackInSettingsEndsTheRepositorysTrustAndKeepsOtherAnswers()
+    {
+        string repository = PathNames.Canonical(Directory.CreateTempSubdirectory("wayfarer-trust-").FullName);
+        string project = Path.Combine(repository, "app");
+        string other = PathNames.Canonical(Directory.CreateTempSubdirectory("wayfarer-other-").FullName);
+        Directory.CreateDirectory(Path.Combine(repository, ".git"));
+        Directory.CreateDirectory(project);
+        try
+        {
+            // Trusting the project trusts its repository, and that is what is kept.
+            WorkspaceTrust.Trust(project);
+            string keptFolder = EditorWindow.TrustKeptFor(project);
+            Assert.True(PathNames.Same(repository, keptFolder));
+            TrustState shown = new TrustState().With(keptFolder);
+
+            // Another Wayfarer declined a folder after the page opened: Apply keeps that answer.
+            TrustState keptNow = shown.Declined(other);
+            TrustState applied = EditorWindow.PutInForce(keptNow, shown, shown.Forgotten(keptFolder));
+            Assert.False(WorkspaceTrust.Trusts(project));
+            Assert.Empty(applied.Trusted);
+            Assert.Equal([other], applied.Untrusted);
+        }
+        finally
+        {
+            WorkspaceTrust.TakeBack(repository);
+            Directory.Delete(repository, recursive: true);
+            Directory.Delete(other, recursive: true);
         }
     }
 

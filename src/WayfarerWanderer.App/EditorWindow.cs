@@ -45,22 +45,13 @@ public sealed partial class EditorWindow : Window
             () => new ActionContext(Editor, FocusManager?.GetFocusedElement()), () => keys);
         Editor.SetGutterColumns([Breakpoints], []);
 
-        var action = Actions[EditorActions.ToggleBreakpoint];
-        var shortcut = keys.ShortcutsFor(action.Id).First().First;
-        var toggle = new MenuItem
-        {
-            Header = action.Title,
-            Tag = action.Id,
-            IsEnabled = action.Available(),
-            InputGesture = new KeyGesture(shortcut.Key, shortcut.Modifiers)
-        };
-        toggle.Click += (_, _) => action.TryExecute();
         AddProjectActions();
         AddSemanticActions();
         MenuItem build = MenuAction(EditorActions.Build);
         MenuItem test = MenuAction(EditorActions.RunTests);
         MenuItem run = MenuAction(EditorActions.Run);
         MenuItem debug = MenuAction(EditorActions.Debug);
+        MenuItem toggle = MenuAction(EditorActions.ToggleBreakpoint);
         MenuItem stop = MenuAction(EditorActions.Stop);
         MenuItem newProject = MenuAction(EditorActions.NewProject);
         MenuItem runMenu = new()
@@ -221,9 +212,9 @@ public sealed partial class EditorWindow : Window
             },
             OpenAtFirst = true,
         });
-        ToolDock.Add(new ToolWindow(ToolWindowIds.Build, "Build", IconKeys.Build, BuildTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowBuild });
-        ToolDock.Add(new ToolWindow(ToolWindowIds.Tests, "Tests", IconKeys.Tests, TestsTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowTests });
-        ToolDock.Add(new ToolWindow(ToolWindowIds.Debug, "Debug", IconKeys.Debug, DebugTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowDebug });
+        ToolDock.Add(new ToolWindow(ToolWindowIds.Build, "Build", IconKeys.Build, BuildTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowBuild, ActionTitle = "Build Tool Window" });
+        ToolDock.Add(new ToolWindow(ToolWindowIds.Tests, "Tests", IconKeys.Tests, TestsTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowTests, ActionTitle = "Tests Tool Window" });
+        ToolDock.Add(new ToolWindow(ToolWindowIds.Debug, "Debug", IconKeys.Debug, DebugTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowDebug, ActionTitle = "Debug Tool Window" });
         if (EditorApplication.State is { } state)
         {
             if (state.Layout.IsKept)
@@ -273,10 +264,17 @@ public sealed partial class EditorWindow : Window
     private MenuItem MenuAction(string id)
     {
         EditorAction action = Actions[id];
-        MenuItem item = new() { Header = action.Title, IsEnabled = action.Available(), Tag = id };
+        MenuItem item = new() { Header = action.Title, IsEnabled = action.Available(), Tag = id, InputGesture = MenuGesture(id) };
         item.Click += (_, _) => action.TryExecute();
         return item;
     }
+
+    /// <summary>The keys a menu item shows for its action: its first single-keystroke shortcut in the keymap in force, or
+    /// none for an action with only chords or no keys.</summary>
+    private KeyGesture? MenuGesture(string id) =>
+        keys.ShortcutsFor(id).FirstOrDefault(shortcut => shortcut.Second is null) is { First: var stroke }
+            ? new KeyGesture(stroke.Key, stroke.Modifiers)
+            : null;
 
     private void RefreshActions(MenuItem menu)
     {
@@ -285,6 +283,8 @@ public sealed partial class EditorWindow : Window
             if (item.Tag is string id)
             {
                 item.IsEnabled = Actions[id].Available();
+                // The keymap may have changed in Settings since the menu last opened.
+                item.InputGesture = MenuGesture(id);
             }
         }
     }

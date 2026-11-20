@@ -1,5 +1,8 @@
 <Project>
   <PropertyGroup>
+    <!-- Wayfarer's own version, which its windows show and its packages carry (tools/package-release.py reads it). The
+         vendored Passenger libraries keep theirs. -->
+    <Version>0.1.0</Version>
     <TargetFramework>net11.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
