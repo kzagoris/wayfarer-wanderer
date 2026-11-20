@@ -81,6 +81,9 @@ public sealed class JvmProjectHost : IAsyncDisposable
     /// <summary>The folders this host serves (<see cref="ProjectHosts"/>).</summary>
     internal HashSet<string> Served { get; } = new(PathNames.Comparer);
 
+    /// <summary>The folders this host serves now.</summary>
+    public IReadOnlyList<string> ServedFolders => [.. Served];
+
     /// <summary>The staged host's jar: beside the app (<c>jvm-host/host.jar</c>), else where <c>WAYFARER_JVM_HOST</c>
     /// says, else under a repository's <c>artifacts/jvm-host</c> above the app; null when none is found.</summary>
     public static string? Locate()
@@ -98,12 +101,14 @@ public sealed class JvmProjectHost : IAsyncDisposable
                 return jar;
             }
         }
+        // A development build run from the repository: only the repository's own stage, found by its solution file,
+        // never a jar some other folder above the app holds.
         for (DirectoryInfo? folder = new(AppContext.BaseDirectory); folder is not null; folder = folder.Parent)
         {
-            string staged = Path.Combine(folder.FullName, "artifacts", "jvm-host", "host.jar");
-            if (File.Exists(staged))
+            if (File.Exists(Path.Combine(folder.FullName, "WayfarerWanderer.slnx")))
             {
-                return staged;
+                string staged = Path.Combine(folder.FullName, "artifacts", "jvm-host", "host.jar");
+                return File.Exists(staged) ? staged : null;
             }
         }
         return null;
@@ -452,7 +457,6 @@ public sealed class JvmProjectHost : IAsyncDisposable
             End(process);
         }
         process.Dispose();
-        watching.Dispose();
     }
 
     private sealed class Pending(Action<JsonElement>? partial)
@@ -521,6 +525,8 @@ public static class ProjectHosts
         await Gate.WaitAsync(cancel).ConfigureAwait(false);
         try
         {
+            // Again under the gate: trust taken back while this waited ends the hosts serving the folder under the same gate.
+            WorkspaceTrust.Check(folder);
             Running.RemoveAll(host => host.HasExited);
             JvmProjectHost? host = Running.FirstOrDefault(running => PathNames.Same(running.Jvm.Home, jvm.Home));
             if (host is null)
