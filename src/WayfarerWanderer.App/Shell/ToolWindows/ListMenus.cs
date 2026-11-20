@@ -74,4 +74,7 @@ public static class ListMenus
             }
         }
     }
+
+    /// <summary>A submenu of items.</summary>
+    public static MenuItem Sub(string header, params Control[] items) => new() { Header = header, ItemsSource = items };
 }

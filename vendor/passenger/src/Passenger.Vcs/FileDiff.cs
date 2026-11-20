@@ -164,7 +164,7 @@ public sealed class FileDiff
         return Text.GetLineStart(first + line) + column;
     }
 
-    internal static (int Line, int Column) Place(string[] lines, int offset)
+    public static (int Line, int Column) Place(string[] lines, int offset)
     {
         int line = 0;
         while (line < lines.Length - 1 && offset > lines[line].Length)

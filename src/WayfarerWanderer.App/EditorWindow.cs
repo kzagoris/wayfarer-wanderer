@@ -43,10 +43,11 @@ public sealed partial class EditorWindow : Window
         Breakpoints = new BreakpointColumn(ToggleClickedLine);
         Actions = new EditorActions(() => Editor.IsVisible, ToggleCurrentBreakpoint,
             () => new ActionContext(Editor, FocusManager?.GetFocusedElement()), () => keys);
-        Editor.SetGutterColumns([Breakpoints], []);
+        AddGutter();
 
         AddProjectActions();
         AddSemanticActions();
+        AddVcs();
         MenuItem build = MenuAction(EditorActions.Build);
         MenuItem test = MenuAction(EditorActions.RunTests);
         MenuItem run = MenuAction(EditorActions.Run);
@@ -61,7 +62,7 @@ public sealed partial class EditorWindow : Window
                 MenuAction(EditorActions.StepInto), MenuAction(EditorActions.StepOver), MenuAction(EditorActions.StepOut), stop }
         };
         AddWelcome();
-        MenuItem fileMenu = new() { Header = "File", Items = { newProject, MenuAction(EditorActions.OpenWorkspace), RecentMenu(),
+        MenuItem fileMenu = new() { Header = "File", Items = { newProject, MenuAction(EditorActions.OpenWorkspace), MenuAction(AppActions.CloneRepository), RecentMenu(),
             MenuAction(EditorActions.OpenSource), MenuAction(EditorActions.SaveSource), new Separator(), MenuAction(AppActions.ShowSettings) } };
         fileMenu.SubmenuOpened += (_, _) => RefreshActions(fileMenu);
         runMenu.SubmenuOpened += (_, _) => RefreshActions(runMenu);
@@ -71,7 +72,8 @@ public sealed partial class EditorWindow : Window
             {
                 fileMenu,
                 SemanticMenu(),
-                runMenu
+                runMenu,
+                GitMenu(),
             }
         };
         DockPanel.SetDock(menu, Dock.Top);
@@ -146,7 +148,7 @@ public sealed partial class EditorWindow : Window
         AddExplorerActions();
         DockPanel.SetDock(TrustBanner, Dock.Top);
         DockPanel.SetDock(asking, Dock.Top);
-        frame = new DockPanel { Children = { menu, TrustBanner, asking, ToolDock } };
+        frame = new DockPanel { Children = { menu, TrustBanner, asking, StatusLine(), ToolDock } };
         Content = new Panel { Children = { frame } };
         KeyDown += (_, e) => e.Handled = FirstStart is null && Actions.TryExecute(keys.ActionFor(new Shortcut(Keystroke.From(e))));
         Opened += (_, _) => Editor.Focus();
@@ -169,19 +171,27 @@ public sealed partial class EditorWindow : Window
             SourcePath = null;
             Editor.Document = new TextDocument();
             Editor.Highlighter = null;
+            ShowBlameOf(null);
         }
         DebugTool.Reset();
         Session = new ProjectSession(root, BuildTool, TestsTool, DebugTool);
         Remember(root);
         ShowWelcomeWhenEmpty();
         Explorer.Load(root, Session.Snapshot);
+        // Git reads the folder while it is imported; the folder is open once both are done.
+        Task git = OpenVcsAsync(root);
         Session.PausedAt += OpenFrame;
         TrustBanner.IsVisible = !Session.IsTrusted;
         if (Session.IsTrusted)
         {
             try { await Session.ImportAsync(cancellationToken); }
-            catch (OperationCanceledException) when (request != workspaceRequest || closing) { return; }
+            catch (OperationCanceledException) when (request != workspaceRequest || closing)
+            {
+                IdeErrors.Observe(git);
+                return;
+            }
         }
+        await git;
         if (request != workspaceRequest || closing) return;
         Explorer.Update(Session.Snapshot);
         // A first start shows Build as the folder opens, unless a bottom window already is; after that the layout kept says
@@ -215,6 +225,8 @@ public sealed partial class EditorWindow : Window
         ToolDock.Add(new ToolWindow(ToolWindowIds.Build, "Build", IconKeys.Build, BuildTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowBuild, ActionTitle = "Build Tool Window" });
         ToolDock.Add(new ToolWindow(ToolWindowIds.Tests, "Tests", IconKeys.Tests, TestsTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowTests, ActionTitle = "Tests Tool Window" });
         ToolDock.Add(new ToolWindow(ToolWindowIds.Debug, "Debug", IconKeys.Debug, DebugTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowDebug, ActionTitle = "Debug Tool Window" });
+        AddTerminal();
+        AddVcsToolWindows();
         if (EditorApplication.State is { } state)
         {
             if (state.Layout.IsKept)
@@ -285,6 +297,10 @@ public sealed partial class EditorWindow : Window
                 item.IsEnabled = Actions[id].Available();
                 // The keymap may have changed in Settings since the menu last opened.
                 item.InputGesture = MenuGesture(id);
+            }
+            else if (item.Tag is Func<bool> can)
+            {
+                item.IsEnabled = can();
             }
         }
     }

@@ -21,6 +21,9 @@ public sealed partial class EditorWindow
         Editor.Highlighter = held.Colours;
     }
 
+    /// <summary>The decorations an open text is drawn with, which hold its change bars.</summary>
+    private DocumentDecorations? Decorated(TextDocument document) => shown.GetValueOrDefault(document)?.Decorations;
+
     /// <summary>A renamed file's colours and folds by its new name, when it is the one shown.</summary>
     private void FollowLanguage(string path, TextDocument document)
     {

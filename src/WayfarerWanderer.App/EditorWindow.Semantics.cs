@@ -286,7 +286,7 @@ public sealed partial class EditorWindow
             string text = undo ? change.Before.Text : change.After;
             doc.SetText(text, SelectionSet.Single(0));
             doc.MarkSaved();
-            documents[change.Path] = (doc, change.Before with { Text = text });
+            documents[change.Path].File = change.Before with { Text = text };
         }
     }
 }

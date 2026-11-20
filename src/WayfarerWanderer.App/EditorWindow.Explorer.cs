@@ -761,7 +761,9 @@ public sealed partial class EditorWindow
         {
             string now = PathNames.Moved(open, from, to);
             documents[now] = documents[open];
+            documents[now].Path = now;
             documents.Remove(open);
+            Vcs.Moved(open, now);
             FollowLanguage(now, documents[now].Document);
             if (SourcePath == open)
             {
@@ -780,12 +782,14 @@ public sealed partial class EditorWindow
             if (documents.Remove(open, out var closed))
             {
                 ForgetLanguage(closed.Document);
+                DocumentClosed(closed);
             }
             if (SourcePath == open)
             {
                 SourcePath = null;
                 Editor.Document = new TextDocument();
                 Editor.IsVisible = false;
+                ShowBlameOf(null);
             }
         }
     }

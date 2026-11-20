@@ -2,13 +2,14 @@ using Avalonia.Controls;
 using Avalonia.Platform.Storage;
 using Passenger.Core;
 using Passenger.Text;
+using WayfarerWanderer.App.Shell.Workspace;
 using WayfarerWanderer.Jvm;
 
 namespace WayfarerWanderer.App;
 
 public sealed partial class EditorWindow
 {
-    private readonly Dictionary<string, (TextDocument Document, FileText File)> documents = new(PathNames.Comparer);
+    private readonly Dictionary<string, OpenDocument> documents = new(PathNames.Comparer);
     private bool closing;
     public string? SourcePath { get; private set; }
     public IReadOnlyCollection<string> OpenSourcePaths =>
@@ -23,11 +24,18 @@ public sealed partial class EditorWindow
         if (!documents.TryGetValue(path, out var source))
         {
             FileText file = FileText.Load(path) ?? throw new InvalidDataException($"Cannot open binary file '{path}'.");
-            documents[path] = source = (new TextDocument(file.Text), file);
+            documents[path] = source = new OpenDocument(path, new TextDocument(file.Text), file);
+            ShowDocument(path, source.Document);
+            source.Decorations = Decorated(source.Document);
+            DocumentOpened(source);
         }
-        ShowDocument(path, source.Document);
+        else
+        {
+            ShowDocument(path, source.Document);
+        }
         Editor.IsVisible = true;
         SourcePath = path;
+        ShowBlameOf(source);
         Breakpoints.Select(path);
         Title = $"Wayfarer Wanderer - {path}";
     }
@@ -37,8 +45,8 @@ public sealed partial class EditorWindow
         if (SourcePath is not { } path) return;
         var (document, file) = documents[path];
         var saved = FileText.SaveOver(path, file, document.Snapshot.ToString());
-        documents[path] = (document, saved.Written);
         document.MarkSaved();
+        documents[path].OnSaved(saved.Written);
         if (Language(path) == "kotlin") RefreshKotlinClasses();
     }
 

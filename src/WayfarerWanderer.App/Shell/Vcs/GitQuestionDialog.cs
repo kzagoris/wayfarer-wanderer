@@ -1,0 +1,127 @@
+// From Passenger 2044e49b src/Passenger.App/Vcs/GitQuestionDialog.cs, MIT (notices/Passenger/LICENSE): without agents' calls.
+using Avalonia.Controls;
+using Avalonia.Media;
+using Avalonia.Threading;
+using Passenger.Core;
+using Passenger.Vcs;
+
+namespace WayfarerWanderer.App.Shell.Vcs;
+
+/// <summary>What git asks while it reaches a remote or signs a commit, put to the person: a login (its user and password
+/// together, the password given as git asks for it next), a password or a key's passphrase typed unseen, whether to trust
+/// a host, or git's own question. OK closes it with <see cref="Answer"/>; Cancel, Escape or a close, with none.</summary>
+public sealed class GitQuestionDialog : IdeWindow
+{
+    private readonly GitQuestion question;
+    private readonly TextBox? user;
+    private readonly TextBox? secret;
+
+    public GitQuestionDialog(GitQuestion question)
+    {
+        FormRows.Scope(this);
+        this.question = question;
+        bool yesNo = question.Kind == GitQuestionKind.YesNo;
+        if (question.Kind == GitQuestionKind.User)
+        {
+            user = new TextBox { Name = "GitUser", Classes = { StyleClasses.Search } };
+        }
+        if (!yesNo)
+        {
+            secret = new TextBox { Name = "GitSecret", Classes = { StyleClasses.Search }, PasswordChar = '•' };
+        }
+        StackPanel fields = new() { Spacing = 8 };
+        if (user is not null)
+        {
+            fields.Children.Add(FormRows.Of("User:", user));
+        }
+        if (secret is not null)
+        {
+            fields.Children.Add(FormRows.Of(question.Kind switch
+            {
+                GitQuestionKind.Passphrase => "Passphrase:",
+                GitQuestionKind.Other => "Answer:",
+                _ => "Password:",
+            }, secret));
+        }
+
+        Button ok = new() { Content = yesNo ? "Yes" : question.Kind == GitQuestionKind.User ? "Sign In" : "OK", IsDefault = true, Classes = { StyleClasses.Primary } };
+        Button cancel = DialogFooter.Cancel(Decline, yesNo ? "No" : "Cancel");
+        ok.Click += (_, _) => Accept();
+        List<Control> paragraphs = [DialogFooter.Paragraph(Said(question))];
+        if (fields.Children.Count > 0)
+        {
+            paragraphs.Add(fields);
+        }
+        TextBlock kept = new()
+        {
+            Classes = { StyleClasses.Muted },
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Text = yesNo ? "ssh keeps a host it is told to trust in its known_hosts."
+                : question.Signs ? $"It is given to {question.SignsWith} to sign this commit alone: {Product.Name} keeps none of it."
+                : $"It is given to git for this operation alone: {Product.Name} keeps none of it, and git keeps it only where a credential helper is set (git config credential.helper).",
+        };
+        paragraphs.Add(kept);
+        DialogFooter.Question(this, Titled(question), paragraphs, DialogFooter.Of(ok, cancel));
+        Opened += (_, _) => Dispatcher.UIThread.Post(() => (user ?? secret ?? (Control)ok).Focus(), DispatcherPriority.Loaded);
+    }
+
+    /// <summary>What the person answered, once they did: null until then, and when they declined.</summary>
+    public GitAnswer? Answer { get; private set; }
+
+    /// <summary>Whether the person answered (true) or declined (false), once they did: what a question shown without
+    /// waiting on it reads as it closes.</summary>
+    public bool? Answered { get; private set; }
+
+    /// <summary>The user name, where a login is asked.</summary>
+    public string User
+    {
+        get => user?.Text ?? string.Empty;
+        set => user?.Text = value;
+    }
+
+    /// <summary>OK: the answer typed (a login's user with its password), or yes; a secret typed is masked from now on
+    /// wherever it would be shown.</summary>
+    public void Accept()
+    {
+        string typed = secret?.Text ?? string.Empty;
+        if (question.IsSecret || question.Kind == GitQuestionKind.User)
+        {
+            TypedSecrets.Mark(typed);
+        }
+        Answer = question.Kind switch
+        {
+            GitQuestionKind.YesNo => new GitAnswer("yes"),
+            GitQuestionKind.User => new GitAnswer(User.Trim(), typed),
+            _ => new GitAnswer(typed),
+        };
+        Answered = true;
+        Close(true);
+    }
+
+    /// <summary>Cancel, or No to a yes-or-no question, which git is given as its answer.</summary>
+    public void Decline()
+    {
+        Answer = question.Kind == GitQuestionKind.YesNo ? new GitAnswer("no") : null;
+        Answered = false;
+        Close(false);
+    }
+
+    private static string Titled(GitQuestion question) => question.Kind switch
+    {
+        GitQuestionKind.User => $"Sign in to {question.Place}",
+        GitQuestionKind.Password => $"Password for {(question.User is { } user ? $"{user} at " : string.Empty)}{question.Place}",
+        GitQuestionKind.Passphrase => $"Passphrase for {question.Place}",
+        GitQuestionKind.YesNo => $"Trust {question.Place}?",
+        _ => "Git asks",
+    };
+
+    private static string Said(GitQuestion question) => question.Kind switch
+    {
+        GitQuestionKind.User => $"Git needs a login to reach {question.About}.",
+        GitQuestionKind.Password => question.User is { } user ? $"Git needs the password of {user} to reach {question.About}." : $"Git needs a password to reach {question.About}.",
+        GitQuestionKind.Passphrase when question.Signs => $"Signing the commit needs the passphrase of the key {question.About}.",
+        GitQuestionKind.Passphrase => $"ssh needs the passphrase of the key {question.About} to reach the remote.",
+        _ => question.Prompt.Trim(),
+    };
+}

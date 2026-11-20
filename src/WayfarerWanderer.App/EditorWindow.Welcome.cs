@@ -5,6 +5,7 @@ using Passenger.Editor;
 using WayfarerWanderer.App.Shell;
 using WayfarerWanderer.App.Shell.Settings;
 using WayfarerWanderer.App.Shell.State;
+using WayfarerWanderer.App.Shell.Vcs;
 using WayfarerWanderer.App.Shell.Welcome;
 
 namespace WayfarerWanderer.App;
@@ -42,6 +43,8 @@ public sealed partial class EditorWindow
     {
         Welcome.NewProjectRequested += (_, _) => Actions.TryExecute(EditorActions.NewProject);
         Welcome.OpenFolderRequested += (_, _) => Actions.TryExecute(EditorActions.OpenWorkspace);
+        Welcome.CloneRequested += (_, _) => Actions.TryExecute(AppActions.CloneRepository);
+        Actions.Add(new EditorAction(AppActions.CloneRepository, "Clone Repository…", () => true, () => ShowCloneRepository()));
         Welcome.Chosen += (_, row) => OpenRecent(row.Path);
         Welcome.RemoveRequested += (_, row) => ForgetRecent(row.Path);
         Welcome.RevealRequested += (_, row) => FileManager.Show(this, row.Path);
@@ -237,6 +240,7 @@ public sealed partial class EditorWindow
         {
             keys = AppActions.Keymap();
             Editor.Keymap = keys;
+            TerminalSettingsChanged(change);
         });
 
     /// <summary>The Trusted Folders page's change put in force and kept: a folder trusted anew is trusted, one whose trust
@@ -281,6 +285,29 @@ public sealed partial class EditorWindow
             kept = added.Aggregate(kept, (answers, folder) => answers.With(folder));
         }
         return kept;
+    }
+
+    /// <summary>Clone Repository: the dialog over this window, and the clone opened once it is made. A clone made outside any
+    /// Git repository is trusted as it opens, never asked of, as Passenger trusts one; inside another, only the person
+    /// trusts it.</summary>
+    public CloneDialog ShowCloneRepository()
+    {
+        CloneDialog dialog = new(NewProjectAction.DefaultFolder(Session?.Root));
+        dialog.Closed += (_, _) =>
+        {
+            if (dialog.Cloned is { } cloned)
+            {
+                string canonical = PathNames.Canonical(cloned);
+                if (WorkspaceTrust.TrustsAlone(canonical))
+                {
+                    WorkspaceTrust.Trust(canonical);
+                    KeepTrust(canonical);
+                }
+                UnawaitedWork.Observe(OpenWorkspaceAsync(cloned));
+            }
+        };
+        UnawaitedWork.Observe(dialog.ShowDialog(this));
+        return dialog;
     }
 
     /// <summary>The folder a root's trust is held by and kept as: the top of its Git repository, else the root itself.</summary>

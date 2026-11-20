@@ -121,7 +121,7 @@ public sealed partial class TerminalSession : IAsyncDisposable
         {
             ["TERM"] = "xterm-256color",
             ["COLORTERM"] = "truecolor",
-            ["TERM_PROGRAM"] = "Passenger",
+            ["TERM_PROGRAM"] = Product.ProgramName,
         };
         // An app opened from the Finder has no LANG, and a shell without one misreads every UTF-8 character.
         if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("LANG")) && !OperatingSystem.IsWindows() && !environment.ContainsKey("LANG"))
@@ -144,7 +144,7 @@ public sealed partial class TerminalSession : IAsyncDisposable
         bool batch = OperatingSystem.IsWindows() && WindowsCommandLine.IsBatch(app);
         PtyOptions options = new()
         {
-            Name = "Passenger",
+            Name = Product.ProgramName,
             Cols = Screen.Columns,
             Rows = Screen.Rows,
             Cwd = cwd,

@@ -95,6 +95,17 @@ internal static class Program
     {
         // Before anything reads the program's path or the state folder, so both are Wayfarer's.
         EditorApplication.Identify();
+        // Run by git to ask for a login: the window answers over the operation's socket, and nothing of the IDE starts.
+        if (Passenger.Vcs.GitAskPass.Answer(args) is int asked)
+        {
+            return asked;
+        }
+        // Run by git as its gpg to sign a commit, nothing of the IDE started. Main has no synchronization context yet, so
+        // waiting here holds no thread the work needs.
+        if (Passenger.Vcs.GpgLoopback.RunAsync(args).GetAwaiter().GetResult() is int signed)
+        {
+            return signed;
+        }
         if (OperatingSystem.IsWindows())
         {
             VelopackApp.Build().SetArgs(args).SetAutoApplyOnStartup(false).Run();

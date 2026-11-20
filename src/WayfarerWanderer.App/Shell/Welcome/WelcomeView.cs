@@ -1,5 +1,5 @@
 // From Passenger 2044e49b src/Passenger.App/Welcome/WelcomeView.cs, MIT (notices/Passenger/LICENSE): its solutions and
-// projects cut to folders, with Wayfarer's mark, New Project and Open Folder.
+// projects cut to folders, with Wayfarer's mark, New Project, Open Folder and Clone Repository.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -14,11 +14,11 @@ using WayfarerWanderer.App.Shell.ToolWindows;
 
 namespace WayfarerWanderer.App.Shell.Welcome;
 
-/// <summary>The Welcome screen, a start page in the window while nothing is open: Wayfarer's mark and version, New Project
-/// and Open Folder, and the folders opened lately (each with the build it holds), newest first and narrowed as a search is
-/// typed. Up and Down
-/// choose one from the search box or the list, Enter opens it, and Delete (Backspace on the Mac) or its menu removes it.
-/// One gone from disk is marked, and the window says so when it is opened (<see cref="Say"/>).</summary>
+/// <summary>The Welcome screen, a start page in the window while nothing is open: Wayfarer's mark and version, New Project,
+/// Open Folder and Clone Repository, and the folders opened lately (each with the build it holds), newest first and
+/// narrowed as a search is typed. Up and Down choose one from the search box or the list, Enter opens it, and Delete
+/// (Backspace on the Mac) or its menu removes it. One gone from disk is marked, and the window says so when it is opened
+/// (<see cref="Say"/>).</summary>
 public sealed class WelcomeView : UserControl
 {
     private readonly TextBox search;
@@ -51,12 +51,14 @@ public sealed class WelcomeView : UserControl
         NewProjectButton.Click += (_, _) => NewProjectRequested?.Invoke(this, EventArgs.Empty);
         OpenFolderButton = Action(IconKeys.FolderOpen, "Open Folder", "A Maven, Gradle or IntelliJ project");
         OpenFolderButton.Click += (_, _) => OpenFolderRequested?.Invoke(this, EventArgs.Empty);
-        WrapPanel actions = new() { Classes = { StyleClasses.WelcomeActions }, Children = { NewProjectButton, OpenFolderButton } };
-        // One across in a narrow page, so no tile is cut off at its edge.
+        CloneButton = Action(IconKeys.Branch, "Clone Repository", "From a Git URL");
+        CloneButton.Click += (_, _) => CloneRequested?.Invoke(this, EventArgs.Empty);
+        WrapPanel actions = new() { Classes = { StyleClasses.WelcomeActions }, Children = { NewProjectButton, OpenFolderButton, CloneButton } };
+        // Three, then one across in a narrow page, so no tile is cut off at its edge.
         actions.SizeChanged += (_, e) =>
         {
             double gap = actions.ItemSpacing;
-            int across = e.NewSize.Width >= 2 * ActionWidth + gap ? 2 : 1;
+            int across = e.NewSize.Width >= 3 * ActionWidth + 2 * gap ? 3 : 1;
             actions.ItemWidth = Math.Floor((e.NewSize.Width - (across - 1) * gap) / across);
         };
 
@@ -174,6 +176,9 @@ public sealed class WelcomeView : UserControl
     /// <summary>A click on Open Folder.</summary>
     public event EventHandler? OpenFolderRequested;
 
+    /// <summary>A click on Clone Repository.</summary>
+    public event EventHandler? CloneRequested;
+
     /// <summary>A recent folder to open, by Enter, a double-click or its menu.</summary>
     public event EventHandler<RecentRow>? Chosen;
 
@@ -188,6 +193,9 @@ public sealed class WelcomeView : UserControl
 
     /// <summary>The Open Folder button, for a click on it.</summary>
     public Button OpenFolderButton { get; }
+
+    /// <summary>The Clone Repository button, for a click on it.</summary>
+    public Button CloneButton { get; }
 
     /// <summary>The words the page says above its actions: its title, then what it offers.</summary>
     public string Heading => $"{title.Text}\n{subtitle.Text}";
