@@ -1,0 +1,52 @@
+{
+  "id": 7,
+  "result": {
+    "generation": 12,
+    "root": "/work/layouts",
+    "buildSystem": "gradle",
+    "buildFile": "/work/layouts/settings.gradle.kts",
+    "importJvm": { "home": "/jdks/temurin-24", "version": "24.0.2", "feature": 24, "vendor": "Eclipse Adoptium" },
+    "targets": [
+      {
+        "id": "core",
+        "displayName": "core",
+        "baseDirectory": "/work/layouts/core",
+        "languageIds": ["java"],
+        "jvmBuildTarget": { "javaHome": "/jdks/corretto-8", "javaVersion": 8, "vendor": "Amazon.com Inc." },
+        "runEnvironment": { "javaHome": "/jdks/corretto-8", "javaVersion": 8, "vendor": "Amazon.com Inc." },
+        "sourceSets": [
+          {
+            "id": "core:main",
+            "name": "main",
+            "test": false,
+            "sources": [
+              { "uri": "/work/layouts/core/src/main/java", "kind": "java", "generated": false },
+              { "uri": "/work/layouts/core/build/generated/sources/version/java", "kind": "java", "generated": true }
+            ],
+            "outputs": ["/work/layouts/core/build/classes/java/main"],
+            "dependencyModules": {
+              "compile": [
+                { "path": "/m2/org/apache/commons/commons-lang3/3.17.0/commons-lang3-3.17.0.jar", "coordinates": "org.apache.commons:commons-lang3:3.17.0", "moduleRef": null }
+              ],
+              "runtime": [
+                { "path": "/work/layouts/core/build/classes/java/main", "coordinates": null, "moduleRef": "core:main" },
+                { "path": "/m2/org/apache/commons/commons-lang3/3.17.0/commons-lang3-3.17.0.jar", "coordinates": "org.apache.commons:commons-lang3:3.17.0", "moduleRef": null }
+              ]
+            }
+          }
+        ],
+        "tasks": ["build", "classes", "test"],
+        "mainClasses": [],
+        "activeProfiles": [],
+        "absentLibraries": [],
+        "problem": "Could not resolve org.example:missing:1.0"
+      }
+    ],
+    "buildInputs": [
+      { "path": "/work/layouts/settings.gradle.kts", "modified": 1763600000000, "length": 120 },
+      { "path": "/work/layouts/core/build.gradle", "modified": 1763600000000, "length": 640 },
+      { "path": "/work/layouts/gradle/libs.versions.toml", "modified": 0, "length": -1 }
+    ],
+    "outputRoot": null
+  }
+}

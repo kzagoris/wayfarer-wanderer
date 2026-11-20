@@ -1,0 +1,42 @@
+<Project>
+  <!-- Builds the JVM project host (jvm/project-host) with its own Gradle wrapper and stages it under
+       artifacts/jvm-host, then carries the staged files to the output as jvm-host/, beside the app and in every
+       project that references this one. Incremental on the host's sources and pinned build files; never part of
+       restore. -p:WayfarerSkipJvmHost=true skips the Gradle build (whatever is staged already is still carried). -->
+  <PropertyGroup>
+    <WayfarerRepositoryRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../'))</WayfarerRepositoryRoot>
+    <WayfarerJvmHostSource>$(WayfarerRepositoryRoot)jvm/project-host/</WayfarerJvmHostSource>
+    <WayfarerJvmHostStage>$(WayfarerRepositoryRoot)artifacts/jvm-host/</WayfarerJvmHostStage>
+    <WayfarerPython Condition="'$(WayfarerPython)' == '' and '$(OS)' == 'Windows_NT'">python</WayfarerPython>
+    <WayfarerPython Condition="'$(WayfarerPython)' == ''">python3</WayfarerPython>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <WayfarerJvmHostInput Include="$(WayfarerJvmHostSource)**/src/main/**/*;$(WayfarerJvmHostSource)**/src/launcher/**/*" />
+    <WayfarerJvmHostInput Include="$(WayfarerJvmHostSource)**/*.gradle.kts;$(WayfarerJvmHostSource)**/gradle.lockfile" />
+    <WayfarerJvmHostInput Include="$(WayfarerJvmHostSource)gradle/**/*" />
+    <WayfarerJvmHostInput Include="$(WayfarerRepositoryRoot)tools/build-jvm-host.py" />
+    <WayfarerJvmHostInput Remove="$(WayfarerJvmHostSource)**/build/**;$(WayfarerJvmHostSource)**/.gradle/**" />
+  </ItemGroup>
+
+  <Target Name="WayfarerBuildJvmHost"
+          Condition="'$(WayfarerSkipJvmHost)' != 'true'"
+          Inputs="@(WayfarerJvmHostInput)"
+          Outputs="$(WayfarerJvmHostStage)host.jar">
+    <Exec Command="&quot;$(WayfarerPython)&quot; &quot;$(WayfarerRepositoryRoot)tools/build-jvm-host.py&quot; --stage &quot;$(WayfarerJvmHostStage.TrimEnd('/'))&quot;"
+          WorkingDirectory="$(WayfarerRepositoryRoot)"
+          IgnoreStandardErrorWarningFormat="true" />
+    <!-- The stage keeps its old timestamps when nothing changed, so mark it current for the next incremental check. -->
+    <Touch Files="$(WayfarerJvmHostStage)host.jar" />
+  </Target>
+
+  <Target Name="WayfarerCarryJvmHost" BeforeTargets="AssignTargetPaths" DependsOnTargets="WayfarerBuildJvmHost">
+    <ItemGroup>
+      <WayfarerJvmHostStaged Include="$(WayfarerJvmHostStage)**/*" />
+      <None Include="@(WayfarerJvmHostStaged)"
+            Link="jvm-host/%(RecursiveDir)%(Filename)%(Extension)"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+</Project>

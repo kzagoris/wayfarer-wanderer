@@ -1,0 +1,41 @@
+{
+  "id": 7,
+  "partial": {
+    "target": {
+      "id": "app",
+      "displayName": "app",
+      "baseDirectory": "/work/layouts/app",
+      "languageIds": ["java"],
+      "jvmBuildTarget": { "javaHome": "/jdks/openjdk-22.0.1", "javaVersion": 22, "vendor": "Oracle Corporation" },
+      "runEnvironment": { "javaHome": "/jdks/openjdk-22.0.1", "javaVersion": 22, "vendor": "Oracle Corporation" },
+      "sourceSets": [
+        {
+          "id": "app:main",
+          "name": "main",
+          "test": false,
+          "sources": [
+            { "uri": "/work/layouts/app/src/main/java", "kind": "java", "generated": false },
+            { "uri": "/work/layouts/app/src/main/resources", "kind": "resources", "generated": false }
+          ],
+          "outputs": ["/work/layouts/app/build/classes/java/main", "/work/layouts/app/build/resources/main"],
+          "dependencyModules": {
+            "compile": [
+              { "path": "/work/layouts/core/build/classes/java/main", "coordinates": null, "moduleRef": "core:main" },
+              { "path": "/m2/org/apache/commons/commons-lang3/3.17.0/commons-lang3-3.17.0.jar", "coordinates": "org.apache.commons:commons-lang3:3.17.0", "moduleRef": null }
+            ],
+            "runtime": [
+              { "path": "/work/layouts/app/build/classes/java/main", "coordinates": null, "moduleRef": "app:main" },
+              { "path": "/work/layouts/core/build/classes/java/main", "coordinates": null, "moduleRef": "core:main" },
+              { "path": "/m2/org/apache/commons/commons-lang3/3.17.0/commons-lang3-3.17.0.jar", "coordinates": "org.apache.commons:commons-lang3:3.17.0", "moduleRef": null }
+            ]
+          }
+        }
+      ],
+      "tasks": ["build", "classes", "run", "test"],
+      "mainClasses": [{ "className": "example.app.App", "sourcePath": "/work/layouts/app/src/main/java/example/app/App.java", "origin": "configured" }],
+      "activeProfiles": [],
+      "absentLibraries": [],
+      "problem": null
+    }
+  }
+}
