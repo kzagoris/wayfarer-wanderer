@@ -15,6 +15,8 @@ namespace WayfarerWanderer.App;
 public sealed partial class EditorWindow : Window
 {
     private int workspaceRequest;
+    /// <summary>The keymap in force (Settings' Keymap page), which the editor and the window's actions follow.</summary>
+    private Keymap keys = AppActions.Keymap();
     public CodeEditor Editor { get; } = new();
     public BreakpointColumn Breakpoints { get; }
     public EditorActions Actions { get; }
@@ -33,7 +35,6 @@ public sealed partial class EditorWindow : Window
         Title = "Wayfarer Wanderer";
         Width = 860;
         Height = 540;
-        var keys = DefaultKeymaps.ForPlatform().Bind(EditorActions.ToggleBreakpoint, "F9");
         Editor.Keymap = keys;
         if (document != null)
             Editor.Document = document;
@@ -45,7 +46,7 @@ public sealed partial class EditorWindow : Window
         Editor.SetGutterColumns([Breakpoints], []);
 
         var action = Actions[EditorActions.ToggleBreakpoint];
-        var shortcut = keys.ShortcutsFor(action.Id).Single().First;
+        var shortcut = keys.ShortcutsFor(action.Id).First().First;
         var toggle = new MenuItem
         {
             Header = action.Title,
@@ -68,8 +69,9 @@ public sealed partial class EditorWindow : Window
             Items = { build, test, run, debug, toggle, MenuAction(EditorActions.Continue),
                 MenuAction(EditorActions.StepInto), MenuAction(EditorActions.StepOver), MenuAction(EditorActions.StepOut), stop }
         };
-        MenuItem fileMenu = new() { Header = "File", Items = { newProject, MenuAction(EditorActions.OpenWorkspace),
-            MenuAction(EditorActions.OpenSource), MenuAction(EditorActions.SaveSource) } };
+        AddWelcome();
+        MenuItem fileMenu = new() { Header = "File", Items = { newProject, MenuAction(EditorActions.OpenWorkspace), RecentMenu(),
+            MenuAction(EditorActions.OpenSource), MenuAction(EditorActions.SaveSource), new Separator(), MenuAction(AppActions.ShowSettings) } };
         fileMenu.SubmenuOpened += (_, _) => RefreshActions(fileMenu);
         runMenu.SubmenuOpened += (_, _) => RefreshActions(runMenu);
         Menu menu = new()
@@ -128,6 +130,9 @@ public sealed partial class EditorWindow : Window
         matches.DoubleTapped += (_, _) => RunSelected();
         AddHandler(KeyDownEvent, (_, e) =>
         {
+            // The first start's page takes every key while it shows.
+            if (FirstStart is not null)
+                return;
             var modifier = OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
             if (e.Key == Key.A && e.KeyModifiers == (modifier | KeyModifiers.Shift))
             {
@@ -146,12 +151,13 @@ public sealed partial class EditorWindow : Window
                 return;
             e.Handled = true;
         }, RoutingStrategies.Tunnel);
-        AddToolWindows(new Grid { Children = { Editor, palette } });
+        AddToolWindows(new Grid { Children = { Editor, Welcome, palette } });
         AddExplorerActions();
         DockPanel.SetDock(TrustBanner, Dock.Top);
         DockPanel.SetDock(asking, Dock.Top);
-        Content = new DockPanel { Children = { menu, TrustBanner, asking, ToolDock } };
-        KeyDown += (_, e) => e.Handled = Actions.TryExecute(keys.ActionFor(new Shortcut(Keystroke.From(e))));
+        frame = new DockPanel { Children = { menu, TrustBanner, asking, ToolDock } };
+        Content = new Panel { Children = { frame } };
+        KeyDown += (_, e) => e.Handled = FirstStart is null && Actions.TryExecute(keys.ActionFor(new Shortcut(Keystroke.From(e))));
         Opened += (_, _) => Editor.Focus();
         Closing += CloseSession;
         Closed += (_, _) => ForgetAllLanguages();
@@ -175,6 +181,8 @@ public sealed partial class EditorWindow : Window
         }
         DebugTool.Reset();
         Session = new ProjectSession(root, BuildTool, TestsTool, DebugTool);
+        Remember(root);
+        ShowWelcomeWhenEmpty();
         Explorer.Load(root, Session.Snapshot);
         Session.PausedAt += OpenFrame;
         TrustBanner.IsVisible = !Session.IsTrusted;
@@ -314,6 +322,7 @@ public sealed partial class EditorWindow : Window
             return;
         }
         Session.Trust();
+        KeepTrust(Session.Root);
         await Session.ImportAsync();
         TrustBanner.IsVisible = false;
         Explorer.Update(Session.Snapshot);

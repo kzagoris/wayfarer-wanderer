@@ -18,6 +18,10 @@ public sealed record NamedTheme(SourcedTheme? Theme);
 /// Fluent's palette takes the theme's accent. UI thread only.</summary>
 public static class Themes
 {
+    /// <summary>The name the theme Wayfarer carries as its own is shown by (the theme kept as no theme at all): Passenger's
+    /// own look, named for Wayfarer.</summary>
+    public const string OwnName = "Wayfarer";
+
     private static readonly List<IResourceProvider> laid = [];
     private static readonly Dictionary<(bool Code, SourcedTheme Theme), Task> fetching = [];
     private static readonly Dictionary<(bool Code, SourcedTheme Theme), string> unfetched = [];

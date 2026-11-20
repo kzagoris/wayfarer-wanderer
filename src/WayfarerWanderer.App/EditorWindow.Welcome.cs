@@ -1,0 +1,282 @@
+using Avalonia.Controls;
+using Avalonia.Threading;
+using Passenger.Core;
+using Passenger.Editor;
+using WayfarerWanderer.App.Shell;
+using WayfarerWanderer.App.Shell.Settings;
+using WayfarerWanderer.App.Shell.State;
+using WayfarerWanderer.App.Shell.Welcome;
+
+namespace WayfarerWanderer.App;
+
+/// <summary>The window's start: the Welcome screen in the editor's place while no folder and no file is open, with New
+/// Project, Open Folder and the folders opened lately; the first start's question of the theme and of dark or light over
+/// the person's window the first time its state folder is used; the folder open as Wayfarer last quit opened again; and
+/// Settings, whose changes the window's keys and trust follow.</summary>
+public sealed partial class EditorWindow
+{
+    /// <summary>The settings a window keeps nowhere (a headless window's): Settings changes them for that window alone.</summary>
+    private SettingsStore? ownSettings;
+
+    /// <summary>The window's content under the first start's question.</summary>
+    private Control frame = null!;
+
+    /// <summary>The root the window last remembered as open among the recent folders.</summary>
+    private string? rememberedRoot;
+
+    /// <summary>The Welcome screen, in the editor's place while no folder and no file is open.</summary>
+    public WelcomeView Welcome { get; } = new();
+
+    /// <summary>The first start's question while it shows over the window, else null.</summary>
+    public FirstStartView? FirstStart { get; private set; }
+
+    /// <summary>The settings the window follows: the person's state folder's where the desktop app keeps them, else its own.</summary>
+    public SettingsStore SettingsKept => EditorApplication.State?.Settings ?? (ownSettings ??= SettingsStore.Unkept());
+
+    /// <summary>The recent folders, newest first, each marked when it is gone from disk; none where no state is kept.</summary>
+    public IReadOnlyList<RecentRow> RecentFolders => EditorApplication.State is { } state
+        ? [.. state.Recent.Value.Newest().Select(recent => RecentRow.Of(recent.Path, recent.Entry))]
+        : [];
+
+    private void AddWelcome()
+    {
+        Welcome.NewProjectRequested += (_, _) => Actions.TryExecute(EditorActions.NewProject);
+        Welcome.OpenFolderRequested += (_, _) => Actions.TryExecute(EditorActions.OpenWorkspace);
+        Welcome.Chosen += (_, row) => OpenRecent(row.Path);
+        Welcome.RemoveRequested += (_, row) => ForgetRecent(row.Path);
+        Welcome.RevealRequested += (_, row) => FileManager.Show(this, row.Path);
+        Welcome.Show(RecentFolders);
+        Editor.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == IsVisibleProperty)
+            {
+                ShowWelcomeWhenEmpty();
+            }
+        };
+        ShowWelcomeWhenEmpty();
+        Actions.Add(new EditorAction(AppActions.ShowSettings, "Settings…", () => true, () => ShowSettings()));
+        SettingsKept.Changed += SettingsChanged;
+        Closed += (_, _) => SettingsKept.Changed -= SettingsChanged;
+        Opened += (_, _) =>
+        {
+            if (Welcome.IsVisible && FirstStart is null)
+            {
+                Welcome.FocusSearch();
+            }
+        };
+    }
+
+    /// <summary>The Welcome screen shows while no folder and no file is open.</summary>
+    private void ShowWelcomeWhenEmpty() => Welcome.IsVisible = Session is null && !Editor.IsVisible;
+
+    /// <summary>File, Recent Folders: each recent folder but the one open, newest first, by name and where it is.</summary>
+    private MenuItem RecentMenu()
+    {
+        MenuItem recent = new() { Header = "Recent Folders" };
+        recent.Items.Add(new MenuItem());
+        void Fill()
+        {
+            recent.Items.Clear();
+            foreach (RecentRow row in RecentFolders.Where(r => Session is null || !PathNames.Same(r.Path, Session.Root)))
+            {
+                MenuItem item = new() { Header = $"{row.Name} – {row.Shown}" };
+                item.Click += (_, _) => OpenRecent(row.Path);
+                recent.Items.Add(item);
+            }
+            if (recent.Items.Count == 0)
+            {
+                recent.Items.Add(new MenuItem { Header = "No recent folders", IsEnabled = false });
+            }
+        }
+        recent.SubmenuOpened += (_, _) => Fill();
+        Fill();
+        return recent;
+    }
+
+    /// <summary>Opens a recent folder, as the Welcome screen and File, Recent Folders do: null once it is opening, else why
+    /// not (it is gone), which the Welcome screen says.</summary>
+    public string? OpenRecent(string path)
+    {
+        if (!Directory.Exists(path))
+        {
+            string gone = $"{RecentRow.Home(path)} no longer exists: it was moved or deleted, or its drive is not connected";
+            Welcome.Say(gone);
+            Welcome.Show(RecentFolders);
+            return gone;
+        }
+        Welcome.Say(null);
+        UnawaitedWork.Observe(OpenWorkspaceAsync(path));
+        return null;
+    }
+
+    /// <summary>Takes a folder off the recent ones for good.</summary>
+    public void ForgetRecent(string path)
+    {
+        if (EditorApplication.State is { } state)
+        {
+            state.Recent.Set(state.Recent.Value.Without(path));
+            Welcome.Say(null);
+            Welcome.Show(RecentFolders);
+        }
+    }
+
+    /// <summary>Puts the folder just opened at the top of the recent ones, open, the one open before it no longer open.</summary>
+    private void Remember(string root)
+    {
+        if (EditorApplication.State is not { } state)
+        {
+            return;
+        }
+        string canonical = PathNames.Canonical(root);
+        RecentFoldersState recent = state.Recent.Value;
+        if (rememberedRoot is { } before && !PathNames.Same(before, canonical))
+        {
+            recent = recent.Closed(before);
+        }
+        rememberedRoot = canonical;
+        state.Recent.Set(recent.Opened(canonical, Path.GetFileName(Path.TrimEndingDirectorySeparator(canonical)), DateTimeOffset.UtcNow));
+        Welcome.Show(RecentFolders);
+    }
+
+    /// <summary>Started with nothing named, opens the folder open as Wayfarer last quit, unless Reopen projects on startup is
+    /// off; one gone from disk is left on the Welcome screen, marked, with why. Whether a folder is opening.</summary>
+    public bool ReopenLast()
+    {
+        if (EditorApplication.State is not { } state || !SettingsKept.Value.ReopenProjectsOnStartup)
+        {
+            return false;
+        }
+        foreach ((string path, RecentFolder entry) in state.Recent.Value.StillOpen().Reverse())
+        {
+            RecentRow row = RecentRow.Of(path, entry);
+            if (row.Missing)
+            {
+                Welcome.Say($"{row.Name} was not reopened: {row.Shown} no longer exists");
+                continue;
+            }
+            UnawaitedWork.Observe(OpenWorkspaceAsync(path));
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>The first start's question over the window when the state folder is new: shown once, its answers kept as
+    /// Settings keeps them. Whether it shows.</summary>
+    public bool ShowFirstStartOnce()
+    {
+        if (EditorApplication.State is not { UsedBefore: false })
+        {
+            return false;
+        }
+        ShowFirstStart();
+        return true;
+    }
+
+    /// <summary>The first start's question over the window, shown now if it is not already: the window under it takes no
+    /// keys or clicks until it ends.</summary>
+    public FirstStartView ShowFirstStart()
+    {
+        if (FirstStart is { } shown)
+        {
+            return shown;
+        }
+        SettingsStore store = SettingsKept;
+        FirstStartView page = new(() => store.Effective, change => store.Update(change));
+        page.Ended += (_, _) => EndFirstStart();
+        frame.IsEnabled = false;
+        ((Panel)Content!).Children.Add(page);
+        FirstStart = page;
+        IdeErrors.Write("First start: the theme and dark or light asked");
+        return page;
+    }
+
+    private void EndFirstStart()
+    {
+        if (FirstStart is not { } page)
+        {
+            return;
+        }
+        FirstStart = null;
+        ((Panel)Content!).Children.Remove(page);
+        frame.IsEnabled = true;
+        SettingsStore store = SettingsKept;
+        // Kept as answered, even when nothing changed, so the next start does not ask again.
+        store.Update(settings => settings);
+        IdeErrors.Write($"First start: {store.Value.Look?.Shown ?? Themes.OwnName}, {store.Value.Theme}");
+        if (Editor.IsVisible)
+        {
+            Editor.Focus();
+        }
+        else if (Welcome.IsVisible)
+        {
+            Welcome.FocusSearch();
+        }
+    }
+
+    /// <summary>Settings over the window: what it applies put in force for every window that keeps the same settings, its
+    /// look previewed while it is open, its Trusted Folders page where the window keeps the person's answers.</summary>
+    public SettingsDialog ShowSettings()
+    {
+        SettingsStore store = SettingsKept;
+        TrustAnswers? trust = EditorApplication.State is { } state ? new TrustAnswers(state.Trust.Value, ApplyTrust) : null;
+        SettingsDialog dialog = new(store.Value, Actions.Registry, store.Apply, store.BeginPreview(), trust);
+        if (IsVisible)
+        {
+            UnawaitedWork.Observe(dialog.ShowDialog(this));
+        }
+        else
+        {
+            dialog.Show();
+        }
+        return dialog;
+    }
+
+    /// <summary>A change of the settings: the window's keys follow the keymap in force.</summary>
+    private void SettingsChanged(object? sender, SettingsChange change) =>
+        Dispatcher.UIThread.Post(() =>
+        {
+            keys = AppActions.Keymap();
+            Editor.Keymap = keys;
+        });
+
+    /// <summary>The Trusted Folders page's change put in force and kept: a folder trusted anew is trusted, one whose trust
+    /// was taken back is trusted no longer (the open folder's language servers ending, its trust asked again).</summary>
+    private TrustState ApplyTrust(TrustState from, TrustState now)
+    {
+        StateStore state = EditorApplication.State!;
+        foreach (string taken in from.Trusted.Where(f => !now.Trusted.Contains(f, PathNames.Comparer)))
+        {
+            WorkspaceTrust.TakeBack(taken);
+        }
+        string[] added = [.. now.Trusted.Where(f => !from.Trusted.Contains(f, PathNames.Comparer))];
+        if (added.Length > 0)
+        {
+            WorkspaceTrust.Trust(added);
+        }
+        state.Trust.Set(now);
+        if (Session is { IsTrusted: false })
+        {
+            ResetSemanticSession();
+        }
+        TrustBanner.IsVisible = Session is { IsTrusted: false };
+        return state.Trust.Value;
+    }
+
+    /// <summary>The open folder trusted by the person, kept among their answers.</summary>
+    private void KeepTrust(string root)
+    {
+        if (EditorApplication.State is { } state)
+        {
+            state.Trust.Set(state.Trust.Value.With(PathNames.Canonical(root)));
+        }
+    }
+
+    /// <summary>The folders the person trusted, as kept, trusted as the desktop app starts.</summary>
+    public static void TrustKept(StateStore state)
+    {
+        if (state.Trust.Value.Trusted is { Count: > 0 } trusted)
+        {
+            WorkspaceTrust.Trust(trusted);
+        }
+    }
+}

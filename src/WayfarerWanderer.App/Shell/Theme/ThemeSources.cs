@@ -115,7 +115,9 @@ public sealed partial record ThemeSource(ThemeSourceKind Kind, string Name)
                 continue;
             }
             settings.Remove(key);
-            if (!name.Equals(own, StringComparison.OrdinalIgnoreCase) && named(name) is { } moved)
+            // The own theme by the name Wayfarer shows it by, as by Passenger's, is the own theme: no theme named.
+            bool isOwn = name.Equals(own, StringComparison.OrdinalIgnoreCase) || (key == look && name.Equals(Themes.OwnName, StringComparison.OrdinalIgnoreCase));
+            if (!isOwn && named(name) is { } moved)
             {
                 settings[key] = new JsonObject { ["source"] = RepositoryName, ["name"] = moved };
             }

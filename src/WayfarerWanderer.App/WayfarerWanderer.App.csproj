@@ -12,6 +12,7 @@
     <!-- The window's typeface (Shell/Theme/WindowFonts.cs), Inter's hinted faces, and the looks Wayfarer carries. -->
     <AvaloniaResource Include="Shell/Fonts/*.ttf" />
     <AvaloniaResource Include="Shell/Assets/wayfarer.ico;Shell/Assets/wayfarer.png" />
+    <AvaloniaResource Include="Shell/Assets/FirstStart/*.webp" />
     <AvaloniaResource Include="Shell/Theme/BuiltIn/**/*.json" />
     <Content Include="../../templates/jvm/**/*" Link="templates/jvm/%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

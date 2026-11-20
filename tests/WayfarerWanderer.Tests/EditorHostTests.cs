@@ -13,8 +13,16 @@ namespace WayfarerWanderer.Tests;
 
 public class TestApp
 {
-    public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<EditorApplication>()
+    /// <summary>As the app's Main does first, before any test reads the program's path, so what the windows say and the
+    /// shared libraries' messages are Wayfarer's.</summary>
+    [System.Runtime.CompilerServices.ModuleInitializer]
+    internal static void Identify() => EditorApplication.Identify();
+
+    public static AppBuilder BuildAvaloniaApp()
+    {
+        return AppBuilder.Configure<EditorApplication>()
         .UseSkia().UseHarfBuzz().UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false });
+    }
 }
 
 public class EditorHostTests

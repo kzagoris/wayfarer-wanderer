@@ -52,6 +52,10 @@ public partial class EditorApplication : Application
 
     public static EditorWindow CreateWindow(TextDocument? document) => new(document);
 
+    /// <summary>Names the product as Wayfarer for the shared libraries' messages and the state folder: first in a process,
+    /// before anything reads the program's path (the app's Main, a test host's start).</summary>
+    public static void Identify() => Product.Identify(Program.Name, Program.ProgramName);
+
     public override void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
@@ -60,8 +64,15 @@ public partial class EditorApplication : Application
             IdeErrors.Install();
             State = StateStore.Open(StateStore.DefaultRoot);
             State.Settings.PutInForce();
+            EditorWindow.TrustKept(State);
             desktop.Exit += (_, _) => State.Release();
-            desktop.MainWindow = CreateWindow(new TextDocument());
+            EditorWindow window = CreateWindow(null);
+            desktop.MainWindow = window;
+            // The theme asked first on a new state folder; otherwise the folder open as Wayfarer last quit opens again.
+            if (!window.ShowFirstStartOnce())
+            {
+                window.ReopenLast();
+            }
         }
 
         base.OnFrameworkInitializationCompleted();
@@ -83,7 +94,7 @@ internal static class Program
     private static int Main(string[] args)
     {
         // Before anything reads the program's path or the state folder, so both are Wayfarer's.
-        Product.Identify(Name, ProgramName);
+        EditorApplication.Identify();
         if (OperatingSystem.IsWindows())
         {
             VelopackApp.Build().SetArgs(args).SetAutoApplyOnStartup(false).Run();

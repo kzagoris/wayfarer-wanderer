@@ -26,8 +26,10 @@ public sealed class StateStore
         Settings = SettingsStore.Kept(new StateDocument<AppSettings>(Path.Combine(root, SettingsFile)));
         Layout = new(Path.Combine(root, "layout.json"));
         Placement = new(Path.Combine(root, "windowPlacement.json"));
+        Recent = new(Path.Combine(root, "recentFolders.json"));
+        Trust = new(Path.Combine(root, "trust.json"));
         // Before this process writes any: a change is written a moment after it is made, and only through this store.
-        UsedBefore = File.Exists(Path.Combine(root, SettingsFile)) || Directory.Exists(Path.Combine(root, "workspaces"));
+        UsedBefore = File.Exists(Path.Combine(root, SettingsFile)) || File.Exists(Recent.Path) || Directory.Exists(Path.Combine(root, "workspaces"));
     }
 
     /// <summary>Whether an earlier run left state here: a new state folder's first start asks the look first.</summary>
@@ -48,6 +50,12 @@ public sealed class StateStore
     public StateDocument<Docking.DockLayout> Layout { get; }
 
     public StateDocument<WindowPlacementState> Placement { get; }
+
+    /// <summary>The folders opened lately, which the Welcome screen and File, Recent Folders list.</summary>
+    public StateDocument<Welcome.RecentFoldersState> Recent { get; }
+
+    /// <summary>The folders the person trusted, or opened without trusting, every window alike.</summary>
+    public StateDocument<TrustState> Trust { get; }
 
     public static StateStore Open(string root)
     {
@@ -108,6 +116,8 @@ public sealed class StateStore
         Settings.Flush();
         Layout.Flush();
         Placement.Flush();
+        Recent.Flush();
+        Trust.Flush();
         foreach ((ProjectState documents, _) in projects.Values)
         {
             documents.Flush();

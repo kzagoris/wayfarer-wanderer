@@ -44,7 +44,7 @@ public sealed partial class EditorWindow
 
     private async Task PickWorkspaceAsync()
     {
-        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Open Workspace" });
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Open Folder" });
         if (folders.FirstOrDefault()?.TryGetLocalPath() is { } root)
             await OpenWorkspaceAsync(root);
     }
@@ -71,7 +71,7 @@ public sealed partial class EditorWindow
         AddStep(EditorActions.StepInto, "Step Into", debug => debug.StepIntoAsync());
         AddStep(EditorActions.StepOver, "Step Over", debug => debug.StepOverAsync());
         AddStep(EditorActions.StepOut, "Step Out", debug => debug.StepOutAsync());
-        Actions.Add(new EditorAction(EditorActions.OpenWorkspace, "Open Workspace…", () => true,
+        Actions.Add(new EditorAction(EditorActions.OpenWorkspace, "Open Folder…", () => true,
             () => UnawaitedWork.Observe(PickWorkspaceAsync())));
         Actions.Add(new EditorAction(EditorActions.OpenSource, "Open Source…", () => true,
             () => UnawaitedWork.Observe(PickSourceAsync())));
