@@ -113,13 +113,30 @@ public sealed partial class EditorWindow
     }
 
     /// <summary>Takes a folder off the recent ones for good.</summary>
-    public void ForgetRecent(string path)
+    public void ForgetRecent(string path) => ForgetRecent([path]);
+
+    /// <summary>Takes folders off the recent ones for good, as the person took them off the taskbar's jump list.</summary>
+    public void ForgetRecent(IReadOnlyList<string> paths)
     {
         if (EditorApplication.State is { } state)
         {
-            state.Recent.Set(state.Recent.Value.Without(path));
+            state.Recent.Set(paths.Aggregate(state.Recent.Value, (recent, path) => recent.Without(path)));
             Welcome.Say(null);
             Welcome.Show(RecentFolders);
+            FollowRecentShortcuts();
+        }
+    }
+
+    /// <summary>The recent folders as the person's state folder keeps them; none for a window that keeps no state.</summary>
+    public StateDocument<RecentFoldersState>? RecentKept => EditorApplication.State?.Recent;
+
+    /// <summary>The system's lists of recent folders outside the window (the taskbar's jump list, the Dock's menu, the
+    /// desktop's recently used list) follow this window's recent folders.</summary>
+    public void FollowRecentShortcuts()
+    {
+        if (RecentKept is { } recent)
+        {
+            RecentShortcuts.Follow(this, recent);
         }
     }
 
@@ -139,6 +156,7 @@ public sealed partial class EditorWindow
         rememberedRoot = canonical;
         state.Recent.Set(recent.Opened(canonical, Path.GetFileName(Path.TrimEndingDirectorySeparator(canonical)), DateTimeOffset.UtcNow));
         Welcome.Show(RecentFolders);
+        FollowRecentShortcuts();
     }
 
     /// <summary>Started with nothing named, opens the folder open as Wayfarer last quit, unless Reopen projects on startup is

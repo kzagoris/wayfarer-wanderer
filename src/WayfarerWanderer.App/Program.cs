@@ -21,6 +21,10 @@ public partial class EditorApplication : Application
     /// <summary>The person's state, settings first, held while the desktop app runs; none for a headless run.</summary>
     public static StateStore? State { get; private set; }
 
+    /// <summary>What the desktop app was started to open: a folder, a window with nothing open, or the folder open as
+    /// Wayfarer last quit.</summary>
+    public static LaunchArguments Launch { get; set; } = LaunchArguments.None;
+
     public override void Initialize()
     {
         BackgroundWork.Install(work => Dispatcher.UIThread.Post(work));
@@ -68,11 +72,18 @@ public partial class EditorApplication : Application
             desktop.Exit += (_, _) => State.Release();
             EditorWindow window = CreateWindow(null);
             desktop.MainWindow = window;
-            // The theme asked first on a new state folder; otherwise the folder open as Wayfarer last quit opens again.
-            if (!window.ShowFirstStartOnce())
+            // The theme asked first on a new state folder, over the folder the command line names; without one, the folder
+            // open as Wayfarer last quit opens again, unless the start asked for a window with nothing open.
+            bool firstStart = window.ShowFirstStartOnce();
+            if (Launch.Folder is { } folder)
+            {
+                window.OpenRecent(folder);
+            }
+            else if (!firstStart && !Launch.NewWindow)
             {
                 window.ReopenLast();
             }
+            window.FollowRecentShortcuts();
         }
 
         base.OnFrameworkInitializationCompleted();
@@ -123,6 +134,15 @@ internal static class Program
         if (acceptance is not null)
         {
             return AcceptanceRunner.Run(acceptance);
+        }
+        try
+        {
+            EditorApplication.Launch = LaunchArguments.Parse(args);
+        }
+        catch (FormatException error)
+        {
+            Console.Error.WriteLine($"wayfarer: {error.Message}");
+            return 2;
         }
 
         return BuildAvaloniaApp().UsePlatformDetect().StartWithClassicDesktopLifetime(args);

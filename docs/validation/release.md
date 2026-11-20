@@ -36,6 +36,7 @@ executed tests as a failure.
 | `win-x64` Velopack package | Built `WayfarerWanderer-win-Setup.exe` and portable archive. The package is unsigned because no signing credentials were supplied. | Verified 2026-11-18 |
 | `win-x64` portable install | Extracted portable package executed shared-editor acceptance and the normal headless application mode; 9 editor cases executed and no failures. | Verified 2026-11-18 |
 | Maven + Gradle starters | All eight combinations generated, built, ran their JUnit test, launched, and stopped; Boot starters answered their HTTP handler on an ephemeral port. | Verified 2026-11-18 |
+| Recent folder lists | `RecentShortcutsTests`: the command line (`WayfarerWanderer.App [FOLDER] [--new-window]`), shortcuts from `recentFolders.json`, the taskbar jump list set and deleted through the shell's COM interfaces, and the recently used xbel written and forgotten. The Dock menu and the installed jump list and KDE list have not been run. | Verified 2026-11-20 (win-x64, unit level) |
 | Regression suite | Locked Debug restore and full host/JVM suite: 63 executed, 0 failed. | Verified 2026-11-18 |
 
 macOS, Windows ARM64, Linux and Linux musl remain unverified on this

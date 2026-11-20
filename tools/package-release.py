@@ -12,6 +12,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# The Linux desktop entry's id, as src/WayfarerWanderer.App/Shell/Welcome/LinuxRecentlyUsed.cs names it.
+DESKTOP_ENTRY = "io.github.kzagoris.WayfarerWanderer"
+
 
 def version():
     """Wayfarer's own version, as Directory.Build.props declares it."""
@@ -39,7 +42,22 @@ def linux(publish, output):
         'mkdir -p "$prefix"\n'
         'cp -R WayfarerWanderer/. "$prefix/"\n'
         'mkdir -p "$HOME/.local/bin"\n'
-        'ln -sf "$prefix/WayfarerWanderer.App" "$HOME/.local/bin/wayfarer-wanderer"\n',
+        'ln -sf "$prefix/WayfarerWanderer.App" "$HOME/.local/bin/wayfarer-wanderer"\n'
+        # The desktop entry the app finds itself by to list its recent folders as recently used (LinuxRecentlyUsed.cs),
+        # its Exec the installed program itself, which KDE matches the list's entries to.
+        'applications="${XDG_DATA_HOME:-"$HOME/.local/share"}/applications"\n'
+        'mkdir -p "$applications"\n'
+        f'cat > "$applications/{DESKTOP_ENTRY}.desktop" <<EOF\n'
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Wayfarer Wanderer\n"
+        "Comment=An IDE for Java and Kotlin\n"
+        'Exec="$prefix/WayfarerWanderer.App" %f\n'
+        "Terminal=false\n"
+        "Categories=Development;IDE;\n"
+        f"StartupWMClass=WayfarerWanderer.App\n"
+        "EOF\n"
+        'command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$applications" || true\n',
         encoding="utf-8",
     )
     installer.chmod(0o755)
