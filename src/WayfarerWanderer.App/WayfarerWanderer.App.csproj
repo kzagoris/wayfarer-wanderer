@@ -17,6 +17,21 @@
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="../../vendor/passenger/THIRD_PARTY_NOTICES.md;../../vendor/passenger/LICENSE;../../vendor/passenger/src/Passenger.Editor/Fonts/OFL.txt"
           Link="notices/Passenger/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The TextMate grammars that colour Wayfarer's languages (Shell/Languages/Language.cs), VS Code's files unchanged,
+         read by their file name; Shell/Languages/NOTICES.md says where each came from. -->
+    <EmbeddedResource Include="../../vendor/passenger/src/Passenger.Languages/TextMate/Grammars/java.tmLanguage.json;
+                               ../../vendor/passenger/src/Passenger.Languages/TextMate/Grammars/Kotlin.tmLanguage.json;
+                               ../../vendor/passenger/src/Passenger.Languages/TextMate/Grammars/groovy.tmLanguage.json;
+                               ../../vendor/passenger/src/Passenger.Languages/TextMate/Grammars/xml.tmLanguage.json;
+                               ../../vendor/passenger/src/Passenger.Languages/TextMate/Grammars/yaml*.tmLanguage.json;
+                               ../../vendor/passenger/src/Passenger.Languages/TextMate/Grammars/ini.tmLanguage.json;
+                               ../../vendor/passenger/src/Passenger.Languages/TextMate/Grammars/JSON.tmLanguage.json;
+                               ../../vendor/passenger/src/Passenger.Languages/TextMate/Grammars/markdown.tmLanguage.json;
+                               ../../vendor/passenger/src/Passenger.Languages/TextMate/Grammars/shell-unix-bash.tmLanguage.json"
+                      LogicalName="Grammars/%(Filename)%(Extension)" Link="Shell/Languages/Grammars/%(Filename)%(Extension)" />
+    <None Include="Shell/Languages/NOTICES.md;../../vendor/passenger/tools/Passenger.Notices/Licenses/MIT.txt;../../vendor/passenger/tools/Passenger.Notices/Licenses/Apache-2.0.txt;../../vendor/passenger/tools/Passenger.Notices/Licenses/EPL-2.0.txt"
+          Link="notices/SyntaxColours/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <PackageReference Include="Tint" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="Avalonia.Headless" />
     <PackageReference Include="Velopack" />

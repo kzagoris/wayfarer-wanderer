@@ -80,6 +80,15 @@
         "resolved": "4.156.0",
         "contentHash": "H+s60e8mNUO8jiRuQQpMXQjcPnFTYb168t59mB/UAewSHNv5hXLfP8xiKeSDc4jAF/aMusjamXx9Di2FIurl/w=="
       },
+      "Tint": {
+        "type": "Direct",
+        "requested": "[0.3.0, )",
+        "resolved": "0.3.0",
+        "contentHash": "3cdtk66iQW8ROjvmog1J8TI1dBsmU5tKYTVfxeP0ddyiP4jiyqaggaYxx9GjNwLBQkASXiDc8N1LYKepbUAk7w==",
+        "dependencies": {
+          "GregsEx": "0.7.0"
+        }
+      },
       "Velopack": {
         "type": "Direct",
         "requested": "[1.2.161, )",
@@ -145,6 +154,11 @@
           "Avalonia.FreeDesktop.AtSpi": "12.1.6",
           "Avalonia.Skia": "12.1.6"
         }
+      },
+      "GregsEx": {
+        "type": "Transitive",
+        "resolved": "0.7.0",
+        "contentHash": "8yELnyaxvcVYi+avbsA4rchJiZTJWWuZ4ztvLJ2Qm21AErSUXmbEjxMuCJFHrgUoiTWCJSSIbJx3Z6PyMe6ssQ=="
       },
       "HarfBuzzSharp.NativeAssets.macOS": {
         "type": "Transitive",

@@ -154,6 +154,7 @@ public sealed partial class EditorWindow : Window
         KeyDown += (_, e) => e.Handled = Actions.TryExecute(keys.ActionFor(new Shortcut(Keystroke.From(e))));
         Opened += (_, _) => Editor.Focus();
         Closing += CloseSession;
+        Closed += (_, _) => ForgetAllLanguages();
     }
 
     public async Task OpenWorkspaceAsync(string root, CancellationToken cancellationToken = default)
@@ -170,6 +171,7 @@ public sealed partial class EditorWindow : Window
         {
             SourcePath = null;
             Editor.Document = new TextDocument();
+            Editor.Highlighter = null;
         }
         DebugTool.Reset();
         Session = new ProjectSession(root, BuildTool, TestsTool, DebugTool);

@@ -25,7 +25,7 @@ public sealed partial class EditorWindow
             FileText file = FileText.Load(path) ?? throw new InvalidDataException($"Cannot open binary file '{path}'.");
             documents[path] = source = (new TextDocument(file.Text), file);
         }
-        Editor.Document = source.Document;
+        ShowDocument(path, source.Document);
         Editor.IsVisible = true;
         SourcePath = path;
         Breakpoints.Select(path);

@@ -762,6 +762,7 @@ public sealed partial class EditorWindow
             string now = PathNames.Moved(open, from, to);
             documents[now] = documents[open];
             documents.Remove(open);
+            FollowLanguage(now, documents[now].Document);
             if (SourcePath == open)
             {
                 SourcePath = now;
@@ -776,7 +777,10 @@ public sealed partial class EditorWindow
         string full = Path.GetFullPath(path);
         foreach (string open in documents.Keys.Where(p => PathNames.Within(p, full)).ToList())
         {
-            documents.Remove(open);
+            if (documents.Remove(open, out var closed))
+            {
+                ForgetLanguage(closed.Document);
+            }
             if (SourcePath == open)
             {
                 SourcePath = null;
