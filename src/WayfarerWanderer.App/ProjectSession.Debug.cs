@@ -43,7 +43,7 @@ public sealed partial class ProjectSession
             if (pause.Frames.FirstOrDefault() is { } top) PausedAt?.Invoke(top);
         });
         DebugWindow.Reset();
-        DebugWindow.Status = "Starting debuggerâ€¦";
+        DebugWindow.Status = "Starting debugger…";
         BuildWindow.Reset();
         string status = "Debugger finished";
         try

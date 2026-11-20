@@ -1,0 +1,225 @@
+using System.Text.Json;
+using Avalonia;
+using Avalonia.Styling;
+using Passenger.App.State;
+using Passenger.Core;
+using Passenger.MauiPreview;
+using Passenger.Text;
+using Passenger.Workspace;
+using Passenger.Xaml;
+using Passenger.Xaml.Features;
+using Passenger.Xaml.Projects;
+
+namespace Passenger.App.Xaml;
+
+/// <summary>A .NET MAUI file's design view, drawn by Passenger's own previewer (src/Passenger.MauiPreview, under
+/// <c>mauipreview/</c>) with Avalonia's backend for MAUI, headless, on every system: run as a helper on Passenger's runtime
+/// from a copy of the project's newest build of any target (<see cref="ChildPreviewHost"/>), a platform's types the
+/// previewer cannot load passed over. Each request says the screen, platform and theme the preview is drawn as
+/// (<see cref="XamlPreview.Look"/>), and carries the file's and App.xaml's text with MAUI's implicit namespaces written
+/// (<see cref="MauiPreviewText"/>). A UI-thread object.</summary>
+internal sealed class MauiPreviewHost : ChildPreviewHost
+{
+    /// <summary>The first MAUI whose controls the previewer draws: its own, which a project's assembly binds to by name.</summary>
+    public const int FirstMaui = 11;
+
+    private MauiPreviewHost(XamlPreview preview, XamlProjectBuilder builder, PreviewedBuild build, string assembly, string shadow)
+        : base(preview, builder, build, assembly, shadow, "MAUI")
+    {
+    }
+
+    /// <summary>Where the app carries the previewer.</summary>
+    public static string Previewer => Path.Combine(AppContext.BaseDirectory, "mauipreview", "Passenger.MauiPreview.dll");
+
+    /// <summary>Starts the previewer on a copy of the project's newest build; null, having said why, when there is none to
+    /// start or the project's MAUI is older than the previewer's.</summary>
+    public static async Task<MauiPreviewHost?> StartAsync(XamlPreview preview, XamlProjectBuilder builder)
+    {
+        ProjectInputs inputs = builder.Current.Inputs;
+        if (MauiOf(inputs) is { } older && older.Major < FirstMaui)
+        {
+            preview.Say($"MAUI previews need .NET MAUI {FirstMaui}: {Path.GetFileNameWithoutExtension(inputs.ProjectPath)} is on MAUI {older.Major}");
+            return null;
+        }
+        if (await BackgroundWork.Run(() => Newest(inputs)) is not { } built)
+        {
+            preview.SayUnbuilt(inputs);
+            return null;
+        }
+        if (!File.Exists(Previewer))
+        {
+            preview.Say("MAUI's previewer is missing from Passenger's folder (mauipreview/)");
+            return null;
+        }
+        if (await CopyAsync(preview, built) is not { } copied)
+        {
+            return null;
+        }
+        // A build for no platform is drawn as the project's own first platform.
+        preview.BuiltPlatform = PlatformOf(Path.GetFileName(Path.GetDirectoryName(built)) ?? string.Empty)
+            ?? PlatformOf(inputs.ChosenFramework ?? inputs.TargetFramework ?? string.Empty) ?? MauiPreviewDevices.Android;
+        MauiPreviewHost started = new(preview, builder, copied.Build with { Finder = Newest }, Path.Combine(copied.Shadow, Path.GetFileName(built)), copied.Shadow);
+        try
+        {
+            await started.RunAsync(inputs);
+            return started;
+        }
+        catch (Exception error) when (ChildFailures.Of(error) || error is FileNotFoundException)
+        {
+            started.Dispose();
+            preview.Say($"The previewer could not start: {error.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>The version of MAUI's controls the project's restore resolved; null where it names none.</summary>
+    internal static Version? MauiOf(ProjectInputs inputs) =>
+        (inputs.PackageVersions.GetValueOrDefault("Microsoft.Maui.Controls") ?? inputs.PackageVersions.GetValueOrDefault("Microsoft.Maui.Controls.Core")) is { } named
+            && Version.TryParse(named.Split('-', '+')[0], out Version? version) ? version : null;
+
+    /// <summary>The project's newest build: of the one an app's or a library's preview draws (<see cref="XamlPreview.Output"/>),
+    /// its assembly for any target under its bin/ (a platform's has no .deps.json) and the build for no platform Build for
+    /// XAML Preview makes (<see cref="PlainBuild"/>), the newest written. Read off the window's thread.</summary>
+    internal static string? Newest(ProjectInputs inputs)
+    {
+        string reference = $"{Path.DirectorySeparatorChar}ref{Path.DirectorySeparatorChar}";
+        IEnumerable<string> Under(string folder) => Directory.Exists(folder)
+            ? Directory.EnumerateFiles(folder, inputs.AssemblyName + ".dll", SearchOption.AllDirectories).Where(f => !f.Contains(reference, StringComparison.Ordinal))
+            : Enumerable.Empty<string>();
+        string[] found = [.. Under(Path.Combine(inputs.Folder, "bin")), .. Under(Path.Combine(PlainFolder(inputs.ProjectPath), "bin"))];
+        if (XamlPreview.Output(inputs, configured: false) is { } output)
+        {
+            found = [output, .. found];
+        }
+        return found.OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
+    }
+
+    /// <summary>Where Build for XAML Preview builds a MAUI project for no platform (<see cref="PlainBuild"/>): a folder of
+    /// the state's for the project's folder, so the project's own obj and bin stay as its own builds left them.</summary>
+    public static string PlainFolder(string project) => Path.Combine(ProjectState.FolderOf(StateStore.DefaultRoot, Path.GetDirectoryName(project)!), "maui-preview");
+
+    /// <summary>What Build for XAML Preview gives the build of a MAUI project that targets platforms alone, which a machine
+    /// may lack the SDKs of (Android's, Xcode): its .NET for no platform (net11.0 of net11.0-android) as a library, into
+    /// <see cref="PlainFolder"/>, which the previewer draws as any build; null for a project with a target of no platform,
+    /// whose own build draws.</summary>
+    public static IReadOnlyList<string>? PlainBuild(ProjectModel project)
+    {
+        if (project.TargetFrameworks.Count == 0 || project.TargetFrameworks.Any(f => !f.Contains('-', StringComparison.Ordinal)))
+        {
+            return null;
+        }
+        string plain = project.TargetFrameworks[0].Split('-')[0];
+        return [PropertySwitch.Of(MSBuildNames.TargetFrameworks, plain), PropertySwitch.Of(MSBuildNames.OutputType, "Library"),
+            PropertySwitch.Of(MSBuildNames.UseArtifactsOutput, "true"), PropertySwitch.Of(MSBuildNames.ArtifactsPath, PlainFolder(project.Path))];
+    }
+
+    /// <summary>The platform a target framework is for, or a build's folder named for one, its configuration before an
+    /// underscore (<c>net11.0-ios</c>, <c>debug_net11.0-ios</c>); null for one of no platform.</summary>
+    internal static string? PlatformOf(string framework) => FrameworkNames.PlatformOf(framework[(framework.IndexOf('_') + 1)..]) switch
+    {
+        FrameworkNames.Android => MauiPreviewDevices.Android,
+        FrameworkNames.Ios => MauiPreviewDevices.IOS,
+        FrameworkNames.MacCatalyst => MauiPreviewDevices.MacCatalyst,
+        FrameworkNames.Windows => MauiPreviewDevices.Windows,
+        _ => null,
+    };
+
+    /// <summary>The previewer started on the copy, given where the project keeps its fonts and images and where its
+    /// restore put its packages.</summary>
+    private async Task RunAsync(ProjectInputs inputs)
+    {
+        List<string> arguments = ["--assembly", Assembly];
+        string fonts = Path.Combine(inputs.Folder, "Resources", "Fonts");
+        string images = Path.Combine(inputs.Folder, "Resources", "Images");
+        if (await BackgroundWork.Run(() => Directory.Exists(fonts)))
+        {
+            arguments.AddRange(["--fonts", fonts]);
+        }
+        if (await BackgroundWork.Run(() => Directory.Exists(images)))
+        {
+            arguments.AddRange(["--images", images]);
+        }
+        foreach (string cache in inputs.PackageFolders.Values.Select(f => Path.GetDirectoryName(Path.GetDirectoryName(f))).OfType<string>().Distinct(StringComparer.Ordinal))
+        {
+            arguments.AddRange(["--packages", cache]);
+        }
+        await StartAsync(ChildProcesses.HelperCommand(Previewer, arguments, Shadow), $"Starting the previewer on {Path.GetFileName(Assembly)}…");
+    }
+
+    protected override Func<(string Path, string Xaml)?, string> Request(int sequence, TextSnapshot text)
+    {
+        string path = Preview.Document.Document.Path;
+        double scale = Preview.Scaling;
+        string platform = Preview.Look.Platform ?? Preview.BuiltPlatform;
+        MauiScreen screen = Preview.Look.Screen ?? MauiLook.ScreenFor(platform);
+        string theme = Preview.Look.Theme ?? (Application.Current?.ActualThemeVariant == ThemeVariant.Dark ? MauiPreviewThemes.Dark : MauiPreviewThemes.Light);
+        Dictionary<string, TextSnapshot> open = Preview.Document.Service.OpenTexts();
+        XamlProject project = Builder.Current;
+        return application => JsonSerializer.Serialize(new MauiPreviewRequest
+        {
+            Sequence = sequence,
+            Path = path,
+            Xaml = MauiPreviewText.Declared(text.ToString()),
+            Application = application is { } app ? new PreviewSource(app.Path, MauiPreviewText.Declared(MauiPreviewText.WithOpenDictionaries(app.Xaml, source => Opened(project, open, app.Path, source)))) : null,
+            Scale = scale,
+            Width = screen.Width,
+            Height = screen.Height,
+            Platform = platform,
+            Idiom = screen.Idiom,
+            Theme = theme,
+        }, PeerJson.Options);
+    }
+
+    /// <summary>The text of an open file a merged dictionary's Source names, found as the project finds it; null where it
+    /// is not open.</summary>
+    private static string? Opened(XamlProject project, Dictionary<string, TextSnapshot> open, string from, string source)
+    {
+        string? path;
+        try
+        {
+            path = project.ResolveSource(source, from);
+        }
+        catch (ArgumentException)
+        {
+            // A Source as it is typed may name no path at all (a NUL in it).
+            return null;
+        }
+        return path is null ? null : open.FirstOrDefault(o => PathNames.Same(o.Key, path)).Value?.ToString();
+    }
+}
+
+/// <summary>A screen a MAUI preview is drawn on: its size in device-independent units and the idiom OnIdiom reads there.</summary>
+public sealed record MauiScreen(string Name, double Width, double Height, string Idiom)
+{
+    /// <summary>The screen as the chooser names it.</summary>
+    public string Shown => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{Name} ({Width:0} × {Height:0})");
+}
+
+/// <summary>What a MAUI preview is drawn as: its screen, the platform OnPlatform reads (as MAUI names it) and the theme
+/// AppThemeBinding reads; null for each where none is chosen, which is the platform of the build drawn, that platform's
+/// own kind of screen, and the IDE's theme.</summary>
+public sealed record MauiLook(MauiScreen? Screen, string? Platform, string? Theme)
+{
+    public static MauiLook AsBuilt { get; } = new(null, null, null);
+
+    /// <summary>The screens offered, in the chooser's order.</summary>
+    public static IReadOnlyList<MauiScreen> Screens { get; } =
+    [
+        new("Phone", 390, 844, MauiPreviewDevices.Phone),
+        new("Tablet", 820, 1180, MauiPreviewDevices.Tablet),
+        new("Desktop", 1280, 800, MauiPreviewDevices.Desktop),
+    ];
+
+    /// <summary>The platforms offered, each as the chooser names it and as MAUI does.</summary>
+    public static IReadOnlyList<(string Shown, string Platform)> Platforms { get; } =
+    [
+        ("Android", MauiPreviewDevices.Android),
+        ("iOS", MauiPreviewDevices.IOS),
+        ("Mac Catalyst", MauiPreviewDevices.MacCatalyst),
+        ("Windows", MauiPreviewDevices.Windows),
+    ];
+
+    /// <summary>A platform's own kind of screen: a desktop's for Mac Catalyst's and Windows', else a phone's.</summary>
+    public static MauiScreen ScreenFor(string platform) =>
+        platform is MauiPreviewDevices.MacCatalyst or MauiPreviewDevices.Windows ? Screens[2] : Screens[0];
+}

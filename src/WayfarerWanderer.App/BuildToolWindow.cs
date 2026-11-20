@@ -1,5 +1,5 @@
 using Avalonia.Controls;
-using Avalonia.Layout;
+using Passenger.Editor;
 using System.Collections.ObjectModel;
 
 namespace WayfarerWanderer.App;
@@ -10,18 +10,10 @@ public sealed class BuildToolWindow : UserControl
 
     public BuildToolWindow()
     {
-        Content = new DockPanel
-        {
-            Children =
-            {
-                Header("Build"),
-                new ListBox
-                {
-                    ItemsSource = Output,
-                    FontFamily = "monospace"
-                }
-            }
-        };
+        ListBox lines = new() { ItemsSource = Output };
+        // The build's output in the code font in force, as the editor shows code, following each change in Settings.
+        CodeFonts.Follow(lines, FontFamilyProperty);
+        Content = lines;
     }
 
     public void Reset()
@@ -32,12 +24,5 @@ public sealed class BuildToolWindow : UserControl
     public void Append(string line)
     {
         Output.Add(line);
-    }
-
-    private static Control Header(string text)
-    {
-        TextBlock result = new() { Text = text, Margin = new(8, 6) };
-        DockPanel.SetDock(result, Dock.Top);
-        return result;
     }
 }

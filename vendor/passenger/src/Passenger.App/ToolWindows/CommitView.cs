@@ -1,0 +1,977 @@
+using System.Collections.ObjectModel;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Passenger.App.Vcs;
+using Passenger.Core;
+using Passenger.Editor;
+using Passenger.Text;
+using Passenger.Vcs;
+
+namespace Passenger.App.ToolWindows;
+
+/// <summary>A changed file in the Commit window, and whether it goes into the next commit.</summary>
+public sealed class CommitRow(FileChange change, bool chosen) : Observable
+{
+    private bool isChosen = chosen && IsChoosable(change);
+
+    public FileChange Change { get; } = change;
+
+    /// <summary>Whether it has a box: a file in conflict is resolved first, and a submodule whose own files alone changed
+    /// has nothing to commit here.</summary>
+    public bool CanChoose => IsChoosable(Change);
+
+    private static bool IsChoosable(FileChange change) => change.Kind is not ChangeKind.Conflicted && change.Uncommittable is null;
+
+    /// <summary>The changes that go in where only some of the file's do; null where all or none do.</summary>
+    public PartialCommit? Partial { get; private set; }
+
+    /// <summary>The file's box: chosen, not, or null where only some of its changes go in.</summary>
+    public bool? CheckState => Partial is null ? IsChosen : null;
+
+    /// <summary>Whether each change of <paramref name="diff"/> goes in, asked as a diff of the file is shown: a choice of
+    /// some changes made on another text of the file moves onto the changes it still makes (<see cref="PartialCommit.Following"/>).</summary>
+    public bool[] ChosenIn(FileDiff diff)
+    {
+        if (Partial is { } partial && !ReferenceEquals(partial.Diff, diff))
+        {
+            Choose(diff, partial.Following(diff));
+        }
+        if (Partial is { } chosen)
+        {
+            HashSet<DiffHunk> taken = [.. chosen.Hunks];
+            return [.. diff.Hunks.Select(taken.Contains)];
+        }
+        return [.. diff.Hunks.Select(_ => IsChosen)];
+    }
+
+    public void ChooseHunk(FileDiff diff, int index, bool take)
+    {
+        bool[] chosen = ChosenIn(diff);
+        chosen[index] = take;
+        Choose(diff, [.. diff.Hunks.Where((_, i) => chosen[i])]);
+    }
+
+    private void Choose(FileDiff diff, IReadOnlyList<DiffHunk> hunks)
+    {
+        IsChosen = hunks.Count > 0;
+        if (hunks.Count > 0 && hunks.Count < diff.Hunks.Count)
+        {
+            Partial = new PartialCommit(diff, hunks, Change.From);
+            Raise(nameof(CheckState));
+        }
+    }
+
+    public bool IsChosen
+    {
+        get => isChosen;
+        set
+        {
+            Partial = null;
+            Set(ref isChosen, value);
+            Raise(nameof(CheckState));
+        }
+    }
+}
+
+/// <summary>A group of the Commit window's files: Changes, or Unversioned Files, and whether every one of them goes in
+/// (true), none (false) or some (null).</summary>
+public sealed class CommitGroup(string name, IReadOnlyList<CommitRow> rows) : Observable
+{
+    private bool? isChosen = State(rows);
+
+    public string Name { get; } = name;
+    public IReadOnlyList<CommitRow> Rows { get; } = rows;
+
+    public bool? IsChosen
+    {
+        get => isChosen;
+        private set => Set(ref isChosen, value);
+    }
+
+    /// <summary>Works out <see cref="IsChosen"/> again, after a row's box changed.</summary>
+    internal void Update() => IsChosen = State(Rows);
+
+    private static bool? State(IReadOnlyList<CommitRow> rows)
+    {
+        int count = rows.Count(r => r.CheckState != false);
+        return count == 0 ? false : count == rows.Count(r => r.CanChoose) && rows.All(r => r.CheckState != null) ? true : null;
+    }
+}
+
+/// <summary>The Commit window: the changed files under Changes and the new ones under Unversioned Files, each with a box
+/// for whether it goes in (changes are in and new files out until chosen), and files in conflict above them under Merge
+/// Conflicts, with its Resolve link and no box; Amend, Sign-off (kept for the folder) and whether this commit is signed
+/// and with which key (git's config, turned on or off for one commit; Commit Signing… sets it up), then the message (a
+/// merge's own message while one is under way); Commit and Commit and Push. Double-click opens a file's diff, or a
+/// conflicted file's merge; Rollback puts the chosen ones back. In a folder of no repository it shows its empty state
+/// alone.</summary>
+public sealed class CommitView : DockPanel, IOwnKeys
+{
+    private VcsController vcs;
+    private readonly ObservableCollection<object> rows = [];
+    private readonly Dictionary<string, bool> chosen = [];
+    private readonly ListBox list;
+    private readonly TextBox message;
+    private readonly CheckBox amend;
+    private readonly CheckBox signOff;
+    private readonly CheckBox sign;
+    private readonly TextBlock signWith;
+    private readonly TextBlock unsigned;
+
+    /// <summary>How git's config has commits signed, as last read; whether the person turned Sign over for this commit.</summary>
+    private SigningSetup signing = SigningSetup.None;
+    private bool signTurned;
+    private Git? signingOf;
+    private bool showingSigning;
+    private int signingReads;
+    private readonly Button commit;
+    private readonly Button commitAndPush;
+    private readonly Button rollback;
+    private readonly EmptyState placeholder;
+    private readonly Border form;
+    private readonly StackPanel underWay;
+    private readonly TextBlock underWayText;
+    private readonly Button continueRebase;
+    private readonly Button abort;
+    private string? beforeAmend;
+
+    /// <summary>The merge's message the box was given, taken away again if the merge ends some other way.</summary>
+    private string? prefilled;
+
+    /// <summary>The offer to commit the chosen files' moves first, shown where git would lose one: the box, why, and the
+    /// first commit's message, which the person may change.</summary>
+    private readonly StackPanel movesOffer;
+    private readonly CheckBox movesFirst;
+    private readonly TextBlock movesSaid;
+    private readonly TextBox movesMessage;
+
+    /// <summary>The first commit's message as the window last wrote it, kept until the person types another.</summary>
+    private string movesWritten = string.Empty;
+
+    /// <summary>What the last look for lost moves was of (the status and the chosen files), and how many have begun.</summary>
+    private (IReadOnlyList<FileChange> Changes, string Chosen)? lostOf;
+    private int lostLooks;
+
+    public CommitView(VcsController git)
+    {
+        vcs = git;
+        rollback = ToolButtons.Of(IconKeys.Rollback, "Rollback", RollbackChosenOrSelected);
+        list = new ListBox
+        {
+            Classes = { StyleClasses.Tree },
+            ItemsSource = rows,
+            SelectionMode = SelectionMode.Multiple,
+        };
+        ReusedRows.Use(list, Row);
+        ListMenus.Attach(list, () => list.SelectedItem is not CommitRow chosen ? [] : chosen.Change.Kind is ChangeKind.Conflicted ?
+        [
+            ListMenus.Item("Merge…", "Enter", () => MergeRequested?.Invoke(this, chosen.Change.Path)),
+            ListMenus.Item("Resolve Conflicts…", null, () => ResolveRequested?.Invoke(this, EventArgs.Empty)),
+            ListMenus.Item("Jump to Source", "F4", () => OpenRequested?.Invoke(this, chosen.Change.Path)),
+            new Separator(),
+            ListMenus.Item("Copy Path", null, () => IdeErrors.Observe(ListMenus.CopyAsync(this, chosen.Change.Path))),
+        ] :
+        [
+            ListMenus.Item("Show Diff", "Enter", () => DiffRequested?.Invoke(this, chosen.Change.Path)),
+            ListMenus.Item("Jump to Source", "F4", () => OpenRequested?.Invoke(this, chosen.Change.Path), chosen.Change.Kind is not ChangeKind.Deleted),
+            new Separator(),
+            Greyed(ListMenus.Item("Rollback…", null, () => RollbackRequested?.Invoke(this, [.. ChosenChanges(chosen)])), vcs.WhyNotRollback([.. ChosenChanges(chosen)])),
+            ListMenus.Item("Delete…", null, () => DeleteRequested?.Invoke(this, chosen.Change.Path), chosen.Change.Kind is not ChangeKind.Deleted),
+            ListMenus.Item("Add to .gitignore", null, () => IgnoreRequested?.Invoke(this, chosen.Change.Path), chosen.Change.Kind is ChangeKind.Unversioned),
+            new Separator(),
+            ListMenus.Item("Copy Path", null, () => IdeErrors.Observe(ListMenus.CopyAsync(this, chosen.Change.Path))),
+        ]);
+        list.SelectionChanged += (_, _) =>
+        {
+            if (list.SelectedItems is [CommitRow { Change.Kind: not ChangeKind.Conflicted } chosen])
+            {
+                ChoiceMoved?.Invoke(this, chosen.Change.Path);
+            }
+            UpdateRollback();
+        };
+        // A double click and Enter show the diff, F4 the file, Space flips the chosen rows' boxes.
+        ListKeys.Act(list, new ListActs
+        {
+            Open = OpenChosen,
+            Source = () =>
+            {
+                if (list.SelectedItem is CommitRow { Change.Kind: not ChangeKind.Deleted } shown)
+                {
+                    OpenRequested?.Invoke(this, shown.Change.Path);
+                }
+            },
+            Keys = e =>
+            {
+                if (e.Key == Key.Space && e.KeyModifiers == KeyModifiers.None)
+                {
+                    CommitRow[] selected = [.. list.SelectedItems?.OfType<CommitRow>().Where(r => r.CanChoose) ?? []];
+                    Choose(selected, !selected.All(r => r.IsChosen));
+                    return true;
+                }
+                bool diff = AppActions.Presses(AppActions.ShowDiff, e);
+                if (diff)
+                {
+                    OpenChosen();
+                }
+                return diff;
+            },
+        });
+        placeholder = new EmptyState();
+        placeholder.ActionRequested += (_, action) => ActionRequested?.Invoke(this, action);
+
+        // What git is in the middle of, said over Amend until it ends, its conflicts resolved or a rebase stopped at an edit.
+        underWayText = new TextBlock { TextWrapping = TextWrapping.Wrap };
+        continueRebase = new Button { Classes = { StyleClasses.Link }, Content = "Continue Rebase" };
+        continueRebase.Click += (_, _) => ActionRequested?.Invoke(this, AppActions.ContinueRebase);
+        abort = new Button { Classes = { StyleClasses.Link } };
+        abort.Click += (_, _) =>
+        {
+            if (AbortOf(vcs.Merge.Operation) is { } action)
+            {
+                ActionRequested?.Invoke(this, action.Id);
+            }
+        };
+        StackPanel links = new() { Orientation = Orientation.Horizontal, Spacing = 12, Children = { continueRebase, abort } };
+        underWay = new StackPanel { Margin = new Thickness(10, 6, 10, 0), Spacing = 2, IsVisible = false, Children = { underWayText, links } };
+
+        amend = new CheckBox { Content = "Amend" };
+        amend.IsCheckedChanged += (_, _) => IdeErrors.Observe(AmendChangedAsync());
+        signOff = new CheckBox { Content = "Sign-off" };
+        ToolTip.SetTip(signOff, "Adds a Signed-off-by line with your name and email to the message (git commit --signoff), kept for this folder");
+        signOff.IsCheckedChanged += (_, _) =>
+        {
+            if (!showingSigning)
+            {
+                vcs.SignOff = signOff.IsChecked == true;
+            }
+        };
+        signWith = new TextBlock { Text = "Sign" };
+        sign = new CheckBox { Content = signWith };
+        sign.IsCheckedChanged += (_, _) =>
+        {
+            if (!showingSigning)
+            {
+                signTurned = true;
+            }
+        };
+        Button setUp = new() { Classes = { StyleClasses.Link }, Content = SigningFailure.SetUp, VerticalAlignment = VerticalAlignment.Center };
+        setUp.Click += (_, _) => ActionRequested?.Invoke(this, AppActions.CommitSigning);
+        WrapPanel options = new() { Margin = new Thickness(10, 4, 10, 0), ItemSpacing = 16, Children = { amend, signOff, sign, setUp } };
+        unsigned = new TextBlock { TextWrapping = TextWrapping.Wrap, IsVisible = false, Margin = new Thickness(10, 2, 10, 0) };
+        unsigned.Classes.Add(StyleClasses.Error);
+        movesFirst = new CheckBox { Content = MovesFirstTitle, IsChecked = true };
+        movesSaid = MutedText.Wrapped(string.Empty);
+        movesMessage = new TextBox { Classes = { StyleClasses.Search }, PlaceholderText = "Message of the moves' commit" };
+        movesFirst.IsCheckedChanged += (_, _) => movesMessage.IsEnabled = movesFirst.IsChecked == true;
+        movesOffer = new StackPanel { Margin = new Thickness(10, 6, 10, 0), Spacing = 4, IsVisible = false, Children = { movesSaid, movesFirst, movesMessage } };
+        message = new TextBox
+        {
+            Classes = { StyleClasses.Search },
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            PlaceholderText = "Commit Message",
+            MinHeight = 90,
+            MaxHeight = 220,
+            Margin = new Thickness(10, 4, 10, 8),
+            VerticalContentAlignment = VerticalAlignment.Top,
+        };
+        message.TextChanged += (_, _) => UpdateButtons();
+        // Ctrl+Enter (Cmd+Enter on the Mac) commits, seen as it tunnels: the box takes any Enter as a new line first.
+        message.AddHandler(KeyDownEvent, (_, e) =>
+        {
+            if (e.Key == Key.Enter && e.KeyModifiers == Keystroke.Command)
+            {
+                IdeErrors.Observe(CommitAsync(push: false));
+                e.Handled = true;
+            }
+        }, RoutingStrategies.Tunnel);
+        commit = new Button { Content = "Commit", Classes = { StyleClasses.Primary } };
+        commit.Click += (_, _) => IdeErrors.Observe(CommitAsync(push: false));
+        commitAndPush = new Button { Content = "Commit and Push…" };
+        commitAndPush.Click += (_, _) => IdeErrors.Observe(CommitAsync(push: true));
+        StackPanel buttons = new()
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Margin = new Thickness(10, 0, 10, 10),
+            Children = { commit, commitAndPush },
+        };
+        // A window shorter than the form scrolls it, so Commit is still reached sharing a column with another window.
+        form = new Border
+        {
+            [DockProperty] = Dock.Bottom,
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Child = new ScrollViewer { Content = new StackPanel { Children = { underWay, options, unsigned, movesOffer, message, buttons } } },
+        };
+        form.Bind(Border.BorderBrushProperty, form.GetResourceObservable(TokenKeys.Divider));
+
+        StackPanel tools = new()
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 2,
+            Margin = new Thickness(6, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                ToolButtons.Of(AppActions.CommitRefresh, IconKeys.Rerun, "Refresh", action => ActionRequested?.Invoke(this, action)),
+                rollback,
+                ToolButtons.Of(AppActions.ShowDiff, IconKeys.Diff, "Show Diff", _ =>
+                {
+                    if (list.SelectedItem is CommitRow row)
+                    {
+                        DiffRequested?.Invoke(this, row.Change.Path);
+                    }
+                }),
+            },
+        };
+        Border top = ToolBars.Top(tools);
+
+        Children.Add(top);
+        Children.Add(form);
+        Children.Add(new Panel { Children = { list, placeholder } });
+        vcs.Changed += OnChanged;
+        vcs.BusyChanged += OnBusyChanged;
+        vcs.Refreshed += OnSigning;
+        vcs.SigningChanged += OnSigning;
+        Fill();
+        ShowSigning();
+    }
+
+    /// <summary>Lists another folder's changes from now on, its session's working tree in place of the last's.</summary>
+    public void Bind(VcsController next)
+    {
+        vcs.Changed -= OnChanged;
+        vcs.BusyChanged -= OnBusyChanged;
+        vcs.Refreshed -= OnSigning;
+        vcs.SigningChanged -= OnSigning;
+        vcs = next;
+        vcs.Changed += OnChanged;
+        vcs.BusyChanged += OnBusyChanged;
+        vcs.Refreshed += OnSigning;
+        vcs.SigningChanged += OnSigning;
+        signTurned = false;
+        unsigned.IsVisible = false;
+        Fill();
+        ShowSigning();
+    }
+
+    private void OnSigning(object? sender, EventArgs e) => ShowSigning();
+
+    /// <summary>Reads git's config for how commits are signed and says it: Sign with the key, checked as the config has it
+    /// unless the person turned it over for this commit; off with no key to sign with. Sign-off as the folder keeps it.</summary>
+    private void ShowSigning() => IdeErrors.Observe(ShowSigningAsync());
+
+    private async Task ShowSigningAsync()
+    {
+        int read = ++signingReads;
+        signingOf = vcs.Repository;
+        SigningSetup setup = await vcs.SigningAsync();
+        if (read != signingReads)
+        {
+            return;
+        }
+        signing = setup;
+        showingSigning = true;
+        try
+        {
+            signOff.IsChecked = vcs.SignOff;
+            sign.IsEnabled = setup.CanSign && vcs.Repository is not null;
+            signWith.Text = setup.CanSign ? $"Sign with {setup.KeyShown}" : setup.IsSetUp ? "Sign: no key is set to sign with" : "Sign: not set up";
+            if (!signTurned || !sign.IsEnabled)
+            {
+                sign.IsChecked = setup.CanSign && setup.Signs;
+                signTurned = false;
+            }
+        }
+        finally
+        {
+            showingSigning = false;
+        }
+    }
+
+    /// <summary>How this commit is to be signed and signed off, as the window says it: Sign as git's config has it is left
+    /// to the config.</summary>
+    public CommitSigning Signing
+    {
+        get
+        {
+            bool signs = sign.IsChecked == true;
+            return new CommitSigning(signs == (signing.CanSign && signing.Signs) ? null : signs, signOff.IsChecked == true);
+        }
+    }
+
+    /// <summary>Whether this commit is to be signed.</summary>
+    public bool Sign
+    {
+        get => sign.IsChecked == true;
+        set => sign.IsChecked = value;
+    }
+
+    /// <summary>The Sign box's words: the key it signs with.</summary>
+    public string SignWith => signWith.Text ?? string.Empty;
+
+    /// <summary>Whether Sign can be turned on: git has a key to sign with.</summary>
+    public bool CanSign => sign.IsEnabled;
+
+    public bool SignOff
+    {
+        get => signOff.IsChecked == true;
+        set => signOff.IsChecked = value;
+    }
+
+    /// <summary>Why the last commit was not made for its signing, as the window says it under the signing line; null
+    /// while it says none.</summary>
+    public string? Unsigned => unsigned.IsVisible ? unsigned.Text : null;
+
+    private void OnChanged(object? sender, EventArgs e)
+    {
+        Fill();
+        // The folder's working tree found, or another taken: how it signs is read for it.
+        if (vcs.Repository != signingOf)
+        {
+            ShowSigning();
+        }
+    }
+
+    /// <summary>Amend checked starts from the last commit's message, unless something is typed before git answers or Amend
+    /// is unchecked by then, and unchecked gives back what was typed.</summary>
+    private async Task AmendChangedAsync()
+    {
+        if (amend.IsChecked == true)
+        {
+            string? typed = message.Text;
+            beforeAmend = typed;
+            if (await vcs.LastMessageAsync() is { } last && (typed ?? string.Empty).Trim().Length == 0 && amend.IsChecked == true && message.Text == typed)
+            {
+                message.Text = last;
+            }
+        }
+        else if (beforeAmend is not null)
+        {
+            message.Text = beforeAmend;
+            beforeAmend = null;
+        }
+        UpdateButtons();
+        LookForLostMoves();
+    }
+
+    private void OnBusyChanged(object? sender, EventArgs e) => UpdateButtons();
+
+    /// <summary>The Merge Conflicts group's Resolve link: the Conflicts dialog.</summary>
+    public event EventHandler? ResolveRequested;
+
+    /// <summary>Asks the person to agree (a title, the question, the button that agrees).</summary>
+    public Func<string, string, string, Task<bool>>? Confirm { get; set; }
+
+    /// <summary>A conflicted file to merge, double-clicked.</summary>
+    public event EventHandler<string>? MergeRequested;
+
+    /// <summary>Show Diff's keys, as the Commit window takes them (<see cref="AppActions.KeysIn"/>), ahead of what they run
+    /// elsewhere while a file is chosen.</summary>
+    public bool TakesKey(KeyEventArgs e) => list.IsKeyboardFocusWithin && list.SelectedItem is CommitRow && AppActions.Presses(AppActions.ShowDiff, e);
+
+    /// <summary>What a double-click or Enter opens: a conflicted file's merge, any other file's diff.</summary>
+    private void OpenChosen()
+    {
+        if (list.SelectedItem is CommitRow row)
+        {
+            Open(row.Change);
+        }
+    }
+
+    private void Open(FileChange change)
+    {
+        if (change.Kind is ChangeKind.Conflicted)
+        {
+            MergeRequested?.Invoke(this, change.Path);
+        }
+        else
+        {
+            DiffRequested?.Invoke(this, change.Path);
+        }
+    }
+
+    /// <summary>One changed file chosen in the list, which a diff following the choice shows (<see cref="Vcs.DiffTab.Follows"/>).</summary>
+    public event EventHandler<string>? ChoiceMoved;
+
+    /// <summary>A file to open in the editor.</summary>
+    public event EventHandler<string>? OpenRequested;
+
+    /// <summary>One of the window's actions asked for by its button.</summary>
+    public event EventHandler<string>? ActionRequested;
+
+    /// <summary>A changed file to move to the Trash, from its menu.</summary>
+    public event EventHandler<string>? DeleteRequested;
+
+    /// <summary>An unversioned file to leave out of Git for good, by its path in the repository's .gitignore.</summary>
+    public event EventHandler<string>? IgnoreRequested;
+
+    /// <summary>The rows chosen with the one the menu is for: every one when it is among them, else it alone.</summary>
+    private IEnumerable<FileChange> ChosenChanges(CommitRow row)
+    {
+        List<CommitRow> chosen = [.. list.SelectedItems?.OfType<CommitRow>() ?? []];
+        return chosen.Contains(row) ? chosen.Select(r => r.Change) : [row.Change];
+    }
+
+    /// <summary>A file's diff against the last commit, to show.</summary>
+    public event EventHandler<string>? DiffRequested;
+
+    /// <summary>Rollback pressed: the files to put back, once the person has said so.</summary>
+    public event EventHandler<IReadOnlyList<FileChange>>? RollbackRequested;
+
+    /// <summary>Rollback pressed where it puts nothing back: why.</summary>
+    public event EventHandler<string>? RollbackRefused;
+
+    /// <summary>The files and the groups over them, as the window lists them.</summary>
+    public IReadOnlyList<object> Rows => rows;
+
+    /// <summary>The files that go into the next commit.</summary>
+    public IReadOnlyList<FileChange> Chosen => [.. rows.OfType<CommitRow>().Where(r => r.IsChosen).Select(r => r.Change)];
+
+    /// <summary>Gives a diff of a changed file against the last commit a box beside each change, for whether it goes in;
+    /// none while a merge's commit, which takes files whole, is under way.</summary>
+    public void ConfigureDiff(string path, DiffView view)
+    {
+        if (vcs.Merge.CommitsWhole || rows.OfType<CommitRow>().FirstOrDefault(r => PathNames.Same(r.Change.Path, path)) is not { CanChoose: true } row
+            || row.Change.Kind is not (ChangeKind.Modified or ChangeKind.Renamed) || row.Change.Mode is not null || row.Change.Submodule != SubmoduleChange.None)
+        {
+            return;
+        }
+        view.ChooseForCommit(row.ChosenIn, row.ChooseHunk);
+        row.FollowWhileShown(view, (_, _) => view.RefreshCommitChoices());
+    }
+
+    public string Message
+    {
+        get => message.Text ?? string.Empty;
+        set => message.Text = value;
+    }
+
+    public bool Amend
+    {
+        get => amend.IsChecked == true;
+        set => amend.IsChecked = value;
+    }
+
+    /// <summary>Puts the keys in the message (the Commit shortcut), once laid out: the form's scroller places the message in
+    /// the tree only at its first layout, and a window just shown has had none.</summary>
+    public void FocusMessage() => Avalonia.Threading.Dispatcher.UIThread.Post(() => message.Focus(), Avalonia.Threading.DispatcherPriority.Loaded);
+
+    /// <summary>Commits the chosen files with the message (pushing after when asked), then empties the message. Whether the
+    /// commit was made, whatever came of the push.</summary>
+    public async Task<bool> CommitAsync(bool push)
+    {
+        // A merge's commit takes in every change but those left out, which stay changes, once the person agrees.
+        bool excluding = vcs.Merge.CommitsWhole && !Amend && vcs.Conflicts.Count == 0
+            && rows.OfType<CommitRow>().Any(r => r.CanChoose && r.CheckState != true && r.Change.Kind is not ChangeKind.Unversioned);
+        if (excluding && Confirm is { } ask
+            && !await ask("Changes Excluded from Merge Commit", "Are you sure you want to exclude these changed files from merge commit?", "Commit"))
+        {
+            return false;
+        }
+        Dictionary<string, PartialCommit> partial = Partial();
+        string? first = movesOffer.IsVisible && movesFirst.IsChecked == true && !Amend
+            ? (movesMessage.Text is { } typed && typed.Trim().Length > 0 ? typed : movesWritten) : null;
+        CommitResult made = await vcs.CommitAsync(Chosen, Message, Amend, push, signing: Signing, partial: partial, movesFirst: first);
+        bool notSigned = !made.Commit.Succeeded && made.Commit.Message.StartsWith(SigningFailure.Unsigned, StringComparison.Ordinal);
+        unsigned.Text = notSigned ? made.Commit.Message : null;
+        unsigned.IsVisible = notSigned;
+        if (!made.Commit.Succeeded)
+        {
+            return false;
+        }
+        foreach (CommitRow row in rows.OfType<CommitRow>().Where(r => partial.TryGetValue(r.Change.Path, out PartialCommit? submitted) && ReferenceEquals(r.Partial, submitted)))
+        {
+            row.IsChosen = false;
+        }
+        beforeAmend = null;
+        amend.IsChecked = false;
+        message.Text = string.Empty;
+        signTurned = false;
+        ShowSigning();
+        return true;
+    }
+
+    private Dictionary<string, PartialCommit> Partial() => rows.OfType<CommitRow>().Where(r => r.IsChosen && r.Partial is not null)
+        .ToDictionary(r => r.Change.Path, r => r.Partial!, PathNames.Comparer);
+
+    /// <summary>The words of the box that commits the moves first.</summary>
+    public const string MovesFirstTitle = "Commit the moves first, then the edits";
+
+    /// <summary>Whether the window offers to commit the chosen files' moves first, as git would lose one of them.</summary>
+    public bool OffersMovesFirst => movesOffer.IsVisible;
+
+    /// <summary>Why it offers to commit the moves first, as it says it; null while it offers nothing.</summary>
+    public string? MovesSaid => movesOffer.IsVisible ? movesSaid.Text : null;
+
+    /// <summary>Whether the moves go first, in a commit of their own, where the window offers it.</summary>
+    public bool MovesFirst
+    {
+        get => movesFirst.IsChecked == true;
+        set => movesFirst.IsChecked = value;
+    }
+
+    /// <summary>The message of the moves' own commit, as written in its box.</summary>
+    public string MovesMessage
+    {
+        get => movesMessage.Text ?? string.Empty;
+        set => movesMessage.Text = value;
+    }
+
+    /// <summary>Looks again, where what it was of changed, for chosen moves git would lose committed with their edits, off
+    /// the window's thread, and offers to commit the moves first where it finds one; the latest look's answer wins.</summary>
+    private void LookForLostMoves()
+    {
+        IReadOnlyList<FileChange> chosen = Amend || vcs.Merge.CommitsWhole ? [] : Chosen;
+        string moved = string.Join('\0', chosen.Where(c => c.From is not null).Select(c => $"{c.From}\0{c.Path}"));
+        if (lostOf is { } last && ReferenceEquals(last.Changes, vcs.Changes) && last.Chosen == moved)
+        {
+            return;
+        }
+        lostOf = (vcs.Changes, moved);
+        IdeErrors.Observe(LookForLostMovesAsync(chosen, ++lostLooks));
+    }
+
+    private async Task LookForLostMovesAsync(IReadOnlyList<FileChange> chosen, int look)
+    {
+        IReadOnlyList<FileChange> lost = chosen.Any(c => c.From is not null) ? await vcs.LostMovesAsync(chosen, Partial()) : [];
+        if (look != lostLooks)
+        {
+            return;
+        }
+        movesOffer.IsVisible = lost.Count > 0;
+        if (lost.Count == 0)
+        {
+            return;
+        }
+        movesSaid.Text = lost is [{ } one]
+            ? $"Committed with its edits, {one.Name} would no longer be seen by Git as {Moved(one)}: too much of it changed. Committing the moves first, on their own, keeps its history."
+            : $"Committed with their edits, {Plural.Of(lost.Count, "moved file")} would no longer be seen by Git as moved: too much of them changed. Committing the moves first, on their own, keeps their history.";
+        List<FileChange> moves = [.. chosen.Where(c => c.From is not null && !Partial().ContainsKey(c.Path))];
+        string written = moves is [{ } only] ? $"{(InPlace(only) ? "Rename" : "Move")} {Path.GetFileName(only.From)} to {(InPlace(only) ? only.Name : Shown(only.Path))}"
+            : $"{(moves.All(InPlace) ? "Rename" : "Move")} {Plural.Of(moves.Count, "file")}";
+        // The window's own words follow the moves; what the person typed stays.
+        if (MovesMessage.Length == 0 || MovesMessage == movesWritten)
+        {
+            MovesMessage = written;
+        }
+        movesWritten = written;
+
+        string Moved(FileChange change) => InPlace(change) ? $"renamed from {Path.GetFileName(change.From)}" : $"moved from {Shown(change.From!)}";
+        static bool InPlace(FileChange change) => Path.GetDirectoryName(change.From) == Path.GetDirectoryName(change.Path);
+        string Shown(string path) => vcs.Repository is { } repository ? repository.Relative(path) : Path.GetFileName(path);
+    }
+
+    /// <summary>Rollback of the files selected, else of those chosen: refused where a chosen file goes in only in part, as
+    /// a rollback puts back whole files, or where git cannot write one out here (<see cref="RollbackOf"/>).</summary>
+    private void RollbackChosenOrSelected()
+    {
+        (IReadOnlyList<FileChange> changes, string? refused) = RollbackOf();
+        if (refused is not null)
+        {
+            RollbackRefused?.Invoke(this, refused);
+            return;
+        }
+        RollbackRequested?.Invoke(this, changes);
+    }
+
+    /// <summary>What Rollback puts back, the files selected else those chosen, or why it puts back none of them.</summary>
+    private (IReadOnlyList<FileChange> Changes, string? Refused) RollbackOf()
+    {
+        if (list.SelectedItems?.OfType<CommitRow>().Any() != true && rows.OfType<CommitRow>().FirstOrDefault(r => r.Partial is not null) is { } part)
+        {
+            return ([], $"Rollback puts back whole files, and only some changes to {part.Change.Name} are chosen: select the files to roll back");
+        }
+        IReadOnlyList<FileChange> changes = RollbackTargets();
+        return (changes, vcs.WhyNotRollback(changes));
+    }
+
+    private IReadOnlyList<FileChange> RollbackTargets() =>
+        list.SelectedItems?.OfType<CommitRow>().ToArray() is { Length: > 0 } selected ? [.. selected.Select(r => r.Change)] : Chosen;
+
+    /// <summary>Rollback greyed where it would put back a file git cannot write out here, its tip saying why.</summary>
+    private void UpdateRollback() => ToolButtons.Grey(rollback, vcs.WhyNotRollback(RollbackTargets()));
+
+    /// <summary>A menu item greyed for <paramref name="why"/>, which its tip says.</summary>
+    private static MenuItem Greyed(MenuItem item, string? why)
+    {
+        item.IsEnabled = item.IsEnabled && why is null;
+        ToolTip.SetTip(item, why);
+        return item;
+    }
+
+    /// <summary>Lists the status again in place: a file still changed as it was keeps its row, its box and whether it is
+    /// selected, so a refresh with nothing new (the window coming to the front, a save) leaves the list as it was, and
+    /// what Rollback acts on with it. A file changed another way (modified, now deleted) is selected again by path.</summary>
+    private void Fill()
+    {
+        HashSet<string> selected = [.. list.SelectedItems?.OfType<CommitRow>().Select(r => r.Change.Path) ?? []];
+        Dictionary<FileChange, CommitRow> kept = [];
+        foreach (CommitRow row in rows.OfType<CommitRow>())
+        {
+            // A row with no box (a conflicted file): once it has one, it is chosen as any change is.
+            if (row.CanChoose)
+            {
+                chosen[row.Change.Path] = row.Partial is null && row.IsChosen;
+            }
+            kept.TryAdd(row.Change, row);
+        }
+        IReadOnlyList<FileChange> changes = vcs.Changes;
+        List<object> wanted = [];
+        Group(MergeConflicts, [.. changes.Where(c => c.Kind is ChangeKind.Conflicted).OrderBy(c => c.Path, StringComparer.Ordinal).Select(c => Row(c, false))]);
+        Group("Changes", [.. changes.Where(c => c.Kind is not (ChangeKind.Unversioned or ChangeKind.Conflicted)).OrderBy(c => c.Path, StringComparer.Ordinal).Select(c => Row(c, true))]);
+        Group("Unversioned Files", [.. changes.Where(c => c.Kind is ChangeKind.Unversioned).OrderBy(c => c.Path, StringComparer.Ordinal).Select(c => Row(c, false))]);
+
+        // What went is taken out and what came put in at its place; rows kept are in the same order in both lists.
+        HashSet<object> keep = new(wanted, ReferenceEqualityComparer.Instance);
+        for (int i = rows.Count - 1; i >= 0; i--)
+        {
+            if (!keep.Contains(rows[i]))
+            {
+                rows.RemoveAt(i);
+            }
+        }
+        for (int i = 0; i < wanted.Count; i++)
+        {
+            if (i == rows.Count || !ReferenceEquals(rows[i], wanted[i]))
+            {
+                rows.Insert(i, wanted[i]);
+            }
+        }
+        for (int i = 0; i < rows.Count; i++)
+        {
+            if (rows[i] is CommitRow row && selected.Contains(row.Change.Path) && !list.Selection.IsSelected(i))
+            {
+                list.Selection.Select(i);
+            }
+        }
+        placeholder.Text = vcs.Repository is null ? vcs.NoRepository : "No changes";
+        bool creates = vcs.Repository is null && vcs.WhyNotCreate is null;
+        placeholder.Offer(creates ? AppActions.CreateRepository : null, VcsController.CreateRepository);
+        placeholder.IsVisible = rows.Count == 0;
+        // Nothing of the form can be used before there is a repository, and the window is its empty state's.
+        form.IsVisible = vcs.Repository is not null;
+        underWay.IsVisible = vcs.Merge.UnderWay is not null;
+        underWayText.Text = vcs.Merge.UnderWay;
+        continueRebase.IsVisible = vcs.Merge.Operation is MergeOperation.Rebase;
+        abort.Content = AbortOf(vcs.Merge.Operation)?.Title;
+        // A merge under way gives the commit that finishes it the message git wrote for it, until it ends.
+        string? merging = vcs.Merge.CommitsWhole ? vcs.Merge.Message : null;
+        if (merging is not null && Message.Trim().Length == 0 && merging != prefilled)
+        {
+            Message = merging;
+            prefilled = merging;
+        }
+        else if (merging is null && prefilled is not null)
+        {
+            if (Message == prefilled)
+            {
+                Message = string.Empty;
+            }
+            prefilled = null;
+        }
+        UpdateButtons();
+        LookForLostMoves();
+
+        CommitRow Row(FileChange change, bool byDefault)
+        {
+            if (kept.Remove(change, out CommitRow? same))
+            {
+                return same;
+            }
+            // A file in conflict never goes into a commit as it is, nor a submodule with nothing to commit here.
+            CommitRow row = new(change, chosen.TryGetValue(change.Path, out bool was) ? was : byDefault);
+            row.PropertyChanged += (_, _) =>
+            {
+                if (!choosing)
+                {
+                    Recount();
+                }
+            };
+            return row;
+        }
+
+        void Group(string name, CommitRow[] members)
+        {
+            if (members.Length == 0)
+            {
+                return;
+            }
+            wanted.Add(rows.OfType<CommitGroup>().FirstOrDefault(g => g.Name == name && g.Rows.SequenceEqual(members)) ?? new CommitGroup(name, members));
+            wanted.AddRange(members);
+        }
+    }
+
+    /// <summary>Whether rows' boxes are being set together, so no row's change counts the groups until all have.</summary>
+    private bool choosing;
+
+    /// <summary>How many rows the groups' counts have looked at, a measure of what a box costs: a group ticked whole is
+    /// counted once, however many rows it has.</summary>
+    public long RowsCounted { get; private set; }
+
+    /// <summary>Sets rows' boxes as one change: the groups are counted once, after them all.</summary>
+    private void Choose(IEnumerable<CommitRow> chosen, bool to)
+    {
+        choosing = true;
+        try
+        {
+            foreach (CommitRow row in chosen)
+            {
+                row.IsChosen = to;
+            }
+        }
+        finally
+        {
+            choosing = false;
+        }
+        Recount();
+    }
+
+    /// <summary>Each group's box and the buttons follow the rows' boxes.</summary>
+    private void Recount()
+    {
+        foreach (CommitGroup group in rows.OfType<CommitGroup>())
+        {
+            RowsCounted += group.Rows.Count;
+            group.Update();
+        }
+        UpdateButtons();
+        LookForLostMoves();
+    }
+
+    /// <summary>Commit and Commit and Push… greyed while no commit can be made (and the push while none can go), their tips
+    /// saying why as a press would.</summary>
+    private void UpdateButtons()
+    {
+        string? why = vcs.Repository is null ? vcs.NoRepository : vcs.WhyNotCommit(rows.OfType<CommitGroup>().Any(g => g.IsChosen != false), Message, Amend);
+        foreach (Button button in (Button[])[commit, commitAndPush])
+        {
+            string? refused = button == commitAndPush ? why ?? vcs.WhyNotRemote : why;
+            ToolButtons.Grey(button, refused);
+            // Off while a commit (or a stash, a rollback) runs, so a second press cannot start another on git's index lock.
+            button.IsEnabled = refused is null && !vcs.IsBusy;
+        }
+        UpdateRollback();
+    }
+
+    private const string MergeConflicts = "Merge Conflicts";
+
+    /// <summary>What git is in the middle of as the Commit window says it; null with nothing under way.</summary>
+    public string? UnderWay => underWay.IsVisible ? underWayText.Text : null;
+
+    /// <summary>The Abort action of what is under way, by its id and title; null with nothing to abort.</summary>
+    private static (string Id, string Title)? AbortOf(MergeOperation operation) => operation switch
+    {
+        MergeOperation.Rebase => (AppActions.AbortRebase, "Abort Rebase"),
+        MergeOperation.Merge => (AppActions.AbortMerge, "Abort Merge"),
+        MergeOperation.CherryPick => (AppActions.AbortCherryPick, "Abort Cherry-Pick"),
+        MergeOperation.Revert => (AppActions.AbortRevert, "Abort Revert"),
+        _ => null,
+    };
+
+    /// <summary>A row for whichever group or file the list hands its container: a group's box, name and count (Merge
+    /// Conflicts' with its Resolve link and no box), or a file's box and line (a conflicted file's with no box: it is
+    /// resolved first). A box follows its item while shown, and a click on it chooses the item it shows.</summary>
+    private Control Row()
+    {
+        CheckBox groupBox = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 2, 0) };
+        TextBlock groupName = new() { FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+        TextBlock count = new()
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+            FontSize = 12,
+        };
+        count.Classes.Add(StyleClasses.Muted);
+        Button resolve = new() { Classes = { StyleClasses.Link }, Content = "Resolve", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) };
+        resolve.Click += (_, _) => ResolveRequested?.Invoke(this, EventArgs.Empty);
+        StackPanel groupLine = new() { Orientation = Orientation.Horizontal, Height = ListRow.Height, Children = { groupBox, groupName, count, resolve } };
+        CheckBox fileBox = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(22, 0, 2, 0) };
+        ChangedFileRow shown = new() { Line = { Margin = default } };
+        DockPanel.SetDock(fileBox, Dock.Left);
+        DockPanel fileLine = new() { Height = ListRow.Height, Children = { fileBox, shown.Line } };
+        Panel row = new() { Children = { groupLine, fileLine } };
+        bool setting = false;
+        string? groupColour = null;
+        groupBox.IsCheckedChanged += (_, _) =>
+        {
+            if (setting || row.DataContext is not CommitGroup group)
+            {
+                return;
+            }
+            Choose(group.Rows.Where(r => r.CanChoose), groupBox.IsChecked != false);
+        };
+        fileBox.IsCheckedChanged += (_, _) =>
+        {
+            if (!setting && row.DataContext is CommitRow file)
+            {
+                file.IsChosen = fileBox.IsChecked == true;
+            }
+        };
+        return row.Showing<object>(item =>
+        {
+            setting = true;
+            groupLine.IsVisible = item is CommitGroup;
+            fileLine.IsVisible = item is CommitRow;
+            if (item is CommitGroup group)
+            {
+                bool conflicts = group.Name == MergeConflicts;
+                // A group none of whose files can be chosen (a submodule's own changes alone) has no box either.
+                bool boxed = !conflicts && group.Rows.Any(r => r.CanChoose);
+                groupBox.IsVisible = boxed;
+                groupBox.IsChecked = group.IsChosen;
+                groupName.Text = group.Name;
+                groupName.Margin = new Thickness(boxed ? 0 : 26, 0, 0, 0);
+                groupName.Resource(TextBlock.ForegroundProperty, ref groupColour, conflicts ? TokenKeys.Vcs_File_Conflicted : null);
+                count.Text = Core.Plural.Of(group.Rows.Count, "file");
+                resolve.IsVisible = conflicts;
+            }
+            else if (item is CommitRow file)
+            {
+                fileBox.IsVisible = file.CanChoose;
+                fileBox.IsChecked = file.CheckState;
+                fileLine.Margin = new Thickness(file.CanChoose ? 0 : 44, 0, 0, 0);
+                ShowFile(shown, file.Change, vcs.Repository);
+            }
+            setting = false;
+        });
+    }
+
+    /// <summary>The files as this window lists them, without their boxes, for Rollback's question to name.</summary>
+    internal static Control FileList(IReadOnlyList<FileChange> changes, Git? repository)
+    {
+        StackPanel lines = new() { Margin = new Thickness(8, 2) };
+        foreach (FileChange change in changes.OrderBy(c => c.Kind is ChangeKind.Unversioned).ThenBy(c => c.Path, StringComparer.Ordinal))
+        {
+            lines.Children.Add(FileLine(change, repository));
+        }
+        return new Border
+        {
+            Classes = { StyleClasses.Framed },
+            MaxHeight = (24 * 8) + 6,
+            Child = new ScrollViewer { Content = lines, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled },
+        };
+    }
+
+    /// <summary>A changed file as the window shows it, with no box (<see cref="ChangedFileRow"/>).</summary>
+    private static Control FileLine(FileChange change, Git? repository)
+    {
+        ChangedFileRow line = new() { Line = { Margin = default } };
+        ShowFile(line, change, repository);
+        return line.Line;
+    }
+
+    /// <summary>Shows a changed file in a line, its folder from the repository's top.</summary>
+    private static void ShowFile(ChangedFileRow line, FileChange change, Git? repository)
+    {
+        // A change with nothing to commit here says why in its folder's place.
+        line.Show(change, repository, change.Uncommittable);
+        ToolTip.SetTip(line.Line, change.From is { } from ? $"{change.Kind}: {from} -> {change.Path}"
+            : change.Uncommittable is { } why ? $"{change.Kind}: {change.Path}\n{why}"
+            : $"{change.Kind}: {change.Path}");
+    }
+}

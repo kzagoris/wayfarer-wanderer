@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using Avalonia.Controls;
-using Avalonia.Layout;
 using WayfarerWanderer.Jvm;
 
 namespace WayfarerWanderer.App;
@@ -11,17 +10,10 @@ public sealed class TestToolWindow : UserControl
 
     public TestToolWindow()
     {
-        Content = new DockPanel
+        Content = new ListBox
         {
-            Children =
-            {
-                Header("Tests"),
-                new ListBox
-                {
-                    ItemsSource = Cases,
-                    DisplayMemberBinding = new Avalonia.Data.Binding(nameof(JunitCase.DisplayName))
-                }
-            }
+            ItemsSource = Cases,
+            DisplayMemberBinding = new Avalonia.Data.Binding(nameof(JunitCase.DisplayName))
         };
     }
 
@@ -37,12 +29,5 @@ public sealed class TestToolWindow : UserControl
         {
             Cases.Add(test);
         }
-    }
-
-    private static Control Header(string text)
-    {
-        TextBlock result = new() { Text = text, Margin = new(8, 6) };
-        DockPanel.SetDock(result, Dock.Top);
-        return result;
     }
 }

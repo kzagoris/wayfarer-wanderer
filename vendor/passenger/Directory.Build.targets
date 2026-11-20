@@ -1,0 +1,21 @@
+<Project>
+  <!-- Every project reference by its full path, made from the project's own folder as MSBuild names it: MSBuild's tasks
+       complete a relative one from the process's folder, symbolic links resolved, so a solution opened through a link
+       would give each referenced project two paths, built twice at once into the same artifacts. -->
+  <ItemGroup>
+    <_ProjectReferenceInFull Include="@(ProjectReference->'%(FullPath)')" />
+    <ProjectReference Remove="@(ProjectReference)" />
+    <ProjectReference Include="@(_ProjectReferenceInFull)" />
+    <_ProjectReferenceInFull Remove="@(_ProjectReferenceInFull)" />
+  </ItemGroup>
+
+  <!-- The references' own references, which the SDK adds at build from the assets file, relative to the project. -->
+  <Target Name="TransitiveProjectReferencesInFull" AfterTargets="IncludeTransitiveProjectReferences">
+    <ItemGroup>
+      <_ProjectReferenceInFull Include="@(ProjectReference->'%(FullPath)')" />
+      <ProjectReference Remove="@(ProjectReference)" />
+      <ProjectReference Include="@(_ProjectReferenceInFull)" />
+      <_ProjectReferenceInFull Remove="@(_ProjectReferenceInFull)" />
+    </ItemGroup>
+  </Target>
+</Project>

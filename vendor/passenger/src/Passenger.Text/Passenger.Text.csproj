@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Text with no UI: the rope, documents, undo, carets and every editing operation, and a file's text as it is stored
+       (its encoding, its .editorconfig, its one way of being saved). -->
+  <PropertyGroup>
+    <RootNamespace>Passenger.Text</RootNamespace>
+    <!-- A save keeps a macOS file's encoding attribute only while it holds, through libc's getxattr and removexattr,
+         generated P/Invokes. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The rope's nodes, whose shape its unit tests hold after every edit. -->
+    <InternalsVisibleTo Include="Passenger.UnitTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- AtomicFile, which every save writes through. -->
+    <ProjectReference Include="../Passenger.Core/Passenger.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Passenger's startup hook (DOTNET_STARTUP_HOOKS) in the test program of a test run it starts, for a project that
+       tests Avalonia headless under xunit v3, never in the project as built: it draws a failing test's windows into the
+       test's result. Carried under testframes/ beside Passenger, its own assembly alone. -->
+  <PropertyGroup>
+    <!-- The oldest .NET an Avalonia 12 test project runs on, so it loads into any of them. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Passenger.TestFrames</RootNamespace>
+    <!-- The calls into libc that OwnEnvironment makes are generated as unsafe code. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Compiled against Avalonia's implementation assemblies: a popup's owner is not in the reference ones the package
+         gives a build. -->
+    <PackageReference Include="Avalonia" GeneratePathProperty="true" ExcludeAssets="compile" />
+    <Reference Include="$(PkgAvalonia)/lib/net8.0/Avalonia.Base.dll" Private="false" />
+    <Reference Include="$(PkgAvalonia)/lib/net8.0/Avalonia.Controls.dll" Private="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The runtime's variables, and the startup hooks' rule (this hook first, taken out as it starts, out of the process's
+         own environment too), as Passenger names them. -->
+    <Compile Include="../Passenger.Core/RuntimeVariables.cs" Link="RuntimeVariables.cs" />
+    <Compile Include="../Passenger.Core/StartupHooks.cs" Link="StartupHooks.cs" />
+    <Compile Include="../Passenger.Core/OwnEnvironment.cs" Link="OwnEnvironment.cs" />
+    <!-- The context the hook runs in, and what it reads of Avalonia's insides, as the inspector reads them. -->
+    <Compile Include="../Passenger.Inspector/AvaloniaHooks.cs" Link="AvaloniaHooks.cs" />
+  </ItemGroup>
+</Project>

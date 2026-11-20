@@ -1,0 +1,27 @@
+namespace Passenger.Core;
+
+/// <summary>A count and its noun: "1 file", "3 files", "0 files", never "1 files" or "2 file"; the words agreeing with it ("1
+/// file is", "0 files are"); and names as a sentence lists them.</summary>
+public static class Plural
+{
+    /// <summary>The count and its noun, the noun's plural <paramref name="many"/> or else the noun with an s.</summary>
+    public static string Of(long count, string one, string? many = null) => $"{count} {Noun(count, one, many)}";
+
+    /// <summary>The noun alone, for a count written its own way ("1,024 objects").</summary>
+    public static string Noun(long count, string one, string? many = null) => count == 1 ? one : many ?? one + "s";
+
+    /// <summary>The noun alone for a measure that may be a fraction ("1 notch", "1.5 notches").</summary>
+    public static string Noun(double count, string one, string? many = null) => count == 1 ? one : many ?? one + "s";
+
+    /// <summary>The word agreeing with a count, its form for one or for any other count: a verb's ("is", "are"; "runs",
+    /// "run"), a pronoun's ("it", "they") or a phrase's ("its default stands", "their defaults stand").</summary>
+    public static string Agreeing(long count, string one, string many) => count == 1 ? one : many;
+
+    /// <summary>Names as a sentence lists them: "Web", "Api and Web", "Api, Web and Worker"; nothing for none.</summary>
+    public static string Listed(IReadOnlyList<string> names) =>
+        names.Count <= 1 ? string.Concat(names) : $"{string.Join(", ", names.Take(names.Count - 1))} and {names[names.Count - 1]}";
+
+    /// <summary>Names as a sentence offers a choice of them: "Web", "Api or Web", "Api, Web or Worker"; nothing for none.</summary>
+    public static string Either(IReadOnlyList<string> names) =>
+        names.Count <= 1 ? string.Concat(names) : $"{string.Join(", ", names.Take(names.Count - 1))} or {names[names.Count - 1]}";
+}

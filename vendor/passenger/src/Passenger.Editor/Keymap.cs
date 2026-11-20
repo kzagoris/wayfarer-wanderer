@@ -1,0 +1,662 @@
+using System.Diagnostics;
+using Avalonia.Input;
+using Passenger.Core;
+
+namespace Passenger.Editor;
+
+/// <summary>One key with its modifiers, written the way Rider's keymap files write them
+/// ("meta shift L", "control alt SLASH"), so a binding reads the same in both places.</summary>
+public readonly record struct Keystroke(Key Key, KeyModifiers Modifiers)
+{
+    public static Keystroke Parse(string text)
+    {
+        KeyModifiers modifiers = KeyModifiers.None;
+        Key? key = null;
+        foreach (string part in text.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (ModifierOf(part) is { } modifier)
+            {
+                modifiers |= modifier;
+            }
+            else
+            {
+                key = key is null ? ParseKey(part) : throw new FormatException($"'{text}' names two keys");
+            }
+        }
+        return new Keystroke(key ?? KeyOf(modifiers) ?? throw new FormatException($"'{text}' names no key"), modifiers);
+    }
+
+    public static Keystroke From(KeyEventArgs e) => new(e.Key, e.KeyModifiers);
+
+    /// <summary>A modifier's key pressed with no other modifier held ("shift" for either Shift), or null for any other
+    /// press: what a double tap is made of.</summary>
+    public static Keystroke? Alone(Key key, KeyModifiers held)
+    {
+        KeyModifiers? modifier = key switch
+        {
+            Key.LeftShift or Key.RightShift => KeyModifiers.Shift,
+            Key.LeftCtrl or Key.RightCtrl => KeyModifiers.Control,
+            Key.LeftAlt or Key.RightAlt => KeyModifiers.Alt,
+            Key.LWin or Key.RWin => KeyModifiers.Meta,
+            _ => null,
+        };
+        return modifier is { } own && (held & ~own) == KeyModifiers.None ? new Keystroke(KeyOf(own)!.Value, own) : null;
+    }
+
+    /// <summary>Whether this is a modifier's key pressed alone (<see cref="Alone"/>).</summary>
+    public bool IsModifierAlone => KeyOf(Modifiers) == Key;
+
+    /// <summary>The key that stands for one modifier pressed alone, or null for none or several.</summary>
+    private static Key? KeyOf(KeyModifiers modifiers) => modifiers switch
+    {
+        KeyModifiers.Shift => Key.LeftShift,
+        KeyModifiers.Control => Key.LeftCtrl,
+        KeyModifiers.Alt => Key.LeftAlt,
+        KeyModifiers.Meta => Key.LWin,
+        _ => null,
+    };
+
+    /// <summary>The modifier a word of the notation names, in any case ("meta", "cmd", "command", "win" or "super";
+    /// "control" or "ctrl"; "alt", "option" or "opt"; "shift"), or null for another word: a keymap's words and an
+    /// agent's alike.</summary>
+    public static KeyModifiers? ModifierOf(string word) => word.ToLowerInvariant() switch
+    {
+        "meta" or "cmd" or "command" or "win" or "super" => KeyModifiers.Meta,
+        "control" or "ctrl" => KeyModifiers.Control,
+        "alt" or "option" or "opt" => KeyModifiers.Alt,
+        "shift" => KeyModifiers.Shift,
+        _ => null,
+    };
+
+    /// <summary>The modifier the system's commands take (<see cref="CommandKey"/>): Cmd on macOS, Ctrl elsewhere.</summary>
+    public static KeyModifiers Command => CommandKey.IsCmd ? KeyModifiers.Meta : KeyModifiers.Control;
+
+    /// <summary>Whether the key is on the numeric keypad (its operators, decimal point and digits), a key of its own
+    /// beside the one that types the same character.</summary>
+    public bool IsOnKeypad => Keypad(Key) is not null;
+
+    /// <summary>For menus and tooltips: ⌘⇧L on macOS, Ctrl+Shift+L elsewhere, a key named as Rider's keymaps name it
+    /// (the Mac symbols for Return, Escape, Tab and the keys around them), and every keypad key as they name the
+    /// keypad's / (NumPad /, ⌨/ on macOS), so none reads as a main key.</summary>
+    public string Display()
+    {
+        bool mac = OperatingSystem.IsMacOS();
+        string key = Key switch
+        {
+            _ when IsModifierAlone => string.Empty,
+            _ when Keypad(Key) is { } typed => mac ? $"⌨{typed}" : $"NumPad {typed}",
+            Key.OemPeriod => ".",
+            Key.OemComma => ",",
+            Key.OemQuestion => "/",
+            Key.OemSemicolon => ";",
+            Key.OemOpenBrackets => "[",
+            Key.OemCloseBrackets => "]",
+            Key.OemPipe => "\\",
+            Key.OemQuotes => "'",
+            Key.OemPlus => "=",
+            Key.OemMinus => "-",
+            Key.OemTilde => "`",
+            Key.Back => mac ? "⌫" : "Backspace",
+            Key.Return => mac ? "⏎" : "Enter",
+            Key.Escape => mac ? "⎋" : "Escape",
+            Key.Tab => mac ? "⇥" : "Tab",
+            Key.Delete => mac ? "⌦" : "Delete",
+            Key.Home => mac ? "↖" : "Home",
+            Key.End => mac ? "↘" : "End",
+            Key.PageUp => mac ? "⇞" : "Page Up",
+            Key.PageDown => mac ? "⇟" : "Page Down",
+            Key.Up => "↑",
+            Key.Down => "↓",
+            Key.Left => "←",
+            Key.Right => "→",
+            >= Key.D0 and <= Key.D9 => ((char)('0' + (Key - Key.D0))).ToString(),
+            _ => Key.ToString(),
+        };
+        return Shown(Modifiers, key);
+    }
+
+    /// <summary>Modifiers before what they are held with, as menus show them: ⌃⌥⇧⌘ on macOS, "Ctrl+Alt+Shift+Win+"
+    /// elsewhere (no + after them when nothing follows).</summary>
+    internal static string Shown(KeyModifiers modifiers, string with)
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            return (modifiers.HasFlag(KeyModifiers.Control) ? "⌃" : "") + (modifiers.HasFlag(KeyModifiers.Alt) ? "⌥" : "")
+                + (modifiers.HasFlag(KeyModifiers.Shift) ? "⇧" : "") + (modifiers.HasFlag(KeyModifiers.Meta) ? "⌘" : "") + with;
+        }
+        List<string> parts = [];
+        if (modifiers.HasFlag(KeyModifiers.Control)) { parts.Add("Ctrl"); }
+        if (modifiers.HasFlag(KeyModifiers.Alt)) { parts.Add("Alt"); }
+        if (modifiers.HasFlag(KeyModifiers.Shift)) { parts.Add("Shift"); }
+        if (modifiers.HasFlag(KeyModifiers.Meta)) { parts.Add("Win"); }
+        if (with.Length > 0)
+        {
+            parts.Add(with);
+        }
+        return string.Join('+', parts);
+    }
+
+    /// <summary>Modifiers as the notation writes them, in its order ("meta control alt shift").</summary>
+    internal static List<string> Notation(KeyModifiers modifiers)
+    {
+        List<string> parts = [];
+        if (modifiers.HasFlag(KeyModifiers.Meta)) { parts.Add("meta"); }
+        if (modifiers.HasFlag(KeyModifiers.Control)) { parts.Add("control"); }
+        if (modifiers.HasFlag(KeyModifiers.Alt)) { parts.Add("alt"); }
+        if (modifiers.HasFlag(KeyModifiers.Shift)) { parts.Add("shift"); }
+        return parts;
+    }
+
+    /// <summary>The keymap notation <see cref="Parse"/> reads ("meta shift K"), as a user's keymap is kept.</summary>
+    public string Notation()
+    {
+        List<string> parts = Notation(Modifiers);
+        if (IsModifierAlone)
+        {
+            return string.Join(' ', parts);
+        }
+        parts.Add(Key switch
+        {
+            Key.OemQuestion => "SLASH",
+            Key.OemPeriod => "PERIOD",
+            Key.OemComma => "COMMA",
+            Key.OemSemicolon => "SEMICOLON",
+            Key.OemOpenBrackets => "OPEN_BRACKET",
+            Key.OemCloseBrackets => "CLOSE_BRACKET",
+            Key.OemPipe => "BACK_SLASH",
+            Key.OemQuotes => "QUOTE",
+            Key.OemPlus => "EQUALS",
+            Key.OemMinus => "MINUS",
+            Key.OemTilde => "BACK_QUOTE",
+            Key.Back => "BACK_SPACE",
+            Key.Return => "ENTER",
+            Key.PageUp => "PAGE_UP",
+            Key.PageDown => "PAGE_DOWN",
+            >= Key.D0 and <= Key.D9 => ((char)('0' + (Key - Key.D0))).ToString(),
+            _ => Key.ToString().ToUpperInvariant(),
+        });
+        return string.Join(' ', parts);
+    }
+
+    /// <summary>The character a keypad key types, or null for a key elsewhere.</summary>
+    private static char? Keypad(Key key) => key switch
+    {
+        Key.Divide => '/',
+        Key.Multiply => '*',
+        Key.Add => '+',
+        Key.Subtract => '-',
+        Key.Decimal => '.',
+        Key.Separator => ',',
+        >= Key.NumPad0 and <= Key.NumPad9 => (char)('0' + (key - Key.NumPad0)),
+        _ => null,
+    };
+
+    /// <summary>A key by the name IntelliJ's keymaps give it, Java's VK_ without the prefix: SLASH is the main keys' /, and
+    /// DIVIDE, MULTIPLY, ADD, SUBTRACT, DECIMAL, SEPARATOR and NUMPAD0 to NUMPAD9 the keypad's, each a key of its own.</summary>
+    private static Key ParseKey(string name) => name.ToUpperInvariant() switch
+    {
+        "SLASH" => Key.OemQuestion,
+        "DIVIDE" => Key.Divide,
+        "PERIOD" => Key.OemPeriod,
+        "COMMA" => Key.OemComma,
+        "SEMICOLON" => Key.OemSemicolon,
+        "OPEN_BRACKET" => Key.OemOpenBrackets,
+        "CLOSE_BRACKET" => Key.OemCloseBrackets,
+        "BACK_SLASH" => Key.OemPipe,
+        "QUOTE" => Key.OemQuotes,
+        "EQUALS" => Key.OemPlus,
+        "MINUS" => Key.OemMinus,
+        "BACK_QUOTE" => Key.OemTilde,
+        "BACK_SPACE" => Key.Back,
+        "ENTER" => Key.Return,
+        "PAGE_UP" => Key.PageUp,
+        "PAGE_DOWN" => Key.PageDown,
+        "ESCAPE" => Key.Escape,
+        "SPACE" => Key.Space,
+        "TAB" => Key.Tab,
+        "DELETE" => Key.Delete,
+        "INSERT" => Key.Insert,
+        "HOME" => Key.Home,
+        "END" => Key.End,
+        "UP" => Key.Up,
+        "DOWN" => Key.Down,
+        "LEFT" => Key.Left,
+        "RIGHT" => Key.Right,
+        "CONTEXT_MENU" => Key.Apps,
+        { Length: 1 } single when char.IsAsciiLetter(single[0]) => Enum.Parse<Key>(single),
+        { Length: 1 } digit when char.IsAsciiDigit(digit[0]) => Key.D0 + (digit[0] - '0'),
+        // Only a key's name: Enum.TryParse would also take "1000" or "Left,Up" as some other key.
+        _ when char.IsAsciiLetter(name[0]) && name.All(char.IsAsciiLetterOrDigit) && Enum.TryParse(name, true, out Key parsed) => parsed,
+        _ => throw new FormatException($"unknown key '{name}'"),
+    };
+}
+
+/// <summary>A binding: one keystroke, or two pressed in turn (a chord, like Cmd+K then Cmd+C), or a double tap of one
+/// modifier alone ("shift , shift"), pressed and let go twice in quick succession.</summary>
+public sealed record Shortcut(Keystroke First, Keystroke? Second = null)
+{
+    /// <summary>"meta K , meta C" is a chord and "shift , shift" a double tap; anything else is one keystroke.</summary>
+    public static Shortcut Parse(string text)
+    {
+        string[] halves = text.Split(',', StringSplitOptions.TrimEntries);
+        Shortcut shortcut = halves.Length switch
+        {
+            1 => new Shortcut(Keystroke.Parse(halves[0])),
+            2 => new Shortcut(Keystroke.Parse(halves[0]), Keystroke.Parse(halves[1])),
+            _ => throw new FormatException($"'{text}' has more than two keystrokes"),
+        };
+        return (shortcut.First.IsModifierAlone || shortcut.Second?.IsModifierAlone == true) && !shortcut.IsDoubleTap
+            ? throw new FormatException($"'{text}' names a modifier alone, which only a double tap of it is (\"shift , shift\")")
+            : shortcut;
+    }
+
+    /// <summary>Whether this is a double tap of one modifier alone, which a menu cannot show as its keys.</summary>
+    public bool IsDoubleTap => First.IsModifierAlone && Second == First;
+
+    /// <summary>For menus and tooltips: "⌘K, ⌘C" for a chord (Ctrl+K, Ctrl+C elsewhere), "⇧⇧" for a double tap
+    /// ("Double Shift" elsewhere).</summary>
+    public string Display() => IsDoubleTap ? (OperatingSystem.IsMacOS() ? First.Display() + First.Display() : $"Double {First.Display()}")
+        : Second is { } second ? $"{First.Display()}, {second.Display()}" : First.Display();
+
+    public string Notation() => Second is { } second ? $"{First.Notation()} , {second.Notation()}" : First.Notation();
+
+    /// <summary>Whether this is pressed by starting with that: the same first keystroke, and the same second when that
+    /// names one.</summary>
+    public bool StartsWith(Shortcut prefix) => First == prefix.First && (prefix.Second is null || prefix.Second == Second);
+}
+
+/// <summary>A press of a mouse button with modifiers, written the way Rider's keymap files write a mouse shortcut ("meta
+/// shift button1", "alt button1 doubleClick"): button1 is the left button, button2 the middle, button3 the right, button4
+/// and button5 the side buttons, Back and Forward. <see cref="Clicks"/> is which click of a run of them it is.</summary>
+public readonly record struct MouseShortcut(MouseButton Button, KeyModifiers Modifiers, int Clicks = 1)
+{
+    public static MouseShortcut Parse(string text)
+    {
+        KeyModifiers modifiers = KeyModifiers.None;
+        MouseButton? button = null;
+        int clicks = 1;
+        foreach (string part in text.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            switch (part.ToLowerInvariant())
+            {
+                case "doubleclick":
+                    clicks = 2;
+                    break;
+                case string word when Keystroke.ModifierOf(word) is { } modifier:
+                    modifiers |= modifier;
+                    break;
+                default:
+                    button = button is null ? ButtonOf(part) ?? throw new FormatException($"unknown mouse button '{part}'") : throw new FormatException($"'{text}' names two buttons");
+                    break;
+            }
+        }
+        return new MouseShortcut(button ?? throw new FormatException($"'{text}' names no button"), modifiers, clicks);
+    }
+
+    /// <summary>Whether a keymap's text names a mouse button, so is a mouse shortcut rather than a key's.</summary>
+    public static bool IsMouse(string text) => text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Any(part => ButtonOf(part) is not null);
+
+    /// <summary>The press a pointer made: the button that went down, the modifiers held, and its click of a run.</summary>
+    public static MouseShortcut Of(PointerPressedEventArgs e) => new(e.Properties.PointerUpdateKind switch
+    {
+        PointerUpdateKind.LeftButtonPressed => MouseButton.Left,
+        PointerUpdateKind.MiddleButtonPressed => MouseButton.Middle,
+        PointerUpdateKind.RightButtonPressed => MouseButton.Right,
+        PointerUpdateKind.XButton1Pressed => MouseButton.XButton1,
+        PointerUpdateKind.XButton2Pressed => MouseButton.XButton2,
+        _ => MouseButton.None,
+    }, e.KeyModifiers, e.ClickCount);
+
+    /// <summary>For menus, tips and Settings: ⌥Click, ⇧⌘Click, Middle Click, ⌥Double-Click, Back Button on macOS; Alt+Click,
+    /// Ctrl+Shift+Click elsewhere.</summary>
+    public string Display()
+    {
+        string click = Clicks > 1 ? "Double-Click" : "Click";
+        string press = Button switch
+        {
+            MouseButton.Middle => $"Middle {click}",
+            MouseButton.Right => $"Right {click}",
+            MouseButton.XButton1 => Clicks > 1 ? $"Back Button {click}" : "Back Button",
+            MouseButton.XButton2 => Clicks > 1 ? $"Forward Button {click}" : "Forward Button",
+            _ => click,
+        };
+        return Keystroke.Shown(Modifiers, press);
+    }
+
+    /// <summary>The notation <see cref="Parse"/> reads ("alt button1", "meta button1 doubleClick"), as a person's keymap
+    /// keeps it.</summary>
+    public string Notation()
+    {
+        List<string> parts = Keystroke.Notation(Modifiers);
+        parts.Add(Button switch
+        {
+            MouseButton.Middle => "button2",
+            MouseButton.Right => "button3",
+            MouseButton.XButton1 => "button4",
+            MouseButton.XButton2 => "button5",
+            _ => "button1",
+        });
+        if (Clicks > 1)
+        {
+            parts.Add("doubleClick");
+        }
+        return string.Join(' ', parts);
+    }
+
+    private static MouseButton? ButtonOf(string part) => part.ToLowerInvariant() switch
+    {
+        "button1" => MouseButton.Left,
+        "button2" => MouseButton.Middle,
+        "button3" => MouseButton.Right,
+        "button4" => MouseButton.XButton1,
+        "button5" => MouseButton.XButton2,
+        _ => null,
+    };
+}
+
+/// <summary>Which shortcuts run which action. An action is a name from <see cref="EditorActions"/>
+/// or the IDE's own list; a shortcut, a key's or the mouse's, may run only one action, but a gesture may start one drag
+/// (<see cref="EditorActions.IsDrag"/>) beside the click it runs, as Alt-drag's column beside Alt-click's Quick
+/// Evaluate.</summary>
+public sealed class Keymap
+{
+    private readonly Dictionary<string, List<Shortcut>> byAction = [];
+    private readonly Dictionary<Shortcut, string> byShortcut = [];
+    private readonly Dictionary<MouseShortcut, string> byMouse = [];
+    private readonly Dictionary<MouseShortcut, string> byDrag = [];
+    private readonly Dictionary<string, List<MouseShortcut>> mouseByAction = [];
+
+    public Keymap(string name) => Name = name;
+
+    public string Name { get; }
+
+    /// <summary>Binds an action's shortcuts, a mouse shortcut (one naming a button) among them as Rider's keymap files list
+    /// it.</summary>
+    public Keymap Bind(string action, params string[] shortcuts)
+    {
+        foreach (string text in shortcuts)
+        {
+            if (MouseShortcut.IsMouse(text))
+            {
+                MouseShortcut gesture = MouseShortcut.Parse(text);
+                Dictionary<MouseShortcut, string> presses = PressesOf(action);
+                if (presses.TryGetValue(gesture, out string? had) && had != action)
+                {
+                    throw new InvalidOperationException($"{Name}: {text} is bound to both {had} and {action}");
+                }
+                presses[gesture] = action;
+                List<MouseShortcut> own = MouseListOf(action);
+                if (!own.Contains(gesture))
+                {
+                    own.Add(gesture);
+                }
+                continue;
+            }
+            Shortcut shortcut = Shortcut.Parse(text);
+            if (byShortcut.TryGetValue(shortcut, out string? taken) && taken != action)
+            {
+                throw new InvalidOperationException($"{Name}: {text} is bound to both {taken} and {action}");
+            }
+            byShortcut[shortcut] = action;
+            if (!byAction.TryGetValue(action, out List<Shortcut>? list))
+            {
+                byAction[action] = list = [];
+            }
+            list.Add(shortcut);
+        }
+        return this;
+    }
+
+    /// <summary>Gives an action exactly these shortcuts and mouse shortcuts, as a person's keymap does: its own go, and one
+    /// another action had is taken from it (a gesture only from another click, or another drag, as the action is).</summary>
+    public Keymap Set(string action, IEnumerable<Shortcut> shortcuts, IEnumerable<MouseShortcut> gestures)
+    {
+        if (byAction.TryGetValue(action, out List<Shortcut>? own))
+        {
+            foreach (Shortcut shortcut in own)
+            {
+                byShortcut.Remove(shortcut);
+            }
+            own.Clear();
+        }
+        else
+        {
+            byAction[action] = own = [];
+        }
+        foreach (Shortcut shortcut in shortcuts.Distinct())
+        {
+            if (byShortcut.TryGetValue(shortcut, out string? taken) && taken != action && byAction.TryGetValue(taken, out List<Shortcut>? theirs))
+            {
+                theirs.Remove(shortcut);
+            }
+            byShortcut[shortcut] = action;
+            own.Add(shortcut);
+        }
+        Dictionary<MouseShortcut, string> presses = PressesOf(action);
+        List<MouseShortcut> mine = MouseListOf(action);
+        foreach (MouseShortcut gesture in mine)
+        {
+            presses.Remove(gesture);
+        }
+        mine.Clear();
+        foreach (MouseShortcut gesture in gestures.Distinct())
+        {
+            if (presses.TryGetValue(gesture, out string? taken) && taken != action && mouseByAction.TryGetValue(taken, out List<MouseShortcut>? theirs))
+            {
+                theirs.Remove(gesture);
+            }
+            presses[gesture] = action;
+            mine.Add(gesture);
+        }
+        return this;
+    }
+
+    /// <summary>The clicks an action runs from, or the drags, as it is one or the other.</summary>
+    private Dictionary<MouseShortcut, string> PressesOf(string action) => EditorActions.IsDrag(action) ? byDrag : byMouse;
+
+    private List<MouseShortcut> MouseListOf(string action)
+    {
+        if (!mouseByAction.TryGetValue(action, out List<MouseShortcut>? list))
+        {
+            mouseByAction[action] = list = [];
+        }
+        return list;
+    }
+
+    /// <summary>Every action something is bound to.</summary>
+    public IEnumerable<string> Actions => byAction.Keys;
+
+    public IReadOnlyList<Shortcut> ShortcutsFor(string action) =>
+        byAction.TryGetValue(action, out List<Shortcut>? list) ? list : [];
+
+    public string? ActionFor(Shortcut shortcut) => byShortcut.GetValueOrDefault(shortcut);
+
+    /// <summary>An action's mouse shortcuts, in the order they were bound.</summary>
+    public IReadOnlyList<MouseShortcut> MouseShortcutsFor(string action) =>
+        mouseByAction.TryGetValue(action, out List<MouseShortcut>? list) ? list : [];
+
+    /// <summary>The action a click of the mouse runs, or null.</summary>
+    public string? ActionFor(MouseShortcut gesture) => byMouse.GetValueOrDefault(gesture);
+
+    /// <summary>The drag a press of the mouse starts (<see cref="EditorActions.IsDrag"/>), or null.</summary>
+    public string? DragFor(MouseShortcut gesture) => byDrag.GetValueOrDefault(gesture);
+
+    /// <summary>The action a press of the mouse runs whichever click of a run it is: its own click's, else, when the keymap
+    /// gives its button and modifiers no double-click, their one click's. The platform counts a run of one button's
+    /// presses, so a second Back pressed soon after the first comes as a double-click.</summary>
+    public string? ActionForAnyClick(MouseShortcut gesture) =>
+        ActionFor(gesture) ?? (gesture.Clicks > 1 && !byMouse.ContainsKey(gesture with { Clicks = 2 }) ? ActionFor(gesture with { Clicks = 1 }) : null);
+
+    /// <summary>Every action a mouse shortcut is bound to.</summary>
+    public IEnumerable<string> MouseActions => byMouse.Values.Concat(byDrag.Values).Distinct();
+
+    /// <summary>The other action a mouse shortcut runs that one given to this action would take it from: another click's,
+    /// or another drag's for a drag, a click and a drag sharing a gesture.</summary>
+    public string? Conflict(string action, MouseShortcut gesture) =>
+        PressesOf(action).TryGetValue(gesture, out string? other) && other != action ? other : null;
+
+    /// <summary>The other actions' shortcuts that clash with one: the same first keystroke and, unless either is one
+    /// keystroke alone, the same second. So a chord clashes with the key that begins it, which would run before the
+    /// chord's second key could be pressed, and a key with every chord it begins.</summary>
+    public IReadOnlyList<(string Action, Shortcut Shortcut)> Conflicts(string action, Shortcut shortcut) =>
+        [.. byAction.Where(pair => pair.Key != action).SelectMany(pair => pair.Value
+            .Where(theirs => theirs.First == shortcut.First && (theirs.Second is null || shortcut.Second is null || theirs.Second == shortcut.Second))
+            .Select(theirs => (pair.Key, theirs)))];
+
+    public bool StartsChord(Keystroke first) => byShortcut.Keys.Any(s => s.Second is not null && s.First == first);
+
+    /// <summary>The chords a first keystroke begins, each action's in the order it was bound.</summary>
+    public IEnumerable<(string Action, Keystroke Second)> ChordsFrom(Keystroke first) =>
+        byAction.SelectMany(pair => pair.Value
+            .Where(s => s.First == first && s.Second is not null)
+            .Select(s => (pair.Key, s.Second!.Value)));
+}
+
+/// <summary>Turns key presses into actions, holding the first half of a chord until the second, and a modifier tapped
+/// alone until it is tapped again (<see cref="Shortcut.IsDoubleTap"/>) within half a second, a double-click's time.</summary>
+/// <param name="keymap">The keymap the keys run.</param>
+/// <param name="timestamps">The clock the taps are told apart by, in timestamps of Stopwatch's, its own unless
+/// given.</param>
+public sealed class KeymapDispatcher(Keymap keymap, Func<long>? timestamps = null)
+{
+    private readonly Func<long> now = timestamps ?? Stopwatch.GetTimestamp;
+
+    /// <summary>The most time between a modifier's two taps that makes them a double tap.</summary>
+    public static readonly TimeSpan DoubleTap = TimeSpan.FromMilliseconds(500);
+
+    private Keystroke? pending;
+
+    /// <summary>A modifier pressed alone and not yet let go, nothing pressed since.</summary>
+    private Keystroke? held;
+
+    /// <summary>A modifier pressed alone and let go, nothing pressed since, and when it was let go.</summary>
+    private (Keystroke Stroke, long At)? tapped;
+
+    public Keymap Keymap { get; set; } = keymap;
+
+    /// <summary>A chord's first keystroke was pressed, or the wait for its second ended.</summary>
+    public event EventHandler? PendingChanged;
+
+    /// <summary>The action a key press completes, or null. A press that opens a chord returns null
+    /// but is still consumed (<paramref name="consumed"/>). A press with Shift that has no binding of
+    /// its own returns its unshifted binding with <paramref name="shifted"/> set, which a movement
+    /// takes as "and extend the selection"; anything else should ignore it.</summary>
+    public string? Press(KeyEventArgs e, out bool consumed, out bool shifted)
+    {
+        Keystroke stroke = Keystroke.From(e);
+        consumed = false;
+        shifted = false;
+        if (IsModifierOnly(stroke.Key))
+        {
+            return Tap(e, out consumed);
+        }
+        Heard(e);
+        if (IsAltGrTyping(e))
+        {
+            // A character typed, never a shortcut, so it ends a chord as any typing does.
+            Reset();
+            return null;
+        }
+        if (pending is { } first)
+        {
+            Reset();
+            consumed = true;
+            return Keymap.ActionFor(new Shortcut(first, stroke));
+        }
+        if (Keymap.ActionFor(new Shortcut(stroke)) is { } action)
+        {
+            consumed = true;
+            return action;
+        }
+        if (Keymap.StartsChord(stroke))
+        {
+            pending = stroke;
+            PendingChanged?.Invoke(this, EventArgs.Empty);
+            consumed = true;
+            return null;
+        }
+        if (stroke.Modifiers.HasFlag(KeyModifiers.Shift)
+            && Keymap.ActionFor(new Shortcut(stroke with { Modifiers = stroke.Modifiers & ~KeyModifiers.Shift })) is { } unshifted)
+        {
+            shifted = true;
+            return unshifted;
+        }
+        return null;
+    }
+
+    /// <summary>A key pressed, whoever takes it: one that is no modifier ends a double tap begun, as a click does.</summary>
+    public void Heard(KeyEventArgs e)
+    {
+        if (!IsModifierOnly(e.Key))
+        {
+            held = null;
+            tapped = null;
+        }
+    }
+
+    /// <summary>A key let go: a modifier pressed alone and let go with nothing between is a tap, a double tap's first.</summary>
+    public void Release(KeyEventArgs e)
+    {
+        if (held is { } stroke && Keystroke.Alone(e.Key, KeyModifiers.None) == stroke)
+        {
+            tapped = (stroke, now());
+        }
+        held = null;
+    }
+
+    /// <summary>A modifier's key pressed: the double tap's action when it follows its first tap in time, else the start
+    /// of a tap; a key held down repeats its press, which starts nothing.</summary>
+    private string? Tap(KeyEventArgs e, out bool consumed)
+    {
+        consumed = false;
+        if (Keystroke.Alone(e.Key, e.KeyModifiers) is not { } stroke)
+        {
+            held = null;
+            tapped = null;
+            return null;
+        }
+        if (held == stroke)
+        {
+            return null;
+        }
+        (Keystroke Stroke, long At)? first = tapped;
+        tapped = null;
+        if (first is { } tap && tap.Stroke == stroke && Stopwatch.GetElapsedTime(tap.At, now()) <= DoubleTap
+            && Keymap.ActionFor(new Shortcut(stroke, stroke)) is { } action)
+        {
+            held = null;
+            consumed = true;
+            return action;
+        }
+        held = stroke;
+        return null;
+    }
+
+    /// <summary>Forgets a chord's first keystroke and a modifier's first tap, so the next key is a key of its own.</summary>
+    public void Reset()
+    {
+        held = null;
+        tapped = null;
+        if (pending is not null)
+        {
+            pending = null;
+            PendingChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>Whether the first keystroke of a chord has been pressed and the dispatcher waits for its second.</summary>
+    public bool IsPending => pending is not null;
+
+    /// <summary>The first keystroke of the chord waiting for its second, or null.</summary>
+    public Keystroke? Pending => pending;
+
+    /// <summary>Whether a key press types a character rather than being a shortcut: Windows sends AltGr as Ctrl+Alt, so
+    /// Ctrl+Alt (Shift or not) on a key the layout gives a character to, like AltGr+S's ś on a Polish layout, is typing.
+    /// The Mac's key symbol leaves Control out, so there Ctrl+Option stays a shortcut.</summary>
+    public static bool IsAltGrTyping(KeyEventArgs e) => OperatingSystem.IsWindows()
+        && (e.KeyModifiers & ~KeyModifiers.Shift) == (KeyModifiers.Control | KeyModifiers.Alt)
+        && e.KeySymbol is { Length: > 0 } symbol && !char.IsControl(symbol[0]) && !char.IsWhiteSpace(symbol[0]);
+
+    internal static bool IsModifierOnly(Key key) => key is Key.LeftShift or Key.RightShift or Key.LeftCtrl or Key.RightCtrl
+        or Key.LeftAlt or Key.RightAlt or Key.LWin or Key.RWin;
+}

@@ -1,20 +1,29 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <!-- The log's console handle and the window frames call the system through LibraryImport. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- The program's icon on Windows (tools/app-icon.py draws it). -->
+    <ApplicationIcon>Shell/Assets/wayfarer.ico</ApplicationIcon>
+    <!-- Windows makes a layered child window only for a program whose manifest names Windows 8 or later; the docked tool windows need one. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <ItemGroup>
-    <AvaloniaResource Include="../../vendor/passenger/src/Passenger.App/Theme/Tokens.axaml" Link="Theme/Tokens.axaml" />
-    <AvaloniaResource Include="../../vendor/passenger/src/Passenger.App/Theme/Icons.axaml" Link="Theme/Icons.axaml" />
+    <!-- The window's typeface (Shell/Theme/WindowFonts.cs), Inter's hinted faces, and the looks Wayfarer carries. -->
+    <AvaloniaResource Include="Shell/Fonts/*.ttf" />
+    <AvaloniaResource Include="Shell/Assets/wayfarer.ico;Shell/Assets/wayfarer.png" />
+    <AvaloniaResource Include="Shell/Theme/BuiltIn/**/*.json" />
     <Content Include="../../templates/jvm/**/*" Link="templates/jvm/%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="../../vendor/passenger/THIRD_PARTY_NOTICES.md;../../vendor/passenger/LICENSE;../../vendor/passenger/src/Passenger.Editor/Fonts/OFL.txt"
           Link="notices/Passenger/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <Compile Include="../../vendor/passenger/src/Passenger.App/Theme/PlatformFallback.cs" Link="PlatformFallback.cs" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="Avalonia.Headless" />
     <PackageReference Include="Velopack" />
     <ProjectReference Include="../WayfarerWanderer.Jvm/WayfarerWanderer.Jvm.csproj" />
     <ProjectReference Include="../../vendor/passenger/src/Passenger.Editor/Passenger.Editor.csproj" />
+    <ProjectReference Include="../../vendor/passenger/src/Passenger.Terminal/Passenger.Terminal.csproj" />
+    <ProjectReference Include="../../vendor/passenger/src/Passenger.Vcs/Passenger.Vcs.csproj" />
     <PackageReference Include="Avalonia.Desktop" />
     <PackageReference Include="Avalonia.HarfBuzz" />
     <PackageReference Include="SkiaSharp" />

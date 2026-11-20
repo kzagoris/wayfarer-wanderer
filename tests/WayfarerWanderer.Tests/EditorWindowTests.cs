@@ -29,6 +29,9 @@ public class EditorWindowTests
         window.Height = 180;
         window.RequestedThemeVariant = theme == "Dark" ? ThemeVariant.Dark : ThemeVariant.Light;
         window.Show();
+        // The pixels checked are the editor's: a window this narrow gives it room only with Project closed.
+        window.ToolDock.Hide(WayfarerWanderer.App.Shell.ToolWindowIds.Explorer);
+        window.UpdateLayout();
         try
         {
             var editor = window.Editor;
@@ -236,7 +239,7 @@ public class EditorWindowTests
                     WayfarerWanderer.App.EditorActions.NewProject
                 },
                 id => Assert.True(window.Actions[id].Available(), id));
-            Assert.True(window.GetVisualDescendants().OfType<TabControl>().Single().IsVisible);
+            Assert.True(window.ToolDock.IsShown(WayfarerWanderer.App.Shell.ToolWindowIds.Build));
         }
         finally
         {
@@ -259,7 +262,7 @@ public class EditorWindowTests
     private static MenuItem ToggleMenuItem(Window window)
     {
         var menu = window.GetVisualDescendants().OfType<Menu>().Single();
-        var run = Assert.IsType<MenuItem>(menu.Items.Cast<MenuItem>().Single(item => item.Header?.ToString() == "_Run"));
+        var run = Assert.IsType<MenuItem>(menu.Items.Cast<MenuItem>().Single(item => item.Header?.ToString() == "Run"));
         return Assert.IsType<MenuItem>(run.Items.Cast<MenuItem>().Single(item =>
             item.Header?.ToString() == "Toggle Breakpoint"));
     }

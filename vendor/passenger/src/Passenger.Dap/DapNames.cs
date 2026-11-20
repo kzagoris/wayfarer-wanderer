@@ -1,0 +1,243 @@
+namespace Passenger.Dap;
+
+/// <summary>The requests the IDE and Passenger's debug adapter make of each other, by the protocol's names, each written once
+/// for both ends, so a name one end misspells is a build error rather than a request the other never answers. Passenger's
+/// own extend the protocol: <see cref="ResolveStackFrame"/>, <see cref="HotReloadState"/>, <see cref="ApplyChanges"/>,
+/// <see cref="HotReloadRelease"/> and <see cref="Input"/>.</summary>
+[IdentifierHome]
+public static class DapCommands
+{
+    public const string Initialize = "initialize";
+    public const string Launch = "launch";
+    public const string Attach = "attach";
+    public const string ConfigurationDone = "configurationDone";
+    public const string SetBreakpoints = "setBreakpoints";
+    public const string SetFunctionBreakpoints = "setFunctionBreakpoints";
+    public const string SetExceptionBreakpoints = "setExceptionBreakpoints";
+    public const string DataBreakpointInfo = "dataBreakpointInfo";
+    public const string SetDataBreakpoints = "setDataBreakpoints";
+    public const string Threads = "threads";
+    public const string StackTrace = "stackTrace";
+    public const string Scopes = "scopes";
+    public const string Variables = "variables";
+    public const string Evaluate = "evaluate";
+    public const string SetExpression = "setExpression";
+    public const string GotoTargets = "gotoTargets";
+    public const string Goto = "goto";
+    public const string Continue = "continue";
+    public const string Next = "next";
+    public const string StepIn = "stepIn";
+    public const string StepInTargets = "stepInTargets";
+    public const string StepOut = "stepOut";
+    public const string Pause = "pause";
+    public const string Disconnect = "disconnect";
+    public const string Terminate = "terminate";
+    public const string ExceptionInfo = "exceptionInfo";
+
+    /// <summary>The adapter's request of the client: start the program in its terminal.</summary>
+    public const string RunInTerminal = "runInTerminal";
+
+    /// <summary>Passenger's own: a frame without source given its assembly's decompiled symbols.</summary>
+    public const string ResolveStackFrame = "resolveStackFrame";
+
+    /// <summary>Passenger's own: what the language's Edit and Continue needs of the program.</summary>
+    public const string HotReloadState = "hotReloadState";
+
+    /// <summary>Passenger's own: Hot Reload's updates applied to the program.</summary>
+    public const string ApplyChanges = "applyChanges";
+
+    /// <summary>Passenger's own: a program held for an update (<see cref="HotReloadState"/>'s hold) let go.</summary>
+    public const string HotReloadRelease = "hotReloadRelease";
+
+    /// <summary>Passenger's own: text for the program's standard input, or its input closed.</summary>
+    public const string Input = "input";
+}
+
+/// <summary>The events Passenger's debug adapter tells the IDE, by the protocol's names, each written once for both ends.</summary>
+[IdentifierHome]
+public static class DapEvents
+{
+    public const string Initialized = "initialized";
+    public const string Stopped = "stopped";
+    public const string Breakpoint = "breakpoint";
+    public const string Exited = "exited";
+    public const string Terminated = "terminated";
+    public const string Thread = "thread";
+    public const string Module = "module";
+    public const string Process = "process";
+    public const string Output = "output";
+    public const string Continued = "continued";
+}
+
+/// <summary>Why the program stopped, the stopped event's reason, by the protocol's names: what the engine reports, what the
+/// adapter passes on and what the IDE tells apart, each written once.</summary>
+[IdentifierHome]
+public static class StopReasons
+{
+    public const string Step = "step";
+    public const string Breakpoint = "breakpoint";
+    public const string Exception = "exception";
+    public const string Pause = "pause";
+    public const string Entry = "entry";
+    public const string Goto = "goto";
+    public const string FunctionBreakpoint = "function breakpoint";
+    public const string DataBreakpoint = "data breakpoint";
+    public const string InstructionBreakpoint = "instruction breakpoint";
+
+    /// <summary>A reason the protocol has no name for.</summary>
+    public const string Unknown = "unknown";
+}
+
+/// <summary>Why a breakpoint is not verified, its reason by the protocol's names: what the adapters say and the IDE tells
+/// apart, each written once.</summary>
+[IdentifierHome]
+public static class BreakpointReasons
+{
+    /// <summary>One the debugger refused, and will not take as it is.</summary>
+    public const string Failed = "failed";
+
+    /// <summary>One that may yet bind.</summary>
+    public const string Pending = "pending";
+}
+
+/// <summary>Where an evaluation is asked from, evaluate's context by the protocol's names: what the IDE asks with and the
+/// adapter tells apart, each written once.</summary>
+[IdentifierHome]
+public static class EvaluateContexts
+{
+    /// <summary>A value the pointer rests on in the editor.</summary>
+    public const string Hover = "hover";
+
+    /// <summary>A value of the Variables view.</summary>
+    public const string Variables = "variables";
+
+    /// <summary>A watch's expression.</summary>
+    public const string Watch = "watch";
+
+    /// <summary>An expression the person or an agent runs as it is written, calls and all.</summary>
+    public const string Repl = "repl";
+}
+
+/// <summary>What a breakpoint, thread or module event tells of its subject, its reason by the protocol's names: what the
+/// adapters tell and the IDE reads, each written once.</summary>
+[IdentifierHome]
+public static class EventReasons
+{
+    /// <summary>A breakpoint bound, moved or given a message.</summary>
+    public const string Changed = "changed";
+
+    /// <summary>A module loaded.</summary>
+    public const string New = "new";
+
+    /// <summary>A module unloaded.</summary>
+    public const string Removed = "removed";
+
+    /// <summary>A thread started.</summary>
+    public const string Started = "started";
+
+    /// <summary>A thread ended.</summary>
+    public const string Exited = "exited";
+}
+
+/// <summary>The rows Passenger's debug adapter adds to a frame's values and among a value's members, by their names, which
+/// the IDE tells apart and an expression may name (<see cref="Exception"/>, <see cref="ReturnValue"/>): each written once
+/// for both ends.</summary>
+[IdentifierHome]
+public static class DapRows
+{
+    /// <summary>An EF Core query's SQL: a lazy row, read only as it is opened.</summary>
+    public const string QuerySql = "SQL";
+
+    /// <summary>What <see cref="QuerySql"/> says before it is opened.</summary>
+    public const string QuerySqlUnread = "Opening it runs ToQueryString() in the program";
+
+    /// <summary>A value's own members, beneath the rows its debugger view or enumeration shows in their place.</summary>
+    public const string RawView = "Raw View";
+
+    /// <summary>The static fields and properties of a value's type and the types it derives from.</summary>
+    public const string StaticMembers = "Static members";
+
+    /// <summary>What a sequence yields, enumerated in the program as the row is opened.</summary>
+    public const string Results = "Results";
+
+    /// <summary>What <see cref="Results"/> says before it is opened.</summary>
+    public const string ResultsUnread = "Expanding will force enumeration of the object";
+
+    /// <summary>The exception the thread stopped with, as its row and an expression name it.</summary>
+    public const string Exception = "$exception";
+
+    /// <summary>The value the last step's last call returned, as an expression names it; the calls before it are this name
+    /// followed by their place from one, in the order they returned.</summary>
+    public const string ReturnValue = "$ReturnValue";
+}
+
+/// <summary>Passenger's own attributes of a value's presentation hint, beside the protocol's, written once for both ends.</summary>
+[IdentifierHome]
+public static class DapAttributes
+{
+    /// <summary>A failed evaluation that timed out with every other thread held, which probably needs another thread to run:
+    /// the person may run it again with every thread let go (evaluate's letThreadsRun).</summary>
+    public const string NeedsThreads = "needsThreads";
+}
+
+/// <summary>When an exception stops the program, an exception option's and an exceptionInfo answer's break mode, by the
+/// protocol's names: each written once for both ends.</summary>
+[IdentifierHome]
+public static class DapBreakModes
+{
+    public const string Never = "never";
+    public const string Always = "always";
+    public const string Unhandled = "unhandled";
+    public const string UserUnhandled = "userUnhandled";
+}
+
+/// <summary>The exception filters Passenger's debug adapter offers, by their ids: what initialize's answer lists, what
+/// setExceptionBreakpoints names and what the adapter reads back, each written once.</summary>
+[IdentifierHome]
+public static class DapExceptionFilters
+{
+    /// <summary>Every exception, handled or not, as it is thrown.</summary>
+    public const string All = "all";
+
+    /// <summary>An exception user code leaves unhandled.</summary>
+    public const string UserUnhandled = "user-unhandled";
+}
+
+/// <summary>An output event's categories, by the protocol's names: what the adapter tells and the IDE sorts into its
+/// console's streams, each written once.</summary>
+[IdentifierHome]
+public static class DapOutputCategories
+{
+    /// <summary>What the program writes to its standard output.</summary>
+    public const string Stdout = "stdout";
+
+    /// <summary>What the program writes to its standard error.</summary>
+    public const string Stderr = "stderr";
+
+    /// <summary>The debugger's own words: a logpoint's message, a breakpoint reached, why it could not do as asked.</summary>
+    public const string Console = "console";
+
+    /// <summary>Data for the client to keep, never shown.</summary>
+    public const string Telemetry = "telemetry";
+}
+
+/// <summary>The debug adapter's command line, as it reads it and as the IDE and the tests start it, each flag written once:
+/// netcoredbg's, so a client written for that runs this.</summary>
+[IdentifierHome]
+public static class AdapterFlags
+{
+    /// <summary>The protocol spoken on standard input and output, the only one the adapter speaks.</summary>
+    public const string Interpreter = "--interpreter=vscode";
+
+    /// <summary>What every other interpreter flag begins with, refused.</summary>
+    public const string AnyInterpreter = "--interpreter=";
+
+    /// <summary>Followed by a file, which the engine's log is written to.</summary>
+    public const string EngineLogging = "--engineLogging=";
+
+    /// <summary>Followed by a folder, which keeps the symbols decompiled for assemblies that ship none.</summary>
+    public const string SymbolCache = "--symbolCache=";
+
+    /// <summary>The client is on another machine (the adapter in a container): the processes it tells of are not local.</summary>
+    public const string Remote = "--remote";
+}

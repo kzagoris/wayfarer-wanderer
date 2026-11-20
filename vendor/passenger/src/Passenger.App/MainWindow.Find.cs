@@ -1,0 +1,185 @@
+using Avalonia;
+using Avalonia.Controls;
+using Microsoft.CodeAnalysis.CSharp;
+using Passenger.App.CSharp;
+using Passenger.App.ToolWindows;
+using Passenger.App.Workspace;
+using Passenger.Core;
+using Passenger.Editor;
+using Passenger.Languages.CSharp;
+using Passenger.Lsp;
+using Passenger.Text;
+
+namespace Passenger.App;
+
+/// <summary>Find Usages in the Find window: the language server's usages told apart by what each does there (read from
+/// the file's syntax) and by whether they are in generated code (as Roslyn tells it), put under their projects and files,
+/// each search kept as a tab; Show Usages' the same usages in a popup under the caret, which hands them to the Find window
+/// on asking.</summary>
+public partial class MainWindow
+{
+    private FindView? find;
+
+    /// <summary>The Find tool window, built as it is first shown or asked for.</summary>
+    public FindView Find => find ?? (FindView)Dock[ToolWindowIds.Find].Content;
+
+    private void AddFind()
+    {
+        Dock.Add(new Docking.ToolWindow(ToolWindowIds.Find, "Find", IconKeys.Search, () =>
+        {
+            find = new FindView(path => Editors.TextOf(path)?.ToString(), path => Editors.ParseOptions(path)) { Alone = findSettings.UsagesAlone };
+            find.GoToRequested += (_, usage) => NavigateTo(usage.Path, new TextPosition(usage.Line, usage.Column));
+            // Kept for every later search: one who sets generated code aside wants it aside each time.
+            find.AloneChanged += (_, _) =>
+            {
+                findSettings = findSettings with { UsagesAlone = find.Alone };
+                state?.Find.Set(findSettings);
+            };
+            return find;
+        }, Docking.ToolAnchor.BottomLeft)
+        {
+            Action = AppActions.ShowFind,
+            ActionTitle = "Find Tool Window",
+            ExpandAll = () => Find.ExpandAll(),
+            CollapseAll = () => Find.CollapseAll(),
+        });
+        assist.UsagesFound += (_, found) => IdeErrors.Observe(ShowUsagesAsync(found));
+        actions!.Running += (_, running) =>
+        {
+            if (running.Action.Id is AppActions.FindUsages or AppActions.ShowUsages or AppActions.GoToDeclaration or AppActions.GoToImplementation
+                or AppActions.GoToTypeDeclaration or AppActions.BaseSymbols or AppActions.DerivedSymbols)
+            {
+                usagesAsked = running.Context is { ByAgent: false, Focused: Visual focused }
+                    ? new UsagesAsked(focused, (focused as CodeEditor)?.Document.Snapshot, (focused as CodeEditor)?.Selections, popups.Shown)
+                    : null;
+            }
+        };
+    }
+
+    /// <summary>Bumped by each search shown, so one that lands after a later one is dropped.</summary>
+    private int usageSearches;
+
+    /// <summary>Where the keys were as the person last asked for Find Usages; none for an agent's asking.</summary>
+    private UsagesAsked? usagesAsked;
+
+    /// <summary>Where the keys were as Find Usages was asked: what had them, an editor's text and carets then, and how many
+    /// popups had been shown.</summary>
+    private sealed record UsagesAsked(Visual Focused, TextSnapshot? Text, SelectionSet? Carets, int Popups)
+    {
+        /// <summary>Whether the keys are still there: with what had them, nothing typed or moved in it, and no popup shown
+        /// since, so the person is still waiting where they asked.</summary>
+        public bool Stands(PopupHost popups) =>
+            !popups.IsOpen && popups.Shown == Popups && TopLevel.GetTopLevel(Focused)?.FocusManager?.GetFocusedElement() == Focused
+            && (Focused is not CodeEditor editor || (editor.Document.Snapshot == Text && editor.Selections == Carets));
+    }
+
+    /// <summary>The usages under what each does there, read from each file's syntax off the UI thread: an open file's
+    /// shared parse as it stands, a file not open read from disk and parsed there, a source generator's code in its copy
+    /// (<see cref="GeneratedCode"/>), each marked where it is in generated code; with what the search went without. Show
+    /// Usages' go to its popup while the person still waits where they asked, else to the Find window.</summary>
+    private async Task ShowUsagesAsync(UsagesFound found)
+    {
+        (string title, IReadOnlyList<LspLocation> locations, string? note) = (found.Title, found.Usages, found.Note);
+        int search = ++usageSearches;
+        IReadOnlySet<string> generated = new HashSet<string>();
+        if (session.CSharp is { } csharp)
+        {
+            (locations, generated) = await csharp.Generated.SetApartAsync(locations);
+        }
+        // Each file's path made canonical once, not once a usage: that asks the disk.
+        Dictionary<string, string> paths = locations.Select(l => l.Uri).Distinct(StringComparer.Ordinal).ToDictionary(u => u, DocumentUris.ToPath, StringComparer.Ordinal);
+        List<(string Path, TextSnapshot? Open, ParsedText? Syntax, CSharpParseOptions Parse, string Project, List<LspLocation> Here)> files =
+            [.. locations.GroupBy(l => paths[l.Uri], StringComparer.Ordinal).Select(file =>
+            {
+                OpenDocument? open = Editors.Find(file.Key);
+                return (file.Key, open?.Text.Snapshot, open?.Syntax?.Current, Editors.ParseOptions(file.Key), ProjectNameOf(file.Key), file.ToList());
+            })];
+        List<Usage> usages = await BackgroundWork.Run(() =>
+        {
+            List<Usage> found = [];
+            foreach ((string path, TextSnapshot? open, ParsedText? syntax, CSharpParseOptions parse, string project, List<LspLocation> here) in files)
+            {
+                if ((syntax?.Text ?? open ?? ServerPlaces.Read(path)) is not { } snapshot)
+                {
+                    // A file that cannot be read keeps the server's places, the best there is to say of them.
+                    found.AddRange(here.Select(l => new Usage(path, l.Range.Start.Line, l.Range.Start.Character,
+                        l.Range.End.Line == l.Range.Start.Line ? Math.Max(0, l.Range.End.Character - l.Range.Start.Character) : 0, string.Empty, UsageKind.Other, project)
+                    {
+                        Generated = generated.Contains(l.Uri),
+                    }));
+                    continue;
+                }
+                ServerLines lines = ServerLines.Of(snapshot);
+                List<int> offsets = [.. here.Select(l => lines.OffsetOf(l.Range.Start))];
+                IReadOnlyList<UsageKind> kinds = path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                    ? UsageKinds.Classify(syntax?.Root ?? CSharpParsing.Parse(snapshot.ToString(), parse).GetRoot(), offsets)
+                    : [.. here.Select(_ => UsageKind.Other)];
+                for (int i = 0; i < here.Count; i++)
+                {
+                    LspRange range = here[i].Range;
+                    TextPosition start = snapshot.GetPosition(offsets[i]);
+                    int length = range.End.Line == range.Start.Line ? range.End.Character - range.Start.Character : 0;
+                    found.Add(new Usage(path, start.Line, start.Column, Math.Max(0, length), snapshot.GetLineText(start.Line), kinds[i], project)
+                    {
+                        Generated = generated.Contains(here[i].Uri),
+                    });
+                }
+            }
+            return found;
+        });
+        if (search != usageSearches)
+        {
+            return;
+        }
+        if (found.PopupAt is { } at && usagesAsked is { Focused: CodeEditor editor } asked && asked.Stands(popups))
+        {
+            ShowUsagesPopup(editor, at, title, usages, note);
+            return;
+        }
+        ShowInFind(title, usages, note);
+    }
+
+    /// <summary>Show Usages' popup under the offset it was asked at: a usage chosen is gone to, and Open in Find Window
+    /// lists them there.</summary>
+    private void ShowUsagesPopup(CodeEditor editor, int at, string title, IReadOnlyList<Usage> usages, string? note)
+    {
+        Navigation.UsagesPopup popup = new(title, usages, note);
+        popup.FindWindowRequested += (_, _) =>
+        {
+            popups.Close();
+            ShowInFind(title, usages, note);
+        };
+        Point under = editor.PointOf(Math.Min(at, editor.Document.Snapshot.Length)) + new Point(0, editor.LineHeight + 2);
+        popups.Show(popup, usage =>
+        {
+            if (usage is not null)
+            {
+                NavigateTo(usage.Path, new TextPosition(usage.Line, usage.Column));
+            }
+        }, popups.PointIn(editor, under));
+        status.Text = Found(title, usages, note);
+    }
+
+    /// <summary>Usages in a tab of the Find window, which takes the keys where the person still waits for them.</summary>
+    private void ShowInFind(string title, IReadOnlyList<Usage> usages, string? note)
+    {
+        Find.Show(title, usages, note);
+        ShowToolWindow(ToolWindowIds.Find);
+        // The usages take the keys where the person still waits for them, once a window just shown has laid out rows to take them.
+        if (usagesAsked?.Stands(popups) == true)
+        {
+            Dock.UpdateLayout();
+            Find.FocusRows();
+        }
+        status.Text = Found(title, usages, note);
+    }
+
+    /// <summary>What the status bar says of a search: how many usages it found, how many of them are in generated code,
+    /// and what it went without.</summary>
+    private static string Found(string title, IReadOnlyList<Usage> usages, string? note)
+    {
+        int generated = usages.Count(u => u.Generated);
+        return $"{title}: {usages.Count} found{(generated > 0 ? $", {generated} in generated code" : string.Empty)}"
+            + (note is null ? string.Empty : $"; {char.ToLowerInvariant(note[0])}{note[1..]}");
+    }
+}

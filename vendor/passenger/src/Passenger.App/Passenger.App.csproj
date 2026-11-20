@@ -1,0 +1,414 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>Passenger</AssemblyName>
+    <RootNamespace>Passenger.App</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Passenger.exe's icon on Windows, so its Start menu entry's and its file types' (tools/app-icon.sh). -->
+    <ApplicationIcon>Assets/Passenger.ico</ApplicationIcon>
+    <!-- Every window wears AppIcon's, so no second copy of the file is carried as the icon of a window with none. -->
+    <AvaloniaIncludeApplicationIconAsWindowIcon>false</AvaloniaIncludeApplicationIconAsWindowIcon>
+    <!-- PathNames calls libc's realpath through a generated P/Invoke. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Every window's icon (AppIcon), at each size Windows draws one. -->
+    <AvaloniaResource Include="Assets/Passenger.ico" />
+    <!-- The mark About, the Welcome page, the first start and What's New show, drawn from Assets/passenger.svg. -->
+    <AvaloniaResource Include="Assets/passenger.png" />
+    <!-- The window's typeface (Theme/WindowFonts.cs): Inter 4.1's hinted faces as rsms/inter's release gives them. -->
+    <AvaloniaResource Include="Fonts/*.ttf" />
+    <!-- The themes Passenger carries beside its own, a source in theme format 1 (Theme/BuiltInThemes.cs, docs/themes.md). -->
+    <AvaloniaResource Include="Theme/BuiltIn/**/*.json;Theme/BuiltIn/**/*.png;Theme/BuiltIn/**/*.jpg;Theme/BuiltIn/**/*.jpeg;Theme/BuiltIn/**/*.webp" />
+    <!-- The first start's pictures of Passenger in each theme it carries, dark and light (Welcome/FirstStartView.cs), taken
+         by just first-start-shots. -->
+    <AvaloniaResource Include="Assets/FirstStart/*.webp" />
+    <!-- MSBuild's own schemas (dotnet/msbuild, MIT), which the .NET SDK does not carry: the elements, properties, items,
+         metadata and tasks the code help in project files offers and describes (MSBuild/MSBuildSchema.cs). -->
+    <EmbeddedResource Include="MSBuild/Schemas/*.xsd" LogicalName="MSBuild/%(Filename)%(Extension)" />
+    <!-- Passenger's own helper in a Godot game it debugs, which Godot loads from the state's cache (Godot/GodotAgent.cs). -->
+    <EmbeddedResource Include="Godot/PassengerAgent.gd" LogicalName="Godot/PassengerAgent.gd" />
+    <!-- Passenger's readings of the Godot found, run headless once per version into the state's cache (Godot/GodotEngineApis.cs). -->
+    <EmbeddedResource Include="Godot/PassengerShaderProbes.gd" LogicalName="Godot/PassengerShaderProbes.gd" />
+    <EmbeddedResource Include="Godot/PassengerClasses.gd" LogicalName="Godot/PassengerClasses.gd" />
+    <!-- Passenger's own addon for Godot's editor, written into a Godot project when the person asks (Godot/GodotAddonFiles.cs). -->
+    <EmbeddedResource Include="Godot/Addon/plugin.cfg" LogicalName="Godot/Addon/plugin.cfg" />
+    <EmbeddedResource Include="Godot/Addon/passenger.gd" LogicalName="Godot/Addon/passenger.gd" />
+    <EmbeddedResource Include="Godot/Addon/scenes.gd" LogicalName="Godot/Addon/scenes.gd" />
+    <!-- Passenger's own Prettier runner (Web/Prettier.cs), carried beside the web language servers. -->
+    <None Include="Web/prettier.cjs" Link="web/passenger/prettier.cjs" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Passenger's preload for the Dockerfile server, which keeps it from Docker Hub while Settings says so
+         (Web/DockerHubTags.cs). -->
+    <None Include="Web/docker-hub.cjs" Link="web/passenger/docker-hub.cjs" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Passenger's preload for the YAML server, which has it ask Passenger for each schema's file (Web/JsonSchemas.cs). -->
+    <None Include="Web/yaml-schemas.mjs" Link="web/passenger/yaml-schemas.mjs" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <!-- Avalonia.Headless names this package, though nothing of it is read: the window draws in Passenger's own Inter
+         (Fonts/), so its assets stay out of the app. -->
+    <PackageReference Include="Avalonia.Fonts.Inter" ExcludeAssets="all" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <!-- The screenshot mode's off-screen platform (Screenshot.cs). -->
+    <PackageReference Include="Avalonia.HarfBuzz" />
+    <PackageReference Include="Avalonia.Headless" />
+    <PackageReference Include="Avalonia.Skia" />
+    <!-- Avalonia.Skia's Skia and HarfBuzz, taken at the versions Directory.Packages.props gives, each with its Linux
+         native library, which would otherwise stay at the older version Avalonia.Skia names. -->
+    <PackageReference Include="SkiaSharp" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux" />
+    <PackageReference Include="HarfBuzzSharp" />
+    <PackageReference Include="HarfBuzzSharp.NativeAssets.Linux" />
+    <!-- Aspire's resource service client (Aspire/), its C# generated from Aspire/Protocol/dashboard_service.proto and
+         checked in beside it (just aspire-protocol), so no build runs protoc. -->
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Net.Client" />
+    <!-- A library's type opened from XAML, decompiled when it has no source (Xaml/LibrarySources.cs). -->
+    <PackageReference Include="ICSharpCode.Decompiler" />
+    <!-- The Model Context Protocol server (Mcp/), the official SDK's core, without its ASP.NET half. -->
+    <PackageReference Include="ModelContextProtocol.Core" />
+    <PackageReference Include="Microsoft.TestPlatform.TranslationLayer" />
+    <!-- NuGet's own reading of the machine's settings and of target frameworks: the global packages folder EF's tools are
+         found in (Migrations/EfTools.cs) and which framework takes another's (Aspire/AspireOrchestration.cs). -->
+    <PackageReference Include="NuGet.Configuration" />
+    <!-- JoinableTaskFactory, which runs async work to its end where a caller must stay synchronous (Synchronously.cs). -->
+    <PackageReference Include="Microsoft.VisualStudio.Threading.Only" />
+    <!-- An HTML file's preview beside its text, in the system's own web view (Editors/HtmlPreview.cs). -->
+    <PackageReference Include="Avalonia.Controls.WebView" />
+    <!-- A sound's Ogg Vorbis and MP3 decoded to WAV for the system's player (Sounds.cs). -->
+    <PackageReference Include="NVorbis" />
+    <PackageReference Include="NLayer" />
+    <!-- An SVG file's picture beside its text (Editors/SvgPreview.cs). -->
+    <PackageReference Include="Svg.Skia" />
+    <!-- The Windows install's hooks: what its installer and uninstaller ask of Passenger.exe (Installation.cs). -->
+    <PackageReference Include="Velopack" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Passenger.Core/Passenger.Core.csproj" />
+    <ProjectReference Include="../Passenger.Editor/Passenger.Editor.csproj" />
+    <ProjectReference Include="../Passenger.Languages/Passenger.Languages.csproj" />
+    <ProjectReference Include="../Passenger.Lsp/Passenger.Lsp.csproj" />
+    <ProjectReference Include="../Passenger.Packages/Passenger.Packages.csproj" />
+    <ProjectReference Include="../Passenger.Text/Passenger.Text.csproj" />
+    <ProjectReference Include="../Passenger.Terminal/Passenger.Terminal.csproj" />
+    <ProjectReference Include="../Passenger.Vcs/Passenger.Vcs.csproj" />
+    <ProjectReference Include="../Passenger.Workspace/Passenger.Workspace.csproj" />
+    <ProjectReference Include="../Passenger.Xaml/Passenger.Xaml.csproj" />
+    <ProjectReference Include="../Passenger.Profiler/Passenger.Profiler.csproj" />
+    <ProjectReference Include="../Passenger.Dap/Passenger.Dap.csproj" />
+    <!-- Built first and carried, never linked: the adapter runs in its own process, on the runtime Passenger runs on (the
+         helper host's), so a publish builds it for its system but carries no runtime of its own. -->
+    <ProjectReference Include="../Passenger.DebugAdapter/Passenger.DebugAdapter.csproj" ReferenceOutputAssembly="false" Private="false"
+                      GlobalPropertiesToRemove="SelfContained;PublishReadyToRun" />
+    <!-- Built first, for a publish's system on its runtime pack, and carried beside the app, never linked: Passenger's helpers
+         run in it (ChildProcesses.HelperCommand). -->
+    <ProjectReference Include="../Passenger.Helper/Passenger.Helper.csproj" ReferenceOutputAssembly="false" Private="false"
+                      GlobalPropertiesToRemove="PublishReadyToRun" />
+    <!-- Built first and carried under inspector/, never linked: an Avalonia app Passenger debugs loads it (LiveTree/LiveApp.cs).
+         It is built once for every platform, as Avalonia's assemblies it is compiled against are the same on each. -->
+    <ProjectReference Include="../Passenger.Inspector/Passenger.Inspector.csproj" ReferenceOutputAssembly="false" Private="false"
+                      GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishReadyToRun" />
+    <!-- What Passenger and the inspector say to each other, one definition for both ends. -->
+    <Compile Include="../Passenger.Inspector/Protocol.cs" Link="LiveTree/InspectorProtocol.cs" />
+    <!-- Built first and carried under inspector/maui/, never linked: a .NET MAUI app Passenger runs on a device loads it
+         (LiveTree/LiveApp.cs). It is built once for every platform, as MAUI's cross-platform assemblies it is compiled
+         against are the same on each. -->
+    <ProjectReference Include="../Passenger.Inspector.Maui/Passenger.Inspector.Maui.csproj" ReferenceOutputAssembly="false" Private="false"
+                      GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishReadyToRun" />
+    <!-- Built first on every system and carried under inspector/wpf/ by a Windows build alone, never linked: a WPF app Passenger
+         runs or debugs loads it (LiveTree/LiveApp.cs). It targets net8.0-windows, which this project's own framework is not, so
+         it is built for its own framework rather than this one's. -->
+    <ProjectReference Include="../Passenger.Inspector.Wpf/Passenger.Inspector.Wpf.csproj" ReferenceOutputAssembly="false" Private="false"
+                      SkipGetTargetFrameworkProperties="true" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishReadyToRun;TargetFramework" />
+    <!-- Built first and carried under testframes/, never linked: a test run of an Avalonia headless project loads it
+         (Testing/TestFrames.cs). It is built once for every platform. -->
+    <ProjectReference Include="../Passenger.TestFrames/Passenger.TestFrames.csproj" ReferenceOutputAssembly="false" Private="false"
+                      GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishReadyToRun" />
+    <Compile Include="../Passenger.TestFrames/Variables.cs" Link="Testing/TestFramesVariables.cs" />
+    <!-- Built first and carried under updatehandlers/, never linked: a program debugged with Hot Reload loads it
+         (Debugging/UpdateHandlerHook.cs). It is built once for every platform. -->
+    <ProjectReference Include="../Passenger.UpdateHandlers/Passenger.UpdateHandlers.csproj" ReferenceOutputAssembly="false" Private="false"
+                      GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishReadyToRun" />
+    <Compile Include="../Passenger.UpdateHandlers/Wire.cs" Link="Debugging/UpdateHandlersWire.cs" />
+    <!-- Built first and carried under host/, never linked: MSBuild's evaluation runs in its own process on the runtime
+         Passenger runs on (Passenger.Workspace's ProjectHost.cs), so it is built for none of the systems the app is
+         published for. -->
+    <ProjectReference Include="../Passenger.Host/Passenger.Host.csproj" ReferenceOutputAssembly="false" Private="false"
+                      GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishReadyToRun" />
+    <!-- Built first and carried under wpfpreview/ on Windows, never linked: WPF's previewer runs in its own process on a
+         WPF project's own runtime (Xaml/WpfPreviewHost.cs). It is built everywhere, as WPF compiles anywhere
+         (EnableWindowsTargeting), and for none of the systems the app is published for. -->
+    <ProjectReference Include="../Passenger.WpfPreview/Passenger.WpfPreview.csproj" ReferenceOutputAssembly="false" Private="false"
+                      SkipGetTargetFrameworkProperties="true" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishReadyToRun;TargetFramework" />
+    <!-- The previewer's messages, one definition for both ends. -->
+    <Compile Include="../Passenger.WpfPreview/Protocol.cs" Link="Xaml/WpfPreviewProtocol.cs" />
+    <!-- Built first and carried under mauipreview/, never linked: MAUI's previewer runs in its own process on Passenger's
+         runtime (Xaml/MauiPreviewHost.cs), built for the publish's system or this machine's. -->
+    <ProjectReference Include="../Passenger.MauiPreview/Passenger.MauiPreview.csproj" ReferenceOutputAssembly="false" Private="false"
+                      GlobalPropertiesToRemove="SelfContained;PublishReadyToRun" />
+    <Compile Include="../Passenger.MauiPreview/Protocol.cs" Link="Xaml/MauiPreviewProtocol.cs" />
+  </ItemGroup>
+
+  <!-- TraceEvent's props give a build its Windows natives under x86/, amd64/ and arm64/: msdia140 (the DIA SDK, for
+       native symbols) and KernelTraceControl (for kernel ETW sessions). The profiler only reads EventPipe traces, with
+       no symbol reader, and loads neither, so no publish carries them, Windows' included. -->
+  <Target Name="LeaveOutWindowsTraceNatives" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="'%(Filename)' == 'msdia140' Or $([System.String]::Copy('%(Filename)').StartsWith('KernelTraceControl'))" />
+    </ItemGroup>
+  </Target>
+
+  <!-- LICENSE.txt and THIRD-PARTY-NOTICES.txt beside the app in every build and publish (and in every referencing
+       project's output), the notices written by tools/Passenger.Notices from the packages the app carries, so they cannot
+       fall behind it. -->
+  <ItemGroup>
+    <ProjectReference Include="../../tools/Passenger.Notices/Passenger.Notices.csproj" ReferenceOutputAssembly="false" Private="false"
+                      GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishReadyToRun" />
+    <None Include="../../LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+
+  <!-- Every version's release notes beside the app (release-notes/X.Y.Z.md), for What's New: carried, never fetched. -->
+  <ItemGroup>
+    <None Include="../../docs/release-notes/*.md" Link="release-notes/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+
+  <Target Name="NoticeInputs" DependsOnTargets="ResolvePackageAssets;ResolveRuntimePackAssets;IncludeDebugAdapter;IncludeProjectHost;IncludeMauiPreview">
+    <MSBuild Projects="../../tools/Passenger.Notices/Passenger.Notices.csproj" Targets="GetTargetPath"
+             RemoveProperties="RuntimeIdentifier;SelfContained;PublishReadyToRun" BuildInParallel="$(BuildInParallel)">
+      <Output TaskParameter="TargetOutputs" ItemName="NoticesTool" />
+    </MSBuild>
+    <MSBuild Projects="../Passenger.Lsp/Passenger.Lsp.csproj" Targets="GetRoslynServer" BuildInParallel="$(BuildInParallel)">
+      <Output TaskParameter="TargetOutputs" ItemName="NoticesServer" />
+    </MSBuild>
+    <MSBuild Projects="../Passenger.Lsp/Passenger.Lsp.csproj" Targets="GetWebServers" BuildInParallel="$(BuildInParallel)">
+      <Output TaskParameter="TargetOutputs" ItemName="NoticesWeb" />
+    </MSBuild>
+    <PropertyGroup>
+      <NoticesFile>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'THIRD-PARTY-NOTICES.txt'))</NoticesFile>
+      <NoticesArguments>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'notices.txt'))</NoticesArguments>
+      <NoticesHost>$(DOTNET_HOST_PATH)</NoticesHost>
+      <NoticesHost Condition="'$(NoticesHost)' == ''">dotnet</NoticesHost>
+      <NoticesRepository>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '..', '..'))</NoticesRepository>
+    </PropertyGroup>
+    <ItemGroup>
+      <NoticePackage Include="@(RuntimeCopyLocalItems->'%(NuGetPackageId)/%(NuGetPackageVersion)');@(NativeCopyLocalItems->'%(NuGetPackageId)/%(NuGetPackageVersion)');@(ResourceCopyLocalItems->'%(NuGetPackageId)/%(NuGetPackageVersion)');@(RuntimeTargetsCopyLocalItems->'%(NuGetPackageId)/%(NuGetPackageVersion)')" />
+      <!-- The runtime a self-contained app carries, from its runtime pack. -->
+      <NoticePackage Include="@(RuntimePackAsset->'%(NuGetPackageId)/%(NuGetPackageVersion)')" Condition="'$(SelfContained)' == 'true'" />
+      <NoticeDebuggerDeps Include="$(DebugAdapterFolder)*.deps.json" />
+      <NoticeHostDeps Include="$(ProjectHostFolder)*.deps.json" />
+      <NoticeMauiPreviewDeps Include="$(MauiPreviewFolder)*.deps.json" />
+      <NoticesServerPackage Include="@(NoticesServer->WithMetadataValue('Kind', 'package'))" />
+      <NoticeServerDeps Include="%(NoticesServerPackage.Folder)**/*.deps.json" />
+      <NoticeWebStamp Include="@(NoticesWeb->'%(Stamp)')" />
+      <NoticeText Include="$(NoticesRepository)THIRD_PARTY_NOTICES.md;$(NoticesRepository)LICENSE;$(NoticesRepository)tools/Passenger.Notices/Licenses/*.txt;$(NoticesRepository)src/Passenger.Editor/Fonts/OFL.txt;$(NoticesRepository)src/Passenger.App/Fonts/OFL.txt" />
+    </ItemGroup>
+    <RemoveDuplicates Inputs="@(NoticePackage)">
+      <Output TaskParameter="Filtered" ItemName="NoticePackageOnce" />
+    </RemoveDuplicates>
+    <ItemGroup>
+      <NoticeLine Include="out=$(NoticesFile)" />
+      <NoticeLine Include="license=$(NoticesRepository)LICENSE" />
+      <NoticeLine Include="notices=$(NoticesRepository)THIRD_PARTY_NOTICES.md" />
+      <NoticeLine Include="licenses=$(NoticesRepository)tools/Passenger.Notices/Licenses" />
+      <NoticeLine Include="packages=$(NuGetPackageRoot)" />
+      <NoticeLine Include="@(NoticePackageOnce->'package=%(Identity)')" />
+      <NoticeLine Include="@(NoticeDebuggerDeps->'debugger=%(FullPath)')" />
+      <NoticeLine Include="@(NoticeHostDeps->'host=%(FullPath)')" />
+      <NoticeLine Include="@(NoticeMauiPreviewDeps->'mauipreview=%(FullPath)')" />
+      <NoticeLine Include="@(NoticesServerPackage->'server=%(Identity)')" />
+      <NoticeLine Include="@(NoticesServerPackage->'serverFolder=%(Folder)')" />
+      <NoticeLine Include="@(NoticesServer->WithMetadataValue('Kind', 'leftOut')->'serverLeftOut=%(Identity)')" />
+      <NoticeLine Include="@(NoticesWeb->'node=%(Identity)node_modules')" />
+      <NoticeLine Include="text=JetBrains Mono, the editor's typeface, is under the SIL Open Font License 1.1, as JetBrains Mono gives it|$(NoticesRepository)src/Passenger.Editor/Fonts/OFL.txt" />
+      <NoticeLine Include="text=Inter, the window's typeface, is under the SIL Open Font License 1.1, as Inter gives it|$(NoticesRepository)src/Passenger.App/Fonts/OFL.txt" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(NoticesArguments)" Lines="@(NoticeLine)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+  </Target>
+
+  <Target Name="WriteNotices" DependsOnTargets="NoticeInputs"
+          Inputs="$(NoticesArguments);@(NoticesTool);@(NoticeText);@(NoticeDebuggerDeps);@(NoticeHostDeps);@(NoticeMauiPreviewDeps);@(NoticeServerDeps);@(NoticeWebStamp)" Outputs="$(NoticesFile)">
+    <Exec Command="&quot;$(NoticesHost)&quot; &quot;@(NoticesTool)&quot; &quot;$(NoticesArguments)&quot;" />
+  </Target>
+
+  <Target Name="IncludeNotices" BeforeTargets="AssignTargetPaths" DependsOnTargets="WriteNotices">
+    <ItemGroup>
+      <None Include="$(NoticesFile)" Link="THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <!-- The inspector becomes this project's output under inspector/: its own assembly, XAML Hot Reload's compiler and the
+       headless platform, since the app it loads into brings the Avalonia it uses. -->
+  <Target Name="IncludeInspector" BeforeTargets="AssignTargetPaths">
+    <MSBuild Projects="../Passenger.Inspector/Passenger.Inspector.csproj" Targets="GetTargetPath"
+             RemoveProperties="RuntimeIdentifier;SelfContained;PublishReadyToRun" BuildInParallel="$(BuildInParallel)">
+      <Output TaskParameter="TargetOutputs" ItemName="InspectorAssembly" />
+    </MSBuild>
+    <MSBuild Projects="../Passenger.Inspector/Passenger.Inspector.csproj" Targets="GetCarriedFiles"
+             RemoveProperties="RuntimeIdentifier;SelfContained;PublishReadyToRun" BuildInParallel="$(BuildInParallel)">
+      <Output TaskParameter="TargetOutputs" ItemName="InspectorFile" />
+    </MSBuild>
+    <ItemGroup>
+      <InspectorFile Include="@(InspectorAssembly->'%(RootDir)%(Directory)%(Filename).dll');@(InspectorAssembly->'%(RootDir)%(Directory)%(Filename).pdb')" />
+      <None Include="@(InspectorFile)" Link="inspector/%(InspectorFile.Filename)%(InspectorFile.Extension)"
+            CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <!-- The MAUI inspector becomes this project's output under inspector/maui/: its own assembly alone, since the app it
+       loads into brings the MAUI it uses. -->
+  <Target Name="IncludeMauiInspector" BeforeTargets="AssignTargetPaths">
+    <MSBuild Projects="../Passenger.Inspector.Maui/Passenger.Inspector.Maui.csproj" Targets="GetTargetPath"
+             RemoveProperties="RuntimeIdentifier;SelfContained;PublishReadyToRun" BuildInParallel="$(BuildInParallel)">
+      <Output TaskParameter="TargetOutputs" ItemName="MauiInspectorAssembly" />
+    </MSBuild>
+    <ItemGroup>
+      <MauiInspectorFile Include="@(MauiInspectorAssembly->'%(RootDir)%(Directory)%(Filename).dll');@(MauiInspectorAssembly->'%(RootDir)%(Directory)%(Filename).pdb')" />
+      <None Include="@(MauiInspectorFile)" Link="inspector/maui/%(MauiInspectorFile.Filename)%(MauiInspectorFile.Extension)"
+            CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <!-- The WPF inspector becomes this project's output under inspector/wpf/ where Passenger runs on Windows (a build on
+       Windows for no system, or a publish for win-x64 or win-arm64), the only place a WPF app runs: its own assembly alone,
+       since the app it loads into brings the WPF it uses. -->
+  <Target Name="IncludeWpfInspector" BeforeTargets="AssignTargetPaths"
+          Condition="('$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows'))) Or $(RuntimeIdentifier.StartsWith('win'))">
+    <MSBuild Projects="../Passenger.Inspector.Wpf/Passenger.Inspector.Wpf.csproj" Targets="GetTargetPath"
+             RemoveProperties="RuntimeIdentifier;SelfContained;PublishReadyToRun;TargetFramework" BuildInParallel="$(BuildInParallel)">
+      <Output TaskParameter="TargetOutputs" ItemName="WpfInspectorAssembly" />
+    </MSBuild>
+    <ItemGroup>
+      <WpfInspectorFile Include="@(WpfInspectorAssembly->'%(RootDir)%(Directory)%(Filename).dll');@(WpfInspectorAssembly->'%(RootDir)%(Directory)%(Filename).pdb')" />
+      <None Include="@(WpfInspectorFile)" Link="inspector/wpf/%(WpfInspectorFile.Filename)%(WpfInspectorFile.Extension)"
+            CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <!-- The test frames hook becomes this project's output under testframes/: its own assembly alone, since the test
+       program it loads into brings the Avalonia and xunit it uses. -->
+  <Target Name="IncludeTestFrames" BeforeTargets="AssignTargetPaths">
+    <MSBuild Projects="../Passenger.TestFrames/Passenger.TestFrames.csproj" Targets="GetTargetPath"
+             RemoveProperties="RuntimeIdentifier;SelfContained;PublishReadyToRun" BuildInParallel="$(BuildInParallel)">
+      <Output TaskParameter="TargetOutputs" ItemName="TestFramesAssembly" />
+    </MSBuild>
+    <ItemGroup>
+      <TestFramesFile Include="@(TestFramesAssembly->'%(RootDir)%(Directory)%(Filename).dll');@(TestFramesAssembly->'%(RootDir)%(Directory)%(Filename).pdb')" />
+      <None Include="@(TestFramesFile)" Link="testframes/%(TestFramesFile.Filename)%(TestFramesFile.Extension)"
+            CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <!-- The update handlers' hook becomes this project's output under updatehandlers/: its own assembly alone. -->
+  <Target Name="IncludeUpdateHandlers" BeforeTargets="AssignTargetPaths">
+    <MSBuild Projects="../Passenger.UpdateHandlers/Passenger.UpdateHandlers.csproj" Targets="GetTargetPath"
+             RemoveProperties="RuntimeIdentifier;SelfContained;PublishReadyToRun" BuildInParallel="$(BuildInParallel)">
+      <Output TaskParameter="TargetOutputs" ItemName="UpdateHandlersAssembly" />
+    </MSBuild>
+    <ItemGroup>
+      <UpdateHandlersFile Include="@(UpdateHandlersAssembly->'%(RootDir)%(Directory)%(Filename).dll');@(UpdateHandlersAssembly->'%(RootDir)%(Directory)%(Filename).pdb')" />
+      <None Include="@(UpdateHandlersFile)" Link="updatehandlers/%(UpdateHandlersFile.Filename)%(UpdateHandlersFile.Extension)"
+            CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <!-- WPF's previewer becomes this project's output under wpfpreview/ when the app is built or published for Windows, the
+       one system WPF draws on: its assembly and runtime configuration, as it carries no package. -->
+  <Target Name="IncludeWpfPreview" BeforeTargets="AssignTargetPaths"
+          Condition="('$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows'))) Or $(RuntimeIdentifier.StartsWith('win-'))">
+    <MSBuild Projects="../Passenger.WpfPreview/Passenger.WpfPreview.csproj" Targets="GetTargetPath"
+             RemoveProperties="RuntimeIdentifier;SelfContained;PublishReadyToRun;TargetFramework" BuildInParallel="$(BuildInParallel)">
+      <Output TaskParameter="TargetOutputs" ItemName="WpfPreviewAssembly" />
+    </MSBuild>
+    <PropertyGroup>
+      <WpfPreviewFolder>@(WpfPreviewAssembly->'%(RootDir)%(Directory)')</WpfPreviewFolder>
+    </PropertyGroup>
+    <ItemGroup>
+      <WpfPreviewFile Include="$(WpfPreviewFolder)Passenger.WpfPreview.*" Exclude="$(WpfPreviewFolder)*.runtimeconfig.dev.json" />
+      <None Include="@(WpfPreviewFile)" Link="wpfpreview/%(WpfPreviewFile.Filename)%(WpfPreviewFile.Extension)"
+            CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <!-- MAUI's previewer becomes this project's output under mauipreview/: all its build writes for the system, Avalonia's
+       backend for MAUI, MAUI's controls and Skia's and HarfBuzz's natives with it, as it shares no assembly with the app. -->
+  <Target Name="IncludeMauiPreview" BeforeTargets="AssignTargetPaths">
+    <MSBuild Projects="../Passenger.MauiPreview/Passenger.MauiPreview.csproj" Targets="GetTargetPath"
+             RemoveProperties="SelfContained;PublishReadyToRun" BuildInParallel="$(BuildInParallel)">
+      <Output TaskParameter="TargetOutputs" ItemName="MauiPreviewAssembly" />
+    </MSBuild>
+    <PropertyGroup>
+      <MauiPreviewFolder>@(MauiPreviewAssembly->'%(RootDir)%(Directory)')</MauiPreviewFolder>
+    </PropertyGroup>
+    <ItemGroup>
+      <MauiPreviewFile Include="$(MauiPreviewFolder)**/*" Exclude="$(MauiPreviewFolder)*.runtimeconfig.dev.json" />
+      <None Include="@(MauiPreviewFile)" Link="mauipreview/%(MauiPreviewFile.RecursiveDir)%(MauiPreviewFile.Filename)%(MauiPreviewFile.Extension)"
+            CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <!-- The project host's output becomes this project's output items under host/: the host and MSBuildLocator, the one
+       package it carries. -->
+  <Target Name="IncludeProjectHost" BeforeTargets="AssignTargetPaths">
+    <MSBuild Projects="../Passenger.Host/Passenger.Host.csproj" Targets="GetTargetPath"
+             RemoveProperties="RuntimeIdentifier;SelfContained;PublishReadyToRun" BuildInParallel="$(BuildInParallel)">
+      <Output TaskParameter="TargetOutputs" ItemName="ProjectHostAssembly" />
+    </MSBuild>
+    <PropertyGroup>
+      <ProjectHostFolder>@(ProjectHostAssembly->'%(RootDir)%(Directory)')</ProjectHostFolder>
+    </PropertyGroup>
+    <ItemGroup>
+      <ProjectHostFile Include="$(ProjectHostFolder)*" />
+      <None Include="@(ProjectHostFile)" Link="host/%(ProjectHostFile.Filename)%(ProjectHostFile.Extension)"
+            CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <!-- The helper host becomes this project's output beside the app: its apphost, assembly, .deps.json and
+       runtimeconfig.json, the runtime they name being the app's own in a publish (the same runtime pack's). -->
+  <Target Name="IncludeHelperHost" BeforeTargets="AssignTargetPaths">
+    <MSBuild Projects="../Passenger.Helper/Passenger.Helper.csproj" Targets="GetHelperHost"
+             RemoveProperties="PublishReadyToRun" BuildInParallel="$(BuildInParallel)">
+      <Output TaskParameter="TargetOutputs" ItemName="HelperHostFile" />
+    </MSBuild>
+    <ItemGroup>
+      <None Include="@(HelperHostFile)" Link="%(HelperHostFile.Filename)%(HelperHostFile.Extension)"
+            CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <!-- The debug adapter's output becomes this project's output items under debugger/, so every project that
+       references this one gets it beside its own binaries. -->
+  <Target Name="IncludeDebugAdapter" BeforeTargets="AssignTargetPaths">
+    <MSBuild Projects="../Passenger.DebugAdapter/Passenger.DebugAdapter.csproj" Targets="GetTargetPath"
+             RemoveProperties="SelfContained;PublishReadyToRun" BuildInParallel="$(BuildInParallel)">
+      <Output TaskParameter="TargetOutputs" ItemName="DebugAdapterAssembly" />
+    </MSBuild>
+    <PropertyGroup>
+      <DebugAdapterFolder>@(DebugAdapterAssembly->'%(RootDir)%(Directory)')</DebugAdapterFolder>
+    </PropertyGroup>
+    <ItemGroup>
+      <DebugAdapterFile Include="$(DebugAdapterFolder)**/*" />
+      <None Include="@(DebugAdapterFile)" Link="debugger/%(DebugAdapterFile.RecursiveDir)%(DebugAdapterFile.Filename)%(DebugAdapterFile.Extension)"
+            CopyToOutputDirectory="PreserveNewest" Visible="false" />
+      <!-- The debug relay a Debug app on an Android device loads, for each of its processors, as tools/debug-relay.sh
+           built it (CI builds it on macOS for every system's package): carried whatever system this build runs on.
+           An iOS simulator's app (on Apple silicon) and a Mac Catalyst app load their own, of the Mac's processor,
+           copied from where a Mac's Passenger carries it (its bundle's Resources: CarriedFiles); an iOS device's waits
+           until one proves it. -->
+      <DebugRelayFile Include="$([MSBuild]::EnsureTrailingSlash('$(ArtifactsPath)'))debug-relay/**/libpassenger-debug.so" />
+      <DebugRelayFile Include="$([MSBuild]::EnsureTrailingSlash('$(ArtifactsPath)'))debug-relay/iossimulator-arm64*/libpassenger-debug.dylib;$([MSBuild]::EnsureTrailingSlash('$(ArtifactsPath)'))debug-relay/maccatalyst-arm64*/libpassenger-debug.dylib"
+                      Condition="'$(RuntimeIdentifier)' == 'osx-arm64' Or ('$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('OSX'))
+                                 And '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64')" />
+      <DebugRelayFile Include="$([MSBuild]::EnsureTrailingSlash('$(ArtifactsPath)'))debug-relay/maccatalyst-x64*/libpassenger-debug.dylib"
+                      Condition="'$(RuntimeIdentifier)' == 'osx-x64' Or ('$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('OSX'))
+                                 And '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'X64')" />
+      <None Include="@(DebugRelayFile)" Link="debugger/relay/%(DebugRelayFile.RecursiveDir)%(DebugRelayFile.Filename)%(DebugRelayFile.Extension)"
+            CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    </ItemGroup>
+  </Target>
+</Project>

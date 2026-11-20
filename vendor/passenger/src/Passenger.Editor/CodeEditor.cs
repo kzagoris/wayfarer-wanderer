@@ -1,0 +1,1051 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Media.TextFormatting;
+using Avalonia.Threading;
+using Passenger.Core;
+using Passenger.Text;
+
+namespace Passenger.Editor;
+
+/// <summary>The code editor: draws a <see cref="TextDocument"/> with a line-number gutter, carets and
+/// selections, and turns keys, typing and the mouse into edits. Lines are formatted only when they
+/// are on screen and kept while their text and colours stay the same, so a keystroke costs the one
+/// line it changed.</summary>
+public sealed partial class CodeEditor : Control
+{
+    /// <summary>The code font Passenger carries, JetBrains Mono: the editor's, the terminal's and code's wherever the
+    /// window shows it, unless Settings puts another in force (<see cref="CodeFonts"/>); named through
+    /// <see cref="FallbackFonts"/>, so what it lacks is drawn in the platform's own fallback.</summary>
+    public static readonly FontFamily CodeFont = FallbackFonts.Carry(new FontFamily("avares://Passenger.Editor/Fonts#JetBrains Mono"));
+
+    public static readonly StyledProperty<double> FontSizeProperty =
+        AvaloniaProperty.Register<CodeEditor, double>(nameof(FontSize), 13);
+
+    public static readonly StyledProperty<double> LineSpacingProperty =
+        AvaloniaProperty.Register<CodeEditor, double>(nameof(LineSpacing), 1.2);
+
+    public static readonly StyledProperty<FontFamily> FontFamilyProperty =
+        AvaloniaProperty.Register<CodeEditor, FontFamily>(nameof(FontFamily), CodeFont);
+
+    public static readonly StyledProperty<CaretBlink> CaretBlinkProperty =
+        AvaloniaProperty.Register<CodeEditor, CaretBlink>(nameof(CaretBlink), CaretBlink.Default);
+
+    public static readonly StyledProperty<double> CaretWidthProperty =
+        AvaloniaProperty.Register<CodeEditor, double>(nameof(CaretWidth), Carets.DefaultWidth);
+
+    /// <summary>Space between the gutter's edge and the line numbers, and after them.</summary>
+    private const double GutterPadLeft = 14;
+    private const double GutterPadRight = 22;
+    /// <summary>The room between the gutter and the text, the theme's <c>Passenger.EditorTextPadding</c>.</summary>
+    private double TextPadLeft => palette.TextPadding;
+
+    /// <summary>Drawn by the host's ScrollBar theme; "stripe" marks the bar that carries the error stripe.</summary>
+    private readonly ScrollBar vertical = new() { Orientation = Orientation.Vertical, AllowAutoHide = false, Classes = { StyleClasses.Stripe } };
+    private readonly ScrollBar horizontal = new() { Orientation = Orientation.Horizontal, AllowAutoHide = true };
+    private readonly DispatcherTimer blink;
+    private TextDocument document = new();
+    private SelectionSet selections = SelectionSet.Single(0);
+
+    /// <summary>The selections Select Next Occurrence took from carets' words, while they stand: its next copies, and
+    /// Select All's, are whole words. Any other change of the selections is a set of its own, ending this.</summary>
+    private SelectionSet? wordOccurrences;
+
+    /// <summary>The text the carets are offsets in: the document's, but while a change is told to those who heard of it
+    /// before this editor carried its carets through it (mid-edit, or someone else's edit).</summary>
+    private TextSnapshot caretsText;
+    private IHighlighter? highlighter;
+    private Vector scroll;
+    private double widestLine;
+
+    /// <summary>Whether the text changed since the last frame, whose lines then set the horizontal extent afresh.</summary>
+    private bool widestStale;
+    private bool caretOn = true;
+    private bool updatingBars;
+    private bool editing;
+    private int? pendingGoTo;
+    private bool pendingEnd;
+    private bool ligatures;
+    private Metrics metrics;
+    private Palette palette;
+    private bool rainbowBraces = true;
+    private IndentOptions indent = new();
+    private (TextRunProperties Value, TextRunProperties Error) annotationRuns;
+
+    public CodeEditor()
+    {
+        Focusable = true;
+        ClipToBounds = true;
+        Cursor = IbeamCursor;
+        stripe = new ErrorStripe(this);
+        counts = new ProblemCounts(this);
+        overlay = new Painted(DrawOverlay);
+        prepareFrame = _ => PrepareFrame();
+        AddLayers();
+        VisualChildren.Add(vertical);
+        VisualChildren.Add(horizontal);
+        VisualChildren.Add(stripe);
+        VisualChildren.Add(counts);
+        LogicalChildren.Add(vertical);
+        LogicalChildren.Add(horizontal);
+        LogicalChildren.Add(stripe);
+        LogicalChildren.Add(counts);
+        vertical.PropertyChanged += OnScrollBarChanged;
+        horizontal.PropertyChanged += OnScrollBarChanged;
+        // Started only while focused: a timer running holds the editor, and all it shows, from the dispatcher.
+        blink = new DispatcherTimer(DispatcherPriority.Background) { Interval = CaretBlink.Default.Shown };
+        blink.Tick += (_, _) =>
+        {
+            caretOn = !caretOn;
+            Blinks++;
+            blink.Interval = CaretBlink.While(caretOn);
+            RedrawOverlay();
+        };
+        decorations = new DocumentDecorations(document);
+        ownsDecorations = true;
+        decorations.Changed += OnDecorationsChanged;
+        document.ChangedFirst += OnChangedFirst;
+        document.Changed += OnDocumentChanged;
+        caretsText = document.Snapshot;
+        ActualThemeVariantChanged += (_, _) => RefreshStyle();
+        // A theme or a colour scheme laid over the application's resources (Settings) changes the brushes, not the variant.
+        ResourcesChanged += (_, _) =>
+        {
+            if (palette is not { } shown || !Palette.From(this).SameAs(shown) || GutterBrushesChanged())
+            {
+                RefreshStyle();
+            }
+        };
+        AddHandler(TextInputMethodClientRequestedEvent, (_, e) => e.Client = InputMethod);
+        metrics = Metrics.Measure(Typeface, FontSize, LineSpacing);
+        palette = Palette.Default;
+        numberRuns = (
+            RunWith(palette.LineNumberCurrent),
+            RunWith(palette.LineNumber));
+        annotationRuns = (ItalicRunWith(palette.Annotation), ItalicRunWith(palette.Error));
+        CodeFonts.Follow(this, FontFamilyProperty);
+        Carets.FollowBlink(this, CaretBlinkProperty);
+        Carets.FollowWidth(this, CaretWidthProperty);
+    }
+
+    /// <summary>Raised when the view scrolls.</summary>
+    public event EventHandler? ScrollChanged;
+
+    /// <summary>Raised when any caret or selection changes, by an edit or a move.</summary>
+    public event EventHandler? SelectionChanged;
+
+    /// <summary>A press on the text whose gesture the keymap gives an action not the editor's own (Cmd+click's): the caret
+    /// is put at the press first, for the host to run the action there.</summary>
+    public event EventHandler<string>? ActionRequested;
+
+    /// <summary>What runs a click whose gesture also starts a drag, let go where it was pressed (Alt-click beside Alt-drag's
+    /// column), given the selection the press fell inside, else the caret at the press: true where the host ran the action,
+    /// false where it cannot run there, the press then the start of a column, as its drag leaves it.</summary>
+    public Func<string, bool>? ClickRuns { get; set; }
+
+    /// <summary>The pointer has rested on the text: the offset under it and where it is, for a hover
+    /// card. Raised once per rest; moving off clears it (<see cref="HoverEnded"/>).</summary>
+    public event EventHandler<HoverEventArgs>? Hovered;
+
+    public event EventHandler? HoverEnded;
+
+    /// <summary>The pointer has rested on the gutter beside a line (from zero): where it is, for the card of what the
+    /// gutter shows there. Raised once per rest; moving off clears it (<see cref="HoverEnded"/>).</summary>
+    public event EventHandler<GutterClick>? GutterHovered;
+
+    /// <summary>The context menu is asked for: by a right-click on the text, at its point, or from the keyboard (the menu
+    /// key, Shift+F10), with no point, at the caret.</summary>
+    public event EventHandler<Point?>? ContextMenuRequested;
+
+    /// <summary>Asks for the context menu at the caret, as the keyboard's menu key does.</summary>
+    public void RequestContextMenu() => ContextMenuRequested?.Invoke(this, null);
+
+    /// <summary>Text arrived from the keyboard and was typed into the document, so completion and
+    /// signature help can decide whether to open.</summary>
+    public event EventHandler<string>? Typed;
+
+    /// <summary>What is drawn on the text shown: the document's own when the host gave them with it (<see cref="Show"/>), so
+    /// every editor of the document reads the same, else this editor's for the text it was given.</summary>
+    public DocumentDecorations Decorations => decorations;
+
+    private DocumentDecorations decorations;
+
+    /// <summary>Whether <see cref="decorations"/> were made for this editor alone, let go of with the text.</summary>
+    private bool ownsDecorations;
+
+    /// <summary>The markers drawn over the text (sorted), from the language service, carried with the text.</summary>
+    public MarkerList Markers => decorations.Markers;
+
+    public void SetMarkers(IReadOnlyList<Marker> markers) => decorations.SetMarkers(markers);
+
+    /// <summary>The lines that differ from another text, from the host: on the error stripe, and with
+    /// <see cref="ChangeBackgrounds"/> as the lines' tints.</summary>
+    public IReadOnlyList<ChangeMark> ChangeMarks => decorations.ChangeMarks;
+
+    public void SetChangeMarks(IReadOnlyList<ChangeMark> marks) => decorations.SetChangeMarks(marks);
+
+    private readonly AnchoredList<InlineChange> inlineChanges = new(c => c.Range, (c, range) => c with { Range = range });
+
+    /// <summary>The words that changed inside changed lines (sorted), drawn over the lines' tint in a stronger colour; they
+    /// move with edits until the host sets them again. This editor's own, as what a diff's side or a change's popup marks.</summary>
+    public IReadOnlyList<InlineChange> InlineChanges => inlineChanges.Items;
+
+    public void SetInlineChanges(IReadOnlyList<InlineChange> changes)
+    {
+        if (changes.Count == 0 && inlineChanges.Count == 0)
+        {
+            return;
+        }
+        inlineChanges.Set(document, [.. changes.OrderBy(c => c.Range.Start)]);
+        RedrawChanged();
+    }
+
+    /// <summary>The bookmarked lines, marked on the error stripe.</summary>
+    public IReadOnlyList<int> Bookmarks => decorations.Bookmarks;
+
+    public void SetBookmarks(IReadOnlyList<int> lines) => decorations.SetBookmarks(lines);
+
+    /// <summary>Whether the change marks tint whole lines; a mark with no lines is then a rule between two.</summary>
+    public bool ChangeBackgrounds { get; set; }
+
+    /// <summary>Text after lines' code, from the host.</summary>
+    public IReadOnlyList<LineAnnotation> LineAnnotations => decorations.LineAnnotations;
+
+    public void SetLineAnnotations(IReadOnlyList<LineAnnotation> annotations) => decorations.SetLineAnnotations(annotations);
+
+    /// <summary>Reads decorations other than the ones shown, letting go of those if they were this editor's alone, and draws
+    /// what they hold.</summary>
+    private void Decorate(DocumentDecorations shown, bool owned)
+    {
+        if (!ReferenceEquals(shown, decorations))
+        {
+            decorations.Changed -= OnDecorationsChanged;
+            if (ownsDecorations)
+            {
+                decorations.Release();
+            }
+            decorations = shown;
+            decorations.Changed += OnDecorationsChanged;
+        }
+        ownsDecorations = owned;
+        wrappedHints = decorations.InlayHints;
+        stripeBuild = null;
+        counts.InvalidateMeasure();
+    }
+
+    /// <summary>Draws what the decorations were set to: other counts of problems measured again, lines with hints drawn
+    /// otherwise wrapped again, the rows of other folds.</summary>
+    private void OnDecorationsChanged(object? sender, DecorationKind kind)
+    {
+        switch (kind)
+        {
+            case DecorationKind.Markers:
+                if (counts.Stale)
+                {
+                    counts.InvalidateMeasure();
+                    InvalidateArrange();
+                }
+                break;
+            case DecorationKind.InlayHints:
+                HintList before = wrappedHints;
+                wrappedHints = decorations.InlayHints;
+                FollowHints(before, wrappedHints);
+                FollowInputMethod();
+                break;
+            case DecorationKind.Folds:
+                HideFoldPreview();
+                UpdateScrollBars();
+                ScrollWithinRows();
+                FollowInputMethod();
+                break;
+        }
+        // The gutter's columns read change marks and bookmarks, which a row's key leaves to them; a fold moves rows.
+        if (kind is DecorationKind.ChangeMarks or DecorationKind.Bookmarks or DecorationKind.Folds)
+        {
+            Redraw();
+        }
+        else
+        {
+            RedrawChanged();
+        }
+    }
+
+    /// <summary>A press on the gutter at a line (from zero) that none of its columns took: the host's. With a handler, a
+    /// click there no longer selects the line.</summary>
+    public event EventHandler<GutterClick>? GutterClicked;
+
+    /// <summary>Where a line's number is drawn, in the editor's coordinates: what a popup about the line is placed beside.</summary>
+    public Point GutterPoint(int line) => new(GutterWidth, TopOf(line) + metrics.LineHeight - scroll.Y);
+
+    /// <summary>The middle of a host's column of the gutter at a line, in the editor's coordinates: where a click on what
+    /// it draws there lands.</summary>
+    public Point GutterColumnPoint(IGutterColumn column, int line)
+    {
+        (double left, double width) = StripOf(column);
+        return new Point(left + (width / 2), TopOf(line) - scroll.Y + (metrics.LineHeight / 2));
+    }
+
+    /// <summary>The middle of a fold's chevron at a line, in the editor's coordinates.</summary>
+    public Point FoldPoint(int line) => new(GutterWidth - (FoldWidth / 2), TopOf(line) - scroll.Y + (metrics.LineHeight / 2));
+
+    /// <summary>Whether a point (in the editor's coordinates) is on a host's column of the gutter.</summary>
+    public bool IsOnGutterColumn(IGutterColumn column, Point at)
+    {
+        (double left, double width) = StripOf(column);
+        return ShowLineNumbers && at.X >= left && at.X < left + width;
+    }
+
+    /// <summary>The markers at an offset, for a tooltip.</summary>
+    public IEnumerable<Marker> MarkersAt(int offset) =>
+        Markers.Where(m => m.Range.Start <= offset && (offset < m.Range.End || (m.Range.Length == 0 && offset == m.Range.Start)));
+
+    public double FontSize
+    {
+        get => GetValue(FontSizeProperty);
+        set => SetValue(FontSizeProperty, value);
+    }
+
+    /// <summary>How the caret blinks while the editor has the keys: the one in force (<see cref="Carets"/>) unless given.</summary>
+    public CaretBlink CaretBlink
+    {
+        get => GetValue(CaretBlinkProperty);
+        set => SetValue(CaretBlinkProperty, value);
+    }
+
+    /// <summary>The line caret's width: the one in force (<see cref="Carets"/>) unless given.</summary>
+    public double CaretWidth
+    {
+        get => GetValue(CaretWidthProperty);
+        set => SetValue(CaretWidthProperty, value);
+    }
+
+    public double LineSpacing
+    {
+        get => GetValue(LineSpacingProperty);
+        set => SetValue(LineSpacingProperty, value);
+    }
+
+    public FontFamily FontFamily
+    {
+        get => GetValue(FontFamilyProperty);
+        set => SetValue(FontFamilyProperty, value);
+    }
+
+    /// <summary>How Enter, Tab, Shift+Tab, Backspace and a paste indent, and how wide a tab is drawn.</summary>
+    public IndentOptions Indent
+    {
+        get => indent;
+        set
+        {
+            bool redraw = value.TabWidth != indent.TabWidth;
+            indent = value;
+            if (redraw)
+            {
+                RefreshStyle();
+            }
+        }
+    }
+
+    /// <summary>Whether a pasted block takes the document's indentation; off where indentation is the text's own (Markdown's
+    /// code blocks, plain text).</summary>
+    public bool ReindentsPaste { get; set; } = true;
+
+    /// <summary>Whether brackets take a colour by their depth (rainbow braces), or the text's.</summary>
+    public bool RainbowBraces
+    {
+        get => rainbowBraces;
+        set
+        {
+            if (rainbowBraces != value)
+            {
+                rainbowBraces = value;
+                RefreshStyle();
+            }
+        }
+    }
+
+    /// <summary>Whether the font may join characters into ligatures (=> drawn as one arrow); off by default, so every
+    /// character stays the one typed.</summary>
+    public bool Ligatures
+    {
+        get => ligatures;
+        set
+        {
+            ligatures = value;
+            RefreshStyle();
+        }
+    }
+
+    public WordStop WordStop { get; set; } = OperatingSystem.IsMacOS() ? WordStop.End : WordStop.Start;
+
+    /// <summary>What a line comment starts with in this document's language, or null for none.</summary>
+    public string? LineCommentPrefix { get; set; } = "//";
+
+    /// <summary>What a block comment starts and ends with in this document's language, or null for none. A language with
+    /// no line comment comments a line with it.</summary>
+    public (string Start, string End)? BlockComment { get; set; } = ("/*", "*/");
+
+    /// <summary>Which markup this document's language is, whose tags Enter's indentation follows; none for code.</summary>
+    public MarkupKind Markup { get; set; }
+
+    /// <summary>Whether typing in <see cref="Markup"/> completes end tags: a start tag's '>' writes its end tag after the
+    /// caret, and "&lt;/" the open element's name (<see cref="TextEditing.CloseTag"/>), each a step of Undo of its own.</summary>
+    public bool ClosesTags { get; set; } = true;
+
+    public bool IsReadOnly { get; set; }
+
+    /// <summary>Why the text refuses changes while <see cref="IsReadOnly"/>, in the host's words, which Vim mode says as it
+    /// refuses one; null for none.</summary>
+    public string? ReadOnlyWhy { get; set; }
+
+    /// <summary>Raised from the editor, bubbling to its window, as it refuses text typed while <see cref="IsReadOnly"/> (a
+    /// key's, an input method's), so the host says <see cref="ReadOnlyWhy"/> as it does for a key changing the
+    /// text.</summary>
+    public static readonly RoutedEvent<RoutedEventArgs> TypingRefusedEvent =
+        RoutedEvent.Register<CodeEditor, RoutedEventArgs>("TypingRefused", RoutingStrategies.Bubble);
+
+    /// <summary>Whether the gutter shows line numbers; a console's output goes without.</summary>
+    public bool ShowLineNumbers { get; set; } = true;
+
+    /// <summary>Whether the scroll bars show when there is more to see; a few lines shown as a picture of a place go
+    /// without, a long line cut at the edge.</summary>
+    public bool ShowScrollBars { get; set; } = true;
+
+    /// <summary>Scrolls so the last line sits at the bottom of the view, as output follows its end; not yet laid out (a
+    /// console written to while its window is hidden), once it is.</summary>
+    public void ScrollToEnd()
+    {
+        if (Bounds.Height <= 0)
+        {
+            pendingEnd = true;
+            return;
+        }
+        // Output that fits stays at its top; longer output ends clear of the sideways bar drawn over the view's foot.
+        double height = RowCount * metrics.LineHeight;
+        double bottom = height <= Viewport.Height ? 0 : height - Viewport.Height + horizontal.DesiredSize.Height;
+        ScrollTo(new Vector(0, bottom));
+    }
+
+    /// <summary>The keymap whose gestures of the mouse pressed on an editor's text run, the window's in force: set on a
+    /// window, every editor there follows it, unless it has a <see cref="Keymap"/> of its own.</summary>
+    public static readonly AttachedProperty<Func<Keymap>?> GesturesProperty =
+        AvaloniaProperty.RegisterAttached<CodeEditor, AvaloniaObject, Func<Keymap>?>("Gestures", inherits: true);
+
+    public static Func<Keymap>? GetGestures(AvaloniaObject host) => host.GetValue(GesturesProperty);
+
+    public static void SetGestures(AvaloniaObject host, Func<Keymap>? gestures) => host.SetValue(GesturesProperty, gestures);
+
+    /// <summary>When set, the editor resolves its own key presses and gestures; an IDE leaves it null and sends actions in
+    /// through <see cref="TryExecute"/> from one window-wide keymap, whose gestures it gives (<see cref="GesturesProperty"/>).</summary>
+    public Keymap? Keymap
+    {
+        get => ownKeys?.Keymap;
+        set => ownKeys = value is null ? null : new KeymapDispatcher(value);
+    }
+
+    /// <summary>The text shown, with decorations of this editor's own; <see cref="Show"/> shows a document's own.</summary>
+    public TextDocument Document
+    {
+        get => document;
+        set => ShowText(value, null);
+    }
+
+    private void ShowText(TextDocument value, DocumentDecorations? shared)
+    {
+        KeepWraps();
+        StopWrapping();
+        document.ChangedFirst -= OnChangedFirst;
+        document.Changed -= OnDocumentChanged;
+        document = value;
+        document.ChangedFirst += OnChangedFirst;
+        document.Changed += OnDocumentChanged;
+        lineShape++;
+        // A template's places, a composition, a GoTo waiting for layout and the folds are offsets in the text left behind.
+        EndSnippet();
+        CancelChoices();
+        pendingGoTo = null;
+        usages.Clear();
+        UsagesKept = false;
+        inlineChanges.Clear();
+        highlights.Clear();
+        hovered.Release();
+        pressed.Release();
+        HideFoldPreview();
+        Decorate(shared ?? new DocumentDecorations(value), owned: shared is null);
+        EndComposition();
+        selections = SelectionSet.Single(0);
+        caretsText = value.Snapshot;
+        leaning = [];
+        wrapLeaning = [];
+        nextWrapLeaning = null;
+        wraps = KeptWraps(value.Snapshot);
+        rowMap = null;
+        awaitedY = null;
+        scroll = default;
+        widestLine = 0;
+        measuredWidth = 0;
+        ForgetLines();
+        InvalidateArrange();
+        Redraw();
+        FollowInputMethod();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public IHighlighter? Highlighter
+    {
+        get => highlighter;
+        set
+        {
+            if (highlighter is not null)
+            {
+                highlighter.Changed -= OnHighlighterChanged;
+            }
+            highlighter = value;
+            if (highlighter is not null)
+            {
+                highlighter.Changed += OnHighlighterChanged;
+            }
+            toldShowing = null;
+            colouring++;
+            Redraw();
+        }
+    }
+
+    public SelectionSet Selections
+    {
+        get => selections;
+        set => SetSelections(value, reveal: true);
+    }
+
+    /// <summary>The primary caret's line and column, both from zero.</summary>
+    public TextPosition CaretPosition => document.Snapshot.GetPosition(selections.Primary.Caret);
+
+    public Vector ScrollOffset => scroll;
+
+    public double LineHeight => metrics.LineHeight;
+
+    private Typeface Typeface => new(FontFamily);
+
+    private double GutterWidth => ShowLineNumbers ? NumbersRight + columnRoom.Right + FoldWidth : 4;
+
+    /// <summary>Where the line numbers end: past the columns left of them and the numbers' widest.</summary>
+    private double NumbersRight => columnRoom.Left + (Math.Max(2, Digits(document.Snapshot.LineCount)) * metrics.CharWidth);
+
+    private double TextLeft => GutterWidth + TextPadLeft;
+
+    private Size Viewport => new(Math.Max(0, Bounds.Width - GutterWidth), Bounds.Height);
+
+    /// <summary>Puts the primary caret at a line and column (from zero) and scrolls it into the middle
+    /// of the view, as opening a file at a position does; never past where the last line stands at the view's foot, so a
+    /// file that fits the view shows from its first line.</summary>
+    public void GoTo(TextPosition position)
+    {
+        int offset = document.Snapshot.GetOffset(position);
+        SetSelections(SelectionSet.Single(offset), reveal: false);
+        ScrollToPlace(offset);
+        WentTo?.Invoke(this, offset);
+    }
+
+    /// <summary>Raised as <see cref="GoTo"/> takes the caret to a place, with its offset, for a view laid over the text to
+    /// show that place too.</summary>
+    public event EventHandler<int>? WentTo;
+
+    /// <summary>Scrolls an offset a third of the way down the view, as <see cref="GoTo"/> does; not laid out yet, the
+    /// first arrange does it, leaving the carets as they stand then (a selection made after the GoTo).</summary>
+    private void ScrollToPlace(int offset)
+    {
+        if (Bounds.Height <= 0)
+        {
+            pendingGoTo = offset;
+            return;
+        }
+        double y = RowOfOffset(document.Snapshot, offset, LeansBack(offset)).Row * metrics.LineHeight;
+        // A text that fits stays at its top, its first line whole under what stands above it (a diff's header).
+        bool fits = RowCount * metrics.LineHeight <= Viewport.Height - horizontal.DesiredSize.Height;
+        double lastAtFoot = Math.Max(0, RowCount * metrics.LineHeight - Viewport.Height);
+        ScrollTo(new Vector(scroll.X, fits ? 0 : Math.Min(y - Viewport.Height / 3, lastAtFoot)));
+        Reveal(offset);
+    }
+
+    /// <summary>Shows a document with the carets and scroll it was left at, as switching back to a
+    /// tab does, its lines wrapped or not as they were (the scroll is in its rows as they were), drawn with its
+    /// decorations, which every editor showing it reads, or with ones of this editor's own.</summary>
+    public void Show(TextDocument shown, SelectionSet carets, Vector offset, bool wrapped = false, DocumentDecorations? decorated = null)
+    {
+        ShowText(shown, decorated);
+        softWrap = wrapped;
+        if (!wrapped)
+        {
+            wraps = null;
+        }
+        // Without its wraps kept, the rows the host kept come once the lines above them are wrapped.
+        awaitedY = wrapped && wraps is null && offset.Y > 0 ? offset.Y : null;
+        selections = carets.Clamp(shown.Snapshot.Length);
+        caretsText = shown.Snapshot;
+        leaning = [];
+        wrapLeaning = [];
+        // Kept for rows the text may no longer have (its file reloaded shorter while its tab was hidden or closed).
+        scroll = new Vector(offset.X, WithinRows(offset.Y));
+        UpdateScrollBars();
+        Redraw();
+        FollowInputMethod();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Lets go of the text and colours shown, whose changes reach this editor no more, and of all drawn from them,
+    /// leaving an empty text until another is shown: a split or a diff that closed is then held by nothing it showed, and
+    /// an edit to the file no longer maps its carets or redraws it.</summary>
+    public void Detach()
+    {
+        blink.Stop();
+        hover?.Stop();
+        Highlighter = null;
+        Document = new TextDocument();
+        SetHighlights([], -1);
+        SetUsageHighlights([]);
+        foldLines = null;
+        stripeBuild = null;
+        stripeDrawn = default;
+    }
+
+    private readonly AnchoredList<TextRange> highlights = new(r => r, (_, range) => range);
+
+    /// <summary>Ranges a search found (sorted), drawn behind the text, the current one stronger; they move with edits until
+    /// the search sets them again.</summary>
+    public IReadOnlyList<TextRange> Highlights => highlights.Items;
+
+    public int CurrentHighlight { get; private set; } = -1;
+
+    public void SetHighlights(IReadOnlyList<TextRange> ranges, int current)
+    {
+        highlights.Set(document, ranges);
+        CurrentHighlight = current;
+        RedrawChanged();
+    }
+
+    /// <summary>Selects a range and scrolls it into view, as finding it does.</summary>
+    public void Select(TextRange range)
+    {
+        SetSelections(SelectionSet.Single(new Selection(range.Start, range.End)), reveal: true);
+    }
+
+    /// <summary>Where an offset's caret would stand, as the top of its row, in this control's
+    /// coordinates: what a popup anchors to, and where a click lands on that offset.</summary>
+    public Point PointOf(int offset)
+    {
+        (int row, double x) = Place(document.Snapshot, offset, LeansBack(offset));
+        return new Point(TextLeft - scroll.X + x, (row * metrics.LineHeight) - scroll.Y);
+    }
+
+    /// <summary>How many rows the text takes on screen: its lines less the folded ones, each wrapped line counted for every
+    /// row soft wrap makes of it.</summary>
+    public int RowsShown => RowCount;
+
+    /// <summary>The first and last lines (from zero) the rows on screen show, for a host that works only on what is seen.</summary>
+    public (int First, int Last) LinesShown
+    {
+        get
+        {
+            int count = document.Snapshot.LineCount;
+            (int firstRow, int lastRow) = RowsInView;
+            RowMap rows = Rows;
+            return (Math.Clamp(rows.LineOfRow(firstRow).Line, 0, Math.Max(0, count - 1)), Math.Clamp(rows.LineOfRow(lastRow).Line, 0, Math.Max(0, count - 1)));
+        }
+    }
+
+    /// <summary>The first and last rows (from zero) the view reaches, the last perhaps past the text's.</summary>
+    private (int First, int Last) RowsInView
+    {
+        get
+        {
+            int first = Math.Max(0, (int)(scroll.Y / metrics.LineHeight));
+            return (first, Math.Max(first, (int)((scroll.Y + Math.Max(Bounds.Height, metrics.LineHeight)) / metrics.LineHeight)));
+        }
+    }
+
+    public void ScrollTo(Vector offset)
+    {
+        double maxY = MaxScrollY;
+        double maxX = MaxScrollX;
+        Vector clamped = new(Math.Clamp(offset.X, 0, maxX), Math.Clamp(offset.Y, 0, maxY));
+        if (clamped == scroll)
+        {
+            return;
+        }
+        scroll = clamped;
+        awaitedY = null;
+        HideFoldPreview();
+        UpdateScrollBars();
+        Scrolled();
+        FollowInputMethod();
+        ScrollChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    protected override Size MeasureOverride(Size availableSize)
+    {
+        vertical.Measure(availableSize);
+        horizontal.Measure(availableSize);
+        double width = double.IsInfinity(availableSize.Width) ? 600 : availableSize.Width;
+        double height = double.IsInfinity(availableSize.Height) ? 400 : availableSize.Height;
+        return new Size(width, height);
+    }
+
+    protected override Size ArrangeOverride(Size finalSize)
+    {
+        double barWidth = vertical.DesiredSize.Width;
+        double barHeight = horizontal.DesiredSize.Height;
+        Rect bar = new(finalSize.Width - barWidth, 0, barWidth, Math.Max(0, finalSize.Height - barHeight));
+        vertical.Arrange(bar);
+        ArrangeStripe(bar);
+        horizontal.Arrange(new Rect(GutterWidth, finalSize.Height - barHeight, Math.Max(0, finalSize.Width - GutterWidth - barWidth), barHeight));
+        UpdateScrollBars();
+        if (pendingEnd && finalSize.Height > 0)
+        {
+            pendingEnd = false;
+            Dispatcher.UIThread.Post(ScrollToEnd);
+        }
+        if (pendingGoTo is { } offset)
+        {
+            pendingGoTo = null;
+            Dispatcher.UIThread.Post(() => ScrollToPlace(Math.Min(offset, document.Snapshot.Length)));
+        }
+        // The gutter's width, and with it the caret's x, follows the text's line count and the font.
+        FollowInputMethod();
+        return finalSize;
+    }
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property == FontSizeProperty || change.Property == LineSpacingProperty || change.Property == FontFamilyProperty)
+        {
+            // A zoom keeps the line at the top of the view there.
+            KeepTopLine(() =>
+            {
+                metrics = Metrics.Measure(Typeface, FontSize, LineSpacing);
+                RefreshStyle();
+            });
+        }
+        else if (change.Property == CaretBlinkProperty)
+        {
+            RestartBlink();
+            RedrawOverlay();
+        }
+        else if (change.Property == CaretWidthProperty)
+        {
+            RedrawOverlay();
+        }
+    }
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        RefreshStyle();
+        RestartBlink();
+    }
+
+    /// <summary>Gone from the screen (its popup, dialog or window closed), it stops its timers, which would hold it from the
+    /// dispatcher for as long as they ran.</summary>
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        blink.Stop();
+        hover?.Stop();
+    }
+
+    protected override void OnGotFocus(FocusChangedEventArgs e)
+    {
+        base.OnGotFocus(e);
+        RestartBlink();
+        // The selections take the focused look.
+        Redraw();
+    }
+
+    protected override void OnLostFocus(FocusChangedEventArgs e)
+    {
+        base.OnLostFocus(e);
+        blink.Stop();
+        ownKeys?.Reset();
+        document.BreakUndoGroup();
+        Redraw();
+    }
+
+    /// <summary>A command would have made more carets than <see cref="SelectionSet.MaxCount"/> and made that many at most,
+    /// or none: the host says so.</summary>
+    public event EventHandler? CaretLimitReached;
+
+    private void SetSelections(SelectionSet value, bool reveal)
+    {
+        if (value.Count > SelectionSet.MaxCount)
+        {
+            // From anywhere else (a host's set, a column drag): the most the editor keeps, around the primary.
+            int from = Math.Clamp(value.PrimaryIndex - (SelectionSet.MaxCount / 2), 0, value.Count - SelectionSet.MaxCount);
+            value = SelectionSet.Create([.. value.Items.Skip(from).Take(SelectionSet.MaxCount)], value.PrimaryIndex - from);
+            CaretLimitReached?.Invoke(this, EventArgs.Empty);
+        }
+        SelectionSet clamped = VimSettled(value.Clamp(document.Snapshot.Length));
+        leaning = nextLeaning ?? Emptied(leaning);
+        nextLeaning = null;
+        wrapLeaning = nextWrapLeaning ?? Emptied(wrapLeaning);
+        nextWrapLeaning = null;
+        UnfoldAroundCarets(clamped);
+        bool changed = !clamped.SameAs(selections) || clamped.PrimaryIndex != selections.PrimaryIndex;
+        selections = clamped;
+        caretsText = document.Snapshot;
+        CheckSnippet();
+        if (reveal)
+        {
+            Reveal(selections.Primary.Caret);
+        }
+        RestartBlink();
+        RedrawChanged();
+        FollowInputMethod();
+        if (changed)
+        {
+            SelectionChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>A set of places a caret leans at, empty: the one given while it is, as most moves leave it.</summary>
+    private static HashSet<int> Emptied(HashSet<int> set) => set.Count == 0 ? set : [];
+
+    /// <summary>Scrolls just enough to show <paramref name="offset"/>, keeping a few columns of room
+    /// beside it.</summary>
+    private void Reveal(int offset)
+    {
+        if (Bounds.Height <= 0)
+        {
+            return;
+        }
+        TextSnapshot text = document.Snapshot;
+        (int row, double caretX) = Place(text, offset, LeansBack(offset));
+        double top = row * metrics.LineHeight;
+        double y = scroll.Y;
+        Size viewport = Viewport;
+        double usable = viewport.Height - horizontal.DesiredSize.Height;
+        if (top < y)
+        {
+            y = top;
+        }
+        else if (top + metrics.LineHeight > y + usable)
+        {
+            y = top + metrics.LineHeight - usable;
+        }
+        double x = scroll.X;
+        double room = metrics.CharWidth * 4;
+        if (caretX - room < x)
+        {
+            x = Math.Max(0, caretX - room);
+        }
+        else if (caretX + room > x + viewport.Width - TextPadLeft - vertical.DesiredSize.Width)
+        {
+            x = caretX + room - (viewport.Width - TextPadLeft - vertical.DesiredSize.Width);
+        }
+        widestLine = Math.Max(widestLine, caretX);
+        ScrollTo(new Vector(x, y));
+    }
+
+    private void RestartBlink()
+    {
+        caretOn = true;
+        blink.Stop();
+        if (IsFocused && CaretBlink.Blinks)
+        {
+            blink.Interval = CaretBlink.Shown;
+            blink.Start();
+        }
+    }
+
+    private void OnDocumentChanged(object? sender, DocumentChangedEventArgs e)
+    {
+        FollowLineShape(e);
+        // What was offered to choose among is the text left behind.
+        CancelChoices();
+        FollowUsages();
+        FollowLinkEdits();
+        HideFoldPreview();
+        if (!editing)
+        {
+            leaning = [];
+            wrapLeaning = [];
+            selections = TextEditing.MapThrough(selections, e.Edits).Clamp(e.After.Length);
+            caretsText = e.After;
+            FollowInputMethod();
+            SelectionChanged?.Invoke(this, EventArgs.Empty);
+            // Fewer rows may leave the view past the last (another split deleting, the file reloaded shorter).
+            ScrollWithinRows();
+        }
+        widestStale = true;
+        InvalidateArrange();
+        RedrawChanged();
+    }
+
+    private void OnHighlighterChanged(object? sender, EventArgs e)
+    {
+        if (highlighter is not { KeptColours: true })
+        {
+            coloursMoved = true;
+            TextSnapshot now = document.Snapshot;
+            if (highlighter?.ChangedWithin is { } range && !coloursMovedAll && (coloursMovedIn is null || ReferenceEquals(coloursMovedIn, now)))
+            {
+                coloursMovedWithin = coloursMovedWithin is { } was ? TextRange.FromBounds(Math.Min(was.Start, range.Start), Math.Max(was.End, range.End)) : range;
+                coloursMovedIn = now;
+            }
+            else
+            {
+                coloursMovedAll = true;
+            }
+        }
+        Dispatcher.UIThread.Post(Recolour);
+    }
+
+    /// <summary>Whether the highlighter has been changed since the last <see cref="Recolour"/> without saying it kept every
+    /// colour it had given.</summary>
+    private bool coloursMoved;
+
+    /// <summary>Where those changes said their colours may differ, in the text they were raised in (<see cref="coloursMovedIn"/>),
+    /// unless one did not say (<see cref="coloursMovedAll"/>).</summary>
+    private TextRange? coloursMovedWithin;
+    private TextSnapshot? coloursMovedIn;
+    private bool coloursMovedAll;
+
+    /// <summary>New colours for the same text: the lines are formatted again, each found again if its colours stayed. When
+    /// the lines drawn keep every colour they have (a parse that finds what a key carried them to, or that says so), nothing
+    /// is drawn again but a bracket pair the parse told anew.</summary>
+    private void Recolour()
+    {
+        if (BracesChanged())
+        {
+            RedrawChanged();
+        }
+        bool moved = coloursMoved;
+        TextRange? within = coloursMovedAll || !ReferenceEquals(coloursMovedIn, document.Snapshot) ? null : coloursMovedWithin;
+        coloursMoved = false;
+        coloursMovedWithin = null;
+        coloursMovedIn = null;
+        coloursMovedAll = false;
+        if (!moved)
+        {
+            return;
+        }
+        if (within is { } range)
+        {
+            // Only the rows the change reached are made again, their colours asked anew; the rest stand as drawn.
+            if (views.Drop(document.Snapshot, range))
+            {
+                RedrawChanged();
+            }
+            return;
+        }
+        if (views.Keep(document.Snapshot, Colours))
+        {
+            return;
+        }
+        colouring++;
+        RedrawChanged();
+    }
+
+    private void OnScrollBarChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        if (updatingBars || e.Property != RangeBase.ValueProperty)
+        {
+            return;
+        }
+        ScrollTo(sender == vertical ? new Vector(scroll.X, vertical.Value) : new Vector(horizontal.Value, scroll.Y));
+    }
+
+    private void UpdateScrollBars()
+    {
+        updatingBars = true;
+        Size viewport = Viewport;
+        double maxY = MaxScrollY;
+        vertical.Maximum = maxY;
+        vertical.ViewportSize = viewport.Height;
+        vertical.LargeChange = viewport.Height;
+        vertical.SmallChange = metrics.LineHeight;
+        vertical.Value = scroll.Y;
+        // The stripe is its track, so it stays with nothing to scroll; with soft wrap too, so the wrap width never shifts.
+        vertical.IsVisible = ShowScrollBars && (showErrorStripe || softWrap || RowCount * metrics.LineHeight > viewport.Height);
+        double maxX = MaxScrollX;
+        horizontal.Maximum = maxX;
+        horizontal.ViewportSize = viewport.Width;
+        horizontal.LargeChange = viewport.Width;
+        horizontal.SmallChange = metrics.CharWidth * 4;
+        horizontal.Value = scroll.X;
+        horizontal.IsVisible = ShowScrollBars && maxX > 0;
+        updatingBars = false;
+    }
+
+    /// <summary>How far the view scrolls down: to where the last row stands at its top.</summary>
+    private double MaxScrollY => Math.Max(0, (RowCount - 1) * metrics.LineHeight);
+
+    /// <summary>A scroll's height brought within the rows: from past the last, to where the last stands at the view's foot,
+    /// so as many show as fit; as it is while soft wrap waits for the width that makes them.</summary>
+    private double WithinRows(double y)
+    {
+        double max = softWrap && Wraps is null ? y : MaxScrollY;
+        return y <= max ? y : Math.Min(max, Math.Max(0, (RowCount * metrics.LineHeight) - Viewport.Height));
+    }
+
+    /// <summary>Brings the view back within the rows once they are fewer (a shorter text, lines folded): past the last row
+    /// it would draw nothing, not even the gutter, until scrolled.</summary>
+    private void ScrollWithinRows()
+    {
+        double y = WithinRows(scroll.Y);
+        if (y < scroll.Y)
+        {
+            ScrollTo(new Vector(scroll.X, y));
+        }
+    }
+
+    /// <summary>How far the view scrolls sideways: to the widest line drawn and a little more, or nowhere while the lines
+    /// wrap to the view.</summary>
+    private double MaxScrollX => softWrap && Wraps is not null ? 0 : Math.Max(0, widestLine + TextPadLeft + metrics.CharWidth * 4 - Viewport.Width);
+
+    private void RefreshStyle()
+    {
+        // The font and the tab are what the wraps measured with.
+        look++;
+        palette = Palette.From(this);
+        hintRun = null;
+        runProperties.Clear();
+        runLooks.Clear();
+        numberRuns = (
+            RunWith(palette.LineNumberCurrent),
+            RunWith(palette.LineNumber));
+        annotationRuns = (ItalicRunWith(palette.Annotation), ItalicRunWith(palette.Error));
+        ForgetGutterLook();
+        ForgetLines();
+        // The stripe and the counts paint with the palette too, so they are drawn again with the next frame.
+        stripeDrawn = default;
+        InvalidateArrange();
+        Redraw();
+    }
+
+    private static int Digits(int value) => value < 10 ? 1 : (int)Math.Floor(Math.Log10(value)) + 1;
+
+    /// <summary>A monospaced font's line height at a size and the width of a character, measured over ten as a line of the
+    /// editor is laid out: the cell the editor's columns and the terminal's take.</summary>
+    public static (double LineHeight, double CharWidth) MeasureFont(Typeface typeface, double fontSize)
+    {
+        GenericTextRunProperties props = new(typeface, fontSize);
+        using TextLine probe = TextFormatter.Current.FormatLine(
+            new SingleRun("MMMMMMMMMM", props), 0, double.PositiveInfinity, new LineProperties(props, 4))!;
+        return (probe.Height, probe.WidthIncludingTrailingWhitespace / 10);
+    }
+
+    /// <summary>The font's measures at a size: the height of a line and the width of a character,
+    /// both whole pixels so lines and columns land on the pixel grid.</summary>
+    private readonly record struct Metrics(double LineHeight, double CharWidth, double FontSize)
+    {
+        public static Metrics Measure(Typeface typeface, double fontSize, double spacing)
+        {
+            (double height, double charWidth) = MeasureFont(typeface, fontSize);
+            return new Metrics(Math.Ceiling(height * spacing), charWidth, fontSize);
+        }
+    }
+}

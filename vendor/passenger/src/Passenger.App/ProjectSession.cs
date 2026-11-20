@@ -1,0 +1,2071 @@
+using Passenger.App.CSharp;
+using Passenger.App.Aspire;
+using Passenger.App.Debugging;
+using Passenger.App.Editors;
+using Passenger.App.History;
+using Passenger.App.LiveTree;
+using Passenger.App.Packages;
+using Passenger.App.Navigation;
+using Passenger.App.Profiling;
+using Passenger.App.Run;
+using Passenger.App.Run.Devices;
+using Passenger.App.State;
+using Passenger.App.Testing;
+using Passenger.App.ToolWindows;
+using Passenger.App.Vcs;
+using Passenger.App.Workspace;
+using Passenger.Core;
+using Passenger.Inspector;
+using Passenger.Profiler;
+using Passenger.Workspace;
+using Passenger.Xaml.Projects;
+
+namespace Passenger.App;
+
+/// <summary>What a window lends each session it makes: its editors (whose open files the session's services follow),
+/// where its state and Local History are kept, how folders are watched, the warm language server it may take up, the
+/// consoles, Debug window and tests tree its runners, debugger and test runner write to, the build a test run starts
+/// with, the tab of the Terminal window a program the debugger launches there runs in, the settings as they stand (the
+/// Node.js the web language servers run on, whether remote JSON schemas are downloaded), the window's work under way,
+/// which Git's operations and test runs show themselves in, and the container engine the folder's containers run
+/// on.</summary>
+public sealed record SessionSetup(
+    EditorArea Editors,
+    string StateFolder,
+    HistoryKeeping HistoryKeeping,
+    FolderWatching Watching,
+    Func<bool> SolutionWide,
+    WarmServer? WarmServer,
+    ToolViews Views,
+    Func<CancellationToken, Task<BuildOutcome>> BuildForTests,
+    Func<string, Dap.RunInTerminalArguments, Task<TerminalRun>> RunForDebugger,
+    Func<Settings.AppSettings> Settings,
+    ActionWork Work,
+    Func<Containers.ContainerEngine> Engine)
+{
+    /// <summary>Where the Dockerfile server asks for image tags in Docker Hub's place: the window's.</summary>
+    public Uri? DockerHub { get; init; }
+
+    /// <summary>The user folders every Godot the session starts keeps in place of the person's: the window's.</summary>
+    public IReadOnlyDictionary<string, string>? GodotEnvironment { get; init; }
+
+    /// <summary>Whether the session starts the C# language server: the window's <see cref="MainWindow.StartsLanguageServer"/>.</summary>
+    public bool StartsLanguageServer { get; init; } = true;
+
+    /// <summary>Whether opening a GDScript starts Godot's headless editor for it: the window's <see cref="MainWindow.GodotHeadlessAtOpen"/>.</summary>
+    public bool GodotHeadlessAtOpen { get; init; }
+
+    /// <summary>Whether nobody sees the window, whose Godot then runs headless: the window's <see cref="MainWindow.Unseen"/>.</summary>
+    public bool Unseen { get; init; }
+
+    /// <summary>Where the container tools come from that reach a program in a container: the window's.</summary>
+    public required Func<Containers.ContainerToolsSource> ContainerTools { get; init; }
+
+    /// <summary>The opening of a folder begun as the process started, which the session that opens that folder takes up:
+    /// the first of a windowless Passenger's window.</summary>
+    public HeadStart? HeadStart { get; init; }
+}
+
+/// <summary>Projects whose evaluation landed, as the workspace now has them, and whether which projects hold tests (or the
+/// preprocessor symbols their code is read with), or what packages the projects reference, changed with them.</summary>
+public sealed record EvaluatedProjects(IReadOnlyList<ProjectModel> Projects, bool TestsChanged, bool PackagesChanged);
+
+/// <summary>One folder or solution open in a window, or a window's nothing before one opens: what the folder has (its
+/// solution read, its files indexed and watched, Local History, run configurations, breakpoints, bookmarks, the last
+/// build's problems, recent files and the places Back goes to, what it keeps in the store) and what it runs (the language
+/// server, Git, its builds and programs, one in the terminal, the debugger, the profiler's run, its tests), made as the
+/// folder opens and ended together as it is left (<see cref="LeaveAsync"/>) or its window closes (<see cref="CloseAsync"/>),
+/// so nothing of one folder outlives it into the next. The window builds its controllers over the session it has and binds
+/// its views to it. A UI-thread object.</summary>
+public sealed class ProjectSession : IAsyncDisposable
+{
+    /// <summary>How many recently opened files Go to File offers before anything is typed.</summary>
+    public const int RecentLimit = 25;
+
+    private readonly SessionSetup setup;
+    private readonly List<string> recent = [];
+
+    /// <summary>Bumped by each read of the folder, so a walk for projects that lands after a later read is dropped.</summary>
+    private int reads;
+
+    private Task? ending;
+    private bool closing;
+
+    /// <summary>The opening of the folder begun as the process started, until the first walk for its projects has landed:
+    /// what the session has not taken of it by then is ended.</summary>
+    private HeadStart? ahead;
+
+    /// <summary>What the folder's watcher saw before the session made its C# service, while a server started ahead (which
+    /// may have read the files already) waited for it.</summary>
+    private HeldChanges? unheardAhead;
+
+    /// <summary>The folder held as one the IDE works in, so a path inside it found in a console is asked of the disk
+    /// even on a share (<see cref="FoundPaths.Reach"/>).</summary>
+    private readonly IDisposable? reached;
+
+    private ProjectSession(SessionSetup setup, string? folder)
+    {
+        this.setup = setup;
+        Folder = folder;
+        reached = folder is null ? null : FoundPaths.Reach(folder);
+        Configurations = new RunConfigurations(folder, () => Workspace);
+        Aspire = new AspireController(this, setup.StateFolder);
+        Aspire.Inspected = app => Reloaded(app);
+        AspireFiles = new AspireFiles(this);
+        NodeFiles = new Web.NodeFiles(this);
+        EditorConfigs = new Settings.FolderEditorConfigs(this);
+        Builder = new ProcessRunner(setup.Views.Build, builds: true);
+        Runner = new ProcessRunner(setup.Views.Run, takesInput: true);
+        Tests = new TestController(setup.Views.TestTree, setup.BuildForTests, () => Projects, () => Workspace, line => setup.Views.Build.Append($"{line}\n"))
+        {
+            Work = setup.Work,
+            // The Godot Run starts the game on, found off the window's thread, with the window's user folders for Godot.
+            GodotVariables = cancel => BackgroundWork.Run(() => GodotTestRuns.Variables(setup.Settings().GodotExecutable,
+                setup.GodotEnvironment ?? new Dictionary<string, string>(), setup.Settings().GodotTestsWindowed && !setup.Unseen), cancel),
+            GodotFolders = () => [.. Workspace?.GodotGames ?? [], .. Projects.Select(p => p.NamedGodotFolder).OfType<string>()],
+        };
+        Tests.Finder.StateFolder = setup.StateFolder;
+        Containers = new Containers.FolderContainers(folder, setup.Engine());
+        Vcs.Work = setup.Work;
+        Vcs.Watching = setup.Watching;
+        // A XAML file's localized strings read from the .resx and XLIFF files as the editor has them.
+        Xaml.Snapshots = () => setup.Editors.Texts().Open;
+        Xaml.Evaluations = path => evaluations.GetValueOrDefault(path);
+        Xaml.Server = () => CSharp?.Session;
+        Frameworks.Changed += (_, project) => FollowFramework(project);
+        BuildChoices.Changed += (_, _) => FollowBuildChoice();
+        GodotScenes = new Godot.GodotSceneIndex { Texts = setup.Editors.Texts, Files = () => (Index.Root, Index.Files), FilesWhole = () => Index.IsWhole, GameOf = GodotOf };
+        // Where a GoDotTest game's tests start: read from its scenes and the C# their nodes run.
+        Tests.GoDotStartOf = project => UiThread.InvokeAsync(async () => Godot.GodotScripts.ProjectOf(project) is { } folder
+            ? await GoDotStartAsync(await GodotScenes.ScenesAsync(folder), await GoDotChosenAsync(project),
+                Projects.FirstOrDefault(p => PathNames.Same(p.Path, project)) is { } game ? Passenger.App.CSharp.CompilationSymbols.Of(game) : null)
+            : Testing.GoDotTests.Start.Main);
+        Stylesheets = new Web.PageStylesheets
+        {
+            Texts = setup.Editors.Texts,
+            Files = () => (Index.Root, Index.Files),
+            Projects = () => Projects,
+            Remote = new Web.RemoteStylesheets(() => setup.Settings().DownloadStylesheets),
+        };
+        Stylesheets.Changed += (_, _) =>
+        {
+            CSharp?.StylesheetsChanged();
+            Web?.StylesheetsChanged();
+        };
+        GodotScenes.Changed += (_, _) => CSharp?.GodotScenesChanged();
+        GodotApis = new Godot.GodotEngineApis(() => setup.Settings().GodotExecutable, () => setup.GodotEnvironment);
+        GodotShaderChecker = new Godot.GodotShaderChecker(GodotApis);
+        GodotShaders = new Godot.GodotShaderMarks(GodotScenes, GodotOf, GodotShaderChecker);
+        GodotScriptTypes = new Godot.GodotScriptTypes(GodotScenes, GodotOf, GodotApis,
+            document => Web?.For(document));
+        GodotMarks = new Godot.GodotSceneMarks(GodotScenes, GodotOf, () => CSharp, setup.Editors.Commands)
+        {
+            Godot = () => setup.Settings().GodotExecutable,
+            Shaders = GodotShaderChecker,
+        };
+        GodotScenes.Changed += (_, _) => GodotFilesChanged();
+        GodotScenes.CodeChanged += (_, _) => GodotMarks.CodeWritten();
+        Debug = new DebugController(setup.Editors, setup.Views.Debug)
+        {
+            RunInTerminal = setup.RunForDebugger,
+            Folder = folder,
+            Server = () => CSharp?.Session,
+            Reads = () => Workspace,
+            HotReloadOn = () => setup.Settings().HotReloadWhileDebugging,
+            HotReloadOnSave = () => setup.Settings().HotReloadOnSave,
+            XamlOnSave = () => setup.Settings().XamlHotReloadOnSave,
+            // A game's own session, or the GDScript tab beside its C#'s.
+            ReloadsScripts = scripts => games.Any(g => g.ReloadsScripts
+                && (g.Debugged == scripts || (g.Debugged is not null && Debug?.TabOf(scripts)?.Name == DebugController.ScriptsTab(g.Name)))),
+        };
+        Debug.SelectionChanged += (_, _) =>
+        {
+            Aspire.SelectDebugger(Debug.Chosen);
+            LiveAppChanged?.Invoke(this, EventArgs.Empty);
+            InspectedChanged?.Invoke(this, EventArgs.Empty);
+        };
+        Aspire.Changed += (_, _) =>
+        {
+            LiveAppChanged?.Invoke(this, EventArgs.Empty);
+            InspectedChanged?.Invoke(this, EventArgs.Empty);
+        };
+        // Kept with the folder from Keep on, while the window keeps state.
+        Debug.Breakpoints.Changed += (_, _) => State?.Breakpoints.Set(Debug.Breakpoints.Capture());
+        Debug.Breakpoints.ExceptionsChanged += (_, _) => State?.Breakpoints.Set(Debug.Breakpoints.Capture());
+        Debug.Breakpoints.BindingErrorsChanged += (_, _) => State?.Breakpoints.Set(Debug.Breakpoints.Capture());
+        Debug.TabsChanged += (_, _) => OnDebugTabsChanged();
+        Bookmarks.Changed += (_, _) => State?.Bookmarks.Set(Bookmarks.Capture());
+        // What a Git operation changes in the files is one change set of the folder's Local History, under its name.
+        Vcs.Activity = name => LocalHistory?.During(name);
+        Models.Changed += (_, changed) => OnEvaluated(changed);
+        Packages = new FolderPackages(() => Projects, () => Solution?.Path is { } solution ? Path.GetDirectoryName(solution) : Folder)
+        {
+            Work = setup.Work,
+            SaveFirst = setup.Editors.SaveAllLandedAsync,
+            Commands = setup.Editors.Commands,
+            History = () => LocalHistory,
+        };
+        MSBuild = new MSBuild.MSBuildService(() => Folder, () => Workspace)
+        {
+            Feed = () => Packages.FeedAsync(null),
+            Vulnerabilities = () => Packages.VulnerabilitiesAsync(),
+            ReadDeprecations = Packages.DeprecationsReadAsync,
+            Deprecated = Packages.DeprecationOf,
+        };
+        DesignTimeBuilds = new ProjectBuilds(LoadOrderAsync, () => Workspace);
+    }
+
+    /// <summary>A window's session with no folder open: files may still be open, alone.</summary>
+    public static ProjectSession None(SessionSetup setup) => new(setup, null);
+
+    /// <summary>Opens a folder (canonical) with its solution read, or the one named, or none: its Local History, index and
+    /// watcher, its configurations, and the language server on its projects; one without a solution (or whose solution
+    /// does not read, <paramref name="unread"/>) is walked for them. The projects are as the folder's cache in the store
+    /// has them (<paramref name="kept"/>, when the window keeps state) until MSBuild has evaluated them again (<see
+    /// cref="Evaluate"/>).</summary>
+    public static ProjectSession Open(SessionSetup setup, string folder, string? named, WorkspaceModel? withSolution, UnreadSolution? unread,
+        ProjectState? kept = null)
+    {
+        bool trusted = WorkspaceTrust.Trusts(folder);
+        HeadStart? ahead = trusted && setup.HeadStart is { } head && PathNames.Same(head.Folder, folder)
+            && (head.Named is null ? named is null : named is not null && PathNames.Same(head.Named, named)) ? head : null;
+        ProjectSession session = new(setup, folder)
+        {
+            NamedSolution = named,
+            LocalHistory = History.LocalHistory.Open(folder, setup.StateFolder, setup.HistoryKeeping),
+            ahead = ahead,
+            Trusted = trusted,
+        };
+        // Where the log's timing of the language server's start (CSharpService) begins.
+        IdeErrors.Write($"Opened {folder}{(withSolution is { } read && read.OpenedAs != folder ? $" with {Path.GetFileName(read.OpenedAs)}" : string.Empty)}"
+            + (trusted ? string.Empty : ", not trusted: none of its code runs"));
+        // The build configuration it kept, which its evaluations and design-time builds are made under from the start.
+        if (kept is not null)
+        {
+            session.BuildChoices.Take(kept.Workspace.Value);
+        }
+        // A folder without a solution has no projects until the walk for them lands: none to load, run or build meanwhile.
+        session.reads++;
+        session.Models.Open(folder, kept?.ProjectModels, ahead?.Evaluations);
+        // Its projects' design-time builds as kept, or as begun ahead, which its language server loads them from.
+        session.DesignTimeBuilds.Open(folder, kept?.ProjectBuilds, ahead?.Builds);
+        session.openedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        // The folder as read ahead, its projects walked for already, when that read has landed.
+        WorkspaceModel opening = ahead?.Read is { IsCompletedSuccessfully: true } walked ? walked.Result
+            : withSolution ?? new WorkspaceModel(folder, null, []) { Unread = unread };
+        OpenedByPerson(opening);
+        session.Workspace = session.Models.Apply(opening);
+        session.TakeFilter(session.Workspace);
+        session.TimeSolutionView();
+        session.Configurations.Configure(session.Projects);
+        // The single-file AppHosts are found among the files the index's walk lists, never by a walk of their own.
+        session.Index.Walked += (_, _) => session.AspireFiles.Walked(folder, session.Index.Files);
+        session.Index.Changed += (_, change) => session.AspireFiles.CameAndWent(folder, change.Came, change.Gone);
+        // The Node packages too, their scripts run configurations.
+        session.Index.Walked += (_, _) => session.NodeFiles.Walked(folder, session.Index.Files);
+        session.Index.Changed += (_, change) => session.NodeFiles.CameAndWent(folder, change.Came, change.Gone);
+        // And the .editorconfig files Settings says the keys of.
+        session.Index.Walked += (_, _) => session.EditorConfigs.Walked();
+        session.Index.Changed += (_, change) => session.EditorConfigs.CameAndWent(change.Came, change.Gone);
+        session.Index.Build(folder);
+        session.Watcher = new FolderWatcher(folder, setup.Watching);
+        session.Web = new Web.WebLanguages(folder, setup.Settings, setup.Engine)
+        {
+            DockerHub = setup.DockerHub, GodotEnvironment = setup.GodotEnvironment ?? new Dictionary<string, string>(), Stylesheets = session.Stylesheets,
+            GodotHeadlessAtOpen = setup.GodotHeadlessAtOpen,
+        };
+        // A compose file's check reads what each .NET service's project reads, once the language server has loaded it.
+        session.Web.Checks.Code = () => new Containers.ComposeCode(session.Projects, session.CSharp is { IsReady: true } csharp ? csharp.Session : null);
+        session.Web.Checks.GapsChanged += (_, _) => session.CSharp?.ComposeGapsChanged();
+        return session;
+    }
+
+    /// <summary>The folder open, canonical; null for a window with none.</summary>
+    public string? Folder { get; }
+
+    /// <summary>Whether the folder is trusted (<see cref="WorkspaceTrust"/>), as it was as it opened or once trusted since
+    /// (<see cref="Trust"/>). Untrusted, the session runs none of its code: no evaluation or design-time build of its
+    /// projects, no C# language server, no reading of its build configurations; its builds, runs, tests and previews are
+    /// refused (<see cref="Refusals.Untrusted"/>). A session with no folder has none to guard.</summary>
+    public bool Trusted { get; private set; } = true;
+
+    /// <summary>The folder came to be trusted, and what the session held back began; or its trust was taken back, and what
+    /// trusting began ended where it could be.</summary>
+    public event EventHandler? TrustChanged;
+
+    /// <summary>The folders a trusted folder's solution reaches outside it, its projects' beside it: trusted with it while
+    /// it is open (<see cref="WorkspaceTrust.Lend"/>), and an agent's to work in as the folder is (<see cref="Mcp.AgentReach"/>).
+    /// None while the folder is not trusted.</summary>
+    public IReadOnlyList<string> Reached => Trusted ? beside : [];
+
+    /// <summary>The folders of the solution's real projects outside the open folder, as last worked out (<see cref="FollowReach"/>).</summary>
+    private IReadOnlyList<string> beside = [];
+
+    /// <summary>The folders the solution reaches outside the open folder, worked out again as it is read: each project's own
+    /// folder where its project file is there, one no workspace may lend passed over (<see cref="WorkspaceTrust.Lends"/>).
+    /// A solution Passenger wrote for an agent's call reaches no further than before (<see cref="Mcp.AgentReach.WroteFor"/>),
+    /// until the person writes it or opens it, so an agent's own edit never widens its reach or the trust lent.</summary>
+    private void FollowReach()
+    {
+        if (Folder is not { } open || workspace is not { } now)
+        {
+            beside = [];
+            return;
+        }
+        List<string> real = [.. now.Projects.Where(p => !PathNames.Within(p.Folder, open) && IsProjectFile(p.Path) && File.Exists(p.Path))
+            .Select(p => p.Folder).Where(f => WorkspaceTrust.Lends(f, open)).Distinct(PathNames.Comparer)];
+        IReadOnlyList<string> before = beside;
+        beside = now.ReadFrom.Any(r => Mcp.AgentReach.WroteFor(PathNames.Canonical(r.Path))) ? [.. real.Where(f => before.Contains(f, PathNames.Comparer))] : real;
+
+        // Any of MSBuild's project files (.csproj, .esproj, .sqlproj), never another file a solution names as one.
+        static bool IsProjectFile(string path) => Path.GetExtension(path) is { Length: > 5 } extension && extension.EndsWith("proj", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>A trusted folder's projects outside it (a solution's beside it) are trusted with it while it is open, so what
+    /// works on them (a run, a migration) runs as it does for those inside.</summary>
+    private void LendTrust()
+    {
+        if (Trusted && Folder is { } open)
+        {
+            WorkspaceTrust.Lend(this, open, Reached);
+        }
+    }
+
+    /// <summary>Why the folder has no C# language server: it is not trusted, or it has none.</summary>
+    public string WhyNoCSharp => Trusted ? Refusals.NoCSharp : Refusals.Untrusted;
+
+    /// <summary>The folder came to be trusted: what the session held back begins as an open begins it, Git's status read
+    /// with the repository's configuration, the language server, the projects' evaluations (and so their design-time
+    /// builds), the build configurations read, and its web languages' own code. Once.</summary>
+    public void Trust()
+    {
+        UiThread.Check();
+        if (Trusted || IsEnded)
+        {
+            return;
+        }
+        Trusted = true;
+        LendTrust();
+        IdeErrors.Write($"Trusted {Folder}: its code runs from now on");
+        // Git's reads take the repository's own configuration from now on.
+        IdeErrors.Observe(Vcs.RefreshAsync());
+        StartCSharp();
+        Evaluate();
+        ReadBuildChoices();
+        Web?.Trust();
+        TrustChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>The folder's trust was taken back: what trusting began is held back where it can be, the language server
+    /// (and one started ahead) ended, the project hosts handed out for it ended, which may hold its tasks loaded, the
+    /// folders it lent let go, Git's reads without the repository's own configuration, and its web languages on Passenger's
+    /// own TypeScript; what the person started runs on until it ends (<see cref="StillRunning"/>). Once.</summary>
+    public void Untrust()
+    {
+        UiThread.Check();
+        if (!Trusted || IsEnded || Folder is not { } folder)
+        {
+            return;
+        }
+        Trusted = false;
+        WorkspaceTrust.Lend(this, folder, []);
+        IdeErrors.Write($"Trust taken back from {folder}: none of its code runs from now on");
+        // Untrusted, it ends the server and starts none.
+        StartCSharp();
+        IdeErrors.Observe(EndAhead());
+        IdeErrors.Observe(BackgroundWork.Run(() => ProjectHosts.EndServingAsync(folder, $"the trust of {folder} was taken back")));
+        IdeErrors.Observe(Vcs.RefreshAsync());
+        Web?.Untrust();
+        TrustChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>What of the folder's code the person started still runs, each as a sentence names it: the build, the
+    /// program, the debugged program, the profiled program, the tests, the Aspire application, the containers, the game.</summary>
+    public IReadOnlyList<string> StillRunning()
+    {
+        List<string> running = [];
+        if (Builder.IsRunning)
+        {
+            running.Add("the build");
+        }
+        if (RunProgram.IsRunning)
+        {
+            running.Add("the program");
+        }
+        if (Debug.IsDebugging)
+        {
+            running.Add("the debugged program");
+        }
+        if (Profiled is not null)
+        {
+            running.Add("the profiled program");
+        }
+        if (Tests.IsBusy)
+        {
+            running.Add("the tests");
+        }
+        if (Aspire.IsRunning)
+        {
+            running.Add("the Aspire application");
+        }
+        if (ContainerRun is { IsStopped: false })
+        {
+            running.Add("the containers");
+        }
+        if (games.Count > 0)
+        {
+            running.Add("the game");
+        }
+        return running;
+    }
+
+    /// <summary>The solution or project opened by name, which a folder with several keeps over the solution its name would
+    /// pick.</summary>
+    public string? NamedSolution { get; private set; }
+
+    /// <summary>The folder's solution and projects, read when it opens and again when a solution or project changes; null
+    /// with no folder.</summary>
+    public WorkspaceModel? Workspace
+    {
+        get => workspace;
+        private set
+        {
+            workspace = value is null ? null : value with { Build = BuildChoices.Choice };
+            FollowEvaluations();
+            FollowReach();
+            LendTrust();
+        }
+    }
+
+    private WorkspaceModel? workspace;
+
+    /// <summary>What each evaluated project says of where its restore and build put things and what its C# is parsed with,
+    /// by its path, replaced whole, so the XAML service reads it from any thread.</summary>
+    private volatile IReadOnlyDictionary<string, ProjectEvaluation> evaluations =
+        new Dictionary<string, ProjectEvaluation>(PathNames.Comparer);
+
+    /// <summary>The projects' evaluations taken anew, an open file in a package folder they name made read-only, and the
+    /// XAML of a project whose evaluation moved something, changed what its C# is parsed with, or whose framework chosen
+    /// changed, read again. A multi-targeted project's is the framework chosen's (<see cref="Frameworks"/>).</summary>
+    private void FollowEvaluations()
+    {
+        Dictionary<string, ProjectEvaluation> now = new(PathNames.Comparer);
+        bool packageFolders = false;
+        foreach (ProjectModel project in workspace?.Projects ?? [])
+        {
+            if (project.Evaluated is { } evaluated)
+            {
+                packageFolders |= PackageFolders.Learn(project);
+                string? framework = Frameworks.Of(project);
+                string? built = framework is null
+                    ? evaluated.Properties.GetValueOrDefault(Passenger.Host.CarriedProperties.TargetPath)?.Value
+                    : evaluated.Dependencies.FirstOrDefault(d => string.Equals(d.Framework, framework, StringComparison.OrdinalIgnoreCase))?.TargetPath;
+                Passenger.Host.FrameworkDependencies? chosen = framework is null ? evaluated.Dependencies.FirstOrDefault()
+                    : evaluated.Dependencies.FirstOrDefault(d => string.Equals(d.Framework, framework, StringComparison.OrdinalIgnoreCase));
+                now[project.Path] = new ProjectEvaluation(
+                    evaluated.Properties.GetValueOrDefault(Passenger.Host.CarriedProperties.ProjectAssetsFile)?.Value,
+                    evaluated.Properties.GetValueOrDefault(Passenger.Host.CarriedProperties.NuGetPackageRoot)?.Value,
+                    project.Packages.Where(p => p.Version is { Length: > 0 }).DistinctBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+                        .ToDictionary(p => p.Name, p => p.Version!, StringComparer.OrdinalIgnoreCase),
+                    built)
+                {
+                    Parsing = CompilationSymbols.Of(project, framework),
+                    TargetFramework = framework,
+                    Packs = [.. chosen?.TargetingPacks.Select(p => new ReferencePack(p.Framework, p.Name, p.Version)) ?? []],
+                };
+            }
+        }
+        if (packageFolders)
+        {
+            foreach (OpenDocument document in setup.Editors.Documents)
+            {
+                document.FollowPackageFolders();
+            }
+        }
+        IReadOnlyDictionary<string, ProjectEvaluation> was = evaluations;
+        evaluations = now;
+        string[] changed = [.. now.Where(p => !was.TryGetValue(p.Key, out ProjectEvaluation? before) || !Same(before, p.Value)).Select(p => p.Key)];
+        if (changed.Length > 0)
+        {
+            Xaml.EvaluationsChanged(changed);
+        }
+        // A Godot project's C# is read against its scenes once its evaluation says which folder they are in.
+        CSharp?.GodotProjectsChanged();
+        GodotFilesChanged();
+
+        static bool Same(ProjectEvaluation a, ProjectEvaluation b) =>
+            a.AssetsFile == b.AssetsFile && a.PackageRoot == b.PackageRoot && a.TargetPath == b.TargetPath && ReferenceEquals(a.Parsing, b.Parsing)
+            && a.TargetFramework == b.TargetFramework && a.Packs.SequenceEqual(b.Packs) && a.Versions.Count == b.Versions.Count
+            && a.Versions.All(v => b.Versions.TryGetValue(v.Key, out string? version) && version == v.Value);
+    }
+
+    public SolutionModel? Solution => Workspace?.Solution;
+
+    /// <summary>The projects unloaded in the Solution view: the person's, which the folder keeps, and those the solution
+    /// filter opened leaves out.</summary>
+    public ISet<string> Unloaded { get; } = new HashSet<string>(StringComparer.Ordinal);
+
+    /// <summary>The projects the solution filter opened leaves out and the person has not loaded, which are the filter's to
+    /// unload and never kept as the person's.</summary>
+    private readonly HashSet<string> filteredOut = new(StringComparer.Ordinal);
+
+    /// <summary>The solution filter <see cref="filteredOut"/> was taken from, null with none.</summary>
+    private SolutionFilter? filter;
+
+    /// <summary>The projects the person unloaded, which the folder keeps.</summary>
+    public IReadOnlyList<string> KeptUnloaded => [.. Unloaded.Where(p => !filteredOut.Contains(p))];
+
+    /// <summary>Unloads a project, or loads one unloaded by the person or left out by the filter, as the person chose; false
+    /// when it already was.</summary>
+    public bool ChooseUnloaded(string project, bool unloaded)
+    {
+        if (unloaded)
+        {
+            return Unloaded.Add(project);
+        }
+        filteredOut.Remove(project);
+        return Unloaded.Remove(project);
+    }
+
+    /// <summary>Takes the solution filter a read of the folder has: the solution's projects it leaves out are unloaded in
+    /// place of those the one before left out, and those the person loaded since stay loaded while it is the same filter
+    /// of the same solution (one a project added was put in, say). The programs beside the solution are none of its
+    /// projects, so no filter unloads them.</summary>
+    private void TakeFilter(WorkspaceModel read)
+    {
+        if (read.Filter is { } now ? now.Keeps(filter) : filter is null)
+        {
+            return;
+        }
+        HashSet<string> loaded = filter is { } before && read.Filter is { } after
+            && PathNames.Same(before.Path, after.Path) && PathNames.Same(before.Solution, after.Solution)
+            ? [.. (Workspace?.Projects ?? []).Where(p => !p.IsProgram && !before.Projects.Contains(p.Path) && !Unloaded.Contains(p.Path)).Select(p => p.Path)]
+            : [];
+        Unloaded.ExceptWith(filteredOut);
+        filteredOut.Clear();
+        filter = read.Filter;
+        foreach (ProjectModel project in filter is { } kept ? read.Projects.Where(p => kept.LeavesOut(p) && !loaded.Contains(p.Path)) : [])
+        {
+            if (Unloaded.Add(project.Path))
+            {
+                filteredOut.Add(project.Path);
+            }
+        }
+    }
+
+    /// <summary>The workspace's projects, but those unloaded.</summary>
+    public IReadOnlyList<ProjectModel> Projects => Workspace is null ? [] : [.. Workspace.Projects.Where(p => !Unloaded.Contains(p.Path))];
+
+    /// <summary>The loaded project a file or folder (a canonical path) belongs to, the nearest one holding it; null outside
+    /// them all.</summary>
+    public ProjectModel? ProjectOf(string path) => Workspace is null ? null : ProjectModel.Owning(Workspace.Projects.Where(p => !Unloaded.Contains(p.Path)), path);
+
+    /// <summary>The code of the project a file belongs to with the configurations of the programs that run it
+    /// (<see cref="ConfiguredCode"/>); null outside them all, or where no program of the folder runs it.</summary>
+    public ConfiguredCode? ConfiguredCodeOf(string path)
+    {
+        if (ProjectOf(path) is not { } project)
+        {
+            return null;
+        }
+        IReadOnlyList<ProjectModel> all = Projects;
+        IReadOnlyList<ProjectModel> programs = project.ProgramsRunning(all);
+        return programs.Count == 0 ? null
+            : new ConfiguredCode(project.Path, [.. programs.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase).Select(p => ConfigurationOf(p, all))]);
+    }
+
+    /// <summary>A program's configuration: its evaluated UserSecretsId, the folders from its own up to the folder open whose
+    /// compose files may run it, the folders of the AppHosts among <paramref name="all"/> that reference it, and the projects
+    /// whose code it runs.</summary>
+    private ConfigurationProject ConfigurationOf(ProjectModel project, IReadOnlyList<ProjectModel> all)
+    {
+        List<string> composing = [];
+        for (string? folder = Path.GetDirectoryName(project.Path); folder is not null; folder = Path.GetDirectoryName(folder))
+        {
+            composing.Add(folder);
+            if (Folder is null || !PathNames.IsUnder(folder, Folder) || PathNames.Same(folder, Folder))
+            {
+                break;
+            }
+        }
+        string[] hosts = [.. all.Where(p => p.IsAspireHost && p.ProjectReferences.Any(r => PathNames.Same(r, project.Path))).Select(p => Path.GetDirectoryName(p.Path)!)];
+        return new ConfigurationProject(project.Path, project.Property(Passenger.Host.CarriedProperties.UserSecretsId) is { Length: > 0 } id ? id : null, composing, hosts,
+            [.. project.CodeItRuns(all).Select(p => p.Path)]);
+    }
+
+    /// <summary>The programs whose configuration a settings file gives, as <see cref="ConfiguredCodeOf"/> finds them for code:
+    /// an app's settings file's (<see cref="AppSettingsFiles.Is"/>), the one whose folder holds it; a secrets.json under the
+    /// user secrets' folder, those whose UserSecretsId names its folder. A project that owns no configuration
+    /// (<see cref="ProjectModel.OwnsConfiguration"/>) is none, as nothing reads its files.</summary>
+    public IReadOnlyList<ConfigurationProject> ConfiguredBy(string path)
+    {
+        IReadOnlyList<ProjectModel> all = Projects;
+        if (AppSettingsFiles.Is(path))
+        {
+            return ProjectOf(path) is { OwnsConfiguration: true } project && PathNames.Same(Path.GetDirectoryName(project.Path)!, Path.GetDirectoryName(path)!)
+                ? [ConfigurationOf(project, all)] : [];
+        }
+        if (ConfigurationFiles.SecretsIdOf(path) is not { } id)
+        {
+            return [];
+        }
+        string secrets = PathNames.Canonical(UserSecrets.FileOf(id)!);
+        return [.. all.Where(p => p.OwnsConfiguration).Select(p => ConfigurationOf(p, all)).Where(c => c.SecretsIn(EditorArea.ReadText) is { } own && PathNames.Same(own, secrets))];
+    }
+
+    /// <summary>The name of the project a file belongs to, as Find and Problems group by it, a shared project's file by the
+    /// shared project, a generator's code copied by the project it was made for; outside them all, Miscellaneous Files.</summary>
+    public string ProjectNameOf(string path) => ProjectOf(path) is { } owner ? Path.GetFileNameWithoutExtension(owner.Path)
+        : SharedProjectOf(path) is { } shared ? Path.GetFileNameWithoutExtension(shared)
+        : GeneratedCopies.ProjectNameOf(GeneratedCode.Folder, path) ?? "Miscellaneous Files";
+
+    /// <summary>The solution's shared project (its .shproj) whose folder holds a path, the nearest, where no project of the
+    /// folder's own holds it nearer: the home of the files it shares; null for a path in none.</summary>
+    public string? SharedProjectOf(string path)
+    {
+        string? found = Workspace?.SharedProjects.Where(p => PathNames.IsUnder(path, Path.GetDirectoryName(p)!)).MaxBy(p => p.Length);
+        return found is not null && ProjectOf(path) is { } owner && PathNames.IsUnder(owner.Folder, Path.GetDirectoryName(found)!) ? null : found;
+    }
+
+    /// <summary>The read of the folder under way, done once it has landed: a folder without a solution is walked for its
+    /// projects on a worker, which an agent's Open waits for before it says what the workspace holds.</summary>
+    public Task WorkspaceRead { get; private set; } = Task.CompletedTask;
+
+    /// <summary>The folder's documents in the store, while the window keeps them; null otherwise.</summary>
+    public ProjectState? State { get; private set; }
+
+    /// <summary>Every file of the folder, as Go to File and Find in Files search them.</summary>
+    public FileIndex Index { get; } = new();
+
+    /// <summary>What another program changes in the folder, seen at once; null with no folder.</summary>
+    public FolderWatcher? Watcher { get; private set; }
+
+    /// <summary>The folder's Local History; null with no folder.</summary>
+    public LocalHistory? LocalHistory { get; private set; }
+
+    /// <summary>The files opened lately, the latest first, which Go to File and Recent Files list.</summary>
+    public IReadOnlyList<string> RecentFiles => recent;
+
+    /// <summary>The places Back and Forward go to, and those edited.</summary>
+    public NavigationHistory Navigation { get; } = new();
+
+    /// <summary>Which regions each file opens folded.</summary>
+    public FoldMemory Folds { get; } = new();
+
+    /// <summary>The target framework chosen for each multi-targeted project, which its XAML, its preview and its C# follow.</summary>
+    public TargetFrameworkChoices Frameworks { get; } = new();
+
+    /// <summary>The environment the Migrations window runs dotnet ef in for each startup project.</summary>
+    public Migrations.EfEnvironmentChoices MigrationEnvironments { get; } = new();
+
+    /// <summary>Where each project of devices, emulators or simulators runs, and each one's targets as last listed.</summary>
+    public Run.Devices.DeviceChoices Targets { get; } = new();
+
+    /// <summary>The build configuration and platform chosen for the folder, which every build, run, test and evaluation of it
+    /// takes (<see cref="WorkspaceModel.Build"/>).</summary>
+    public BuildConfigurationChoices BuildChoices { get; } = new();
+
+    /// <summary>The build configuration chosen changed, and the workspace with it: what shows it follows.</summary>
+    public event EventHandler? BuildChosen;
+
+    /// <summary>The configuration chosen given from now on: the workspace takes it, the design-time builds made under the one
+    /// before stand no more, and every project is evaluated again under it, the language server loading each again as it is.</summary>
+    private void FollowBuildChoice()
+    {
+        if (IsEnded || Workspace is not { } now)
+        {
+            return;
+        }
+        Workspace = now;
+        DesignTimeBuilds.Reconfigured();
+        Evaluate();
+        BuildChosen?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>What the folder offers to build as, read again: its solution's configurations, else its projects'.</summary>
+    public void ReadBuildChoices()
+    {
+        if (!IsEnded && Trusted && Folder is { } folder && Workspace is { } now)
+        {
+            IdeErrors.Observe(BuildChoices.ReadAsync(folder, now));
+        }
+    }
+
+    /// <summary>The workspace a run of a configuration reads, the one answer for what every path of its run builds, evaluates
+    /// and starts as: the folder's, with the build configuration the configuration names (<see cref="RunConfiguration.BuildConfiguration"/>)
+    /// in place of the folder's choice; why not where the one it names cannot be given.</summary>
+    public async Task<(WorkspaceModel? Workspace, string? Problem)> WorkspaceOfAsync(RunConfiguration configuration)
+    {
+        UiThread.Check();
+        if (Workspace is not { } now || Folder is not { } folder || configuration.BuildConfiguration.Length == 0)
+        {
+            return (Workspace, null);
+        }
+        (BuildChoice? choice, string? problem) = await BuildChoices.ForRunAsync(folder, now, configuration.BuildConfiguration);
+        // Read again after the solution was asked: a reload meanwhile is what the run reads.
+        return problem is null ? ((Workspace ?? now) with { Build = choice }, null)
+            : (null, $"{configuration.Name} cannot build as {configuration.BuildConfiguration}: {problem}");
+    }
+
+    /// <summary>A project's framework was chosen (by its path; null for every project's, as the folder's kept choices are
+    /// taken), and its XAML and C# followed: what shows the choice, and the previews of its XAML, follow it.</summary>
+    public event EventHandler<string?>? FrameworkChosen;
+
+    /// <summary>The XAML read again against the framework chosen and the open C# files answered for in it, then the window told.</summary>
+    private void FollowFramework(string? project)
+    {
+        FollowEvaluations();
+        CSharp?.FrameworkChosen();
+        FrameworkChosen?.Invoke(this, project);
+    }
+
+    /// <summary>Find in Files' scope as its popup left it last.</summary>
+    public FindScopeState FindScope { get; set; } = new();
+
+    /// <summary>The rows of the Solution view Find in Files was opened on last, when they are a scope of their own.</summary>
+    public (string Name, IReadOnlyList<string> Files, IReadOnlyList<string> Folders)? ChosenScope { get; set; }
+
+    public RunConfigurations Configurations { get; }
+
+    /// <summary>The user folders every Godot the session starts keeps in place of the person's: the window's
+    /// (<see cref="Godot.GodotUserFolders"/>); none for a person's.</summary>
+    public IReadOnlyDictionary<string, string>? GodotEnvironment => setup.GodotEnvironment;
+
+    public AspireController Aspire { get; }
+
+    /// <summary>The folder's AppHosts, and what each C# file is to them.</summary>
+    public AspireFiles AspireFiles { get; }
+
+    /// <summary>Done once the folder's single-file AppHosts have been read from its first walk.</summary>
+    public Task AspireFilesRead => Folder is null ? Task.CompletedTask : AspireFiles.Read;
+
+    /// <summary>The folder's Node packages, whose scripts are run configurations.</summary>
+    public Web.NodeFiles NodeFiles { get; }
+
+    /// <summary>Done once the folder's Node packages have been read from its first walk.</summary>
+    public Task NodeFilesRead => Folder is null ? Task.CompletedTask : NodeFiles.Read;
+
+    /// <summary>What the folder's .editorconfig files set over Settings' rows.</summary>
+    public Settings.FolderEditorConfigs EditorConfigs { get; }
+
+    /// <summary>The folder's builds, rebuilds and cleans, in the window's Build console.</summary>
+    public ProcessRunner Builder { get; }
+
+    /// <summary>The program Run started in the window's Run console, while it runs or since it last did.</summary>
+    public ProcessRunner Runner { get; }
+
+    /// <summary>The errors and warnings the last build found, each once.</summary>
+    public List<Problem> Problems { get; } = [];
+
+    /// <summary>The program Run last started in a tab of the Terminal window, until a run in the Run console comes after it.</summary>
+    public TerminalRun? InTerminal { get; set; }
+
+    /// <summary>The program Run started last, wherever it runs: in a tab of the terminal, else the Run console's (a container
+    /// run's log there too).</summary>
+    public IRunningProgram RunProgram => InTerminal is { } terminal ? terminal : Runner;
+
+    /// <summary>The plan Run last started a program by, in the Run console or the terminal; null after a container run.</summary>
+    public LaunchPlan? RunPlan { get; set; }
+
+    /// <summary>The container configuration Run brought up, its log followed by <see cref="Runner"/>, until Stop takes it
+    /// down (or the next run comes); its containers are the folder's (<see cref="Containers"/>) until then.</summary>
+    public Containers.ContainerRun? ContainerRun { get; set; }
+
+    /// <summary>The container runs Detach let go of, their containers the folder's (taken down as it ends) until the person
+    /// chooses to leave them running as theirs as Passenger quits or the folder closes.</summary>
+    public List<Containers.ContainerRun> RunsLetGo { get; } = [];
+
+    /// <summary>The dashboards of the project runs that collect their logs and traces, each from its start's bringing it up
+    /// until it is taken down with its program; its containers are the folder's (<see cref="Containers"/>) until then.</summary>
+    public List<Telemetry.RunDashboard> Dashboards { get; } = [];
+
+    /// <summary>The starts of runs of services under way (Run's, Debug's or Profile's of a container configuration or an Aspire
+    /// AppHost), each from its first moment until it is up or has given up: a start of what one starts ends it first, and the
+    /// folder's end ends them all, as Stop does.</summary>
+    public List<Run.StartUnderWay> Starting { get; } = [];
+
+    /// <summary>Stop of a container run (the one under way, or <paramref name="which"/>, one a start made): its log no longer
+    /// followed, and its containers taken down (the .NET services alone when backing services are kept, which then go with
+    /// the folder); done once the engine has answered. A run another has replaced is only taken down, its own containers
+    /// alone, the one under way left as it is; one Detach let go of is left to the folder.</summary>
+    public Task StopContainersAsync(Containers.ContainerRun? which = null)
+    {
+        UiThread.Check();
+        // One Detach let go of is no run's to take down: its containers are the folder's.
+        if ((which ?? ContainerRun) is not { IsLetGo: false } run)
+        {
+            return Task.CompletedTask;
+        }
+        if (run != ContainerRun)
+        {
+            return run.StopAsync(run.IsStopped ? null : run.EndSessionsAsync(Debug));
+        }
+        Runner.Stop();
+        // The services debugged and profiled end first, or the adapter fails and the trace loses its rundown.
+        Task stopped = run.StopAsync(run.IsStopped ? null : run.EndSessionsAsync(Debug));
+        if (!run.Plan.KeepBacking || run.Plan.Backing.Count == 0)
+        {
+            Containers.EndedProject(run.Plan.Compose);
+        }
+        return stopped;
+    }
+
+    /// <summary>The run being profiled, or null.</summary>
+    public ProfilingSession? Profiling { get; set; }
+
+    /// <summary>The program Profile started, from its hand-over until its end has landed in the Run console, its snapshot
+    /// taken or not: Kill, Stop and the folder's end end it.</summary>
+    public ProfiledProgram? Profiled
+    {
+        get => profiled;
+        set
+        {
+            profiled = value;
+            ProfiledChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private ProfiledProgram? profiled;
+
+    /// <summary>Profile's program was handed over or has ended: the toolbar's Stop follows.</summary>
+    public event EventHandler? ProfiledChanged;
+
+    /// <summary>Ends the Profile still starting (its program running, not yet at the profiler, so not yet <see cref="Profiling"/>),
+    /// with the folder as Kill ends it; null when none is.</summary>
+    public CancellationTokenSource? ProfileStarting { get; set; }
+
+    /// <summary>The folder's unit tests: those its test projects declare, their runs and their results.</summary>
+    public TestController Tests { get; }
+
+    /// <summary>The folder's debugger, its breakpoints with it.</summary>
+    public DebugController Debug { get; }
+
+    /// <summary>The Avalonia or WPF app of the Debug tab chosen, which the Live Visual Tree, binding values and agents' app
+    /// tools inspect; null while the chosen tab's program is another, or no tab is. Each tab holds its own app
+    /// (<see cref="ToolWindows.DebugTab.App"/>), ended with its debugging, so several debugged at once each keep theirs.</summary>
+    public LiveApp? LiveApp => Aspire.SelectedService is not null ? Aspire.SelectedInspection : Debug.Chosen?.App;
+
+    /// <summary>What the Live Visual Tree shows: the inspected app (<see cref="LiveApp"/>), else the Godot game chosen
+    /// (<see cref="Game"/>).</summary>
+    public ILiveTreeSource? LiveSource => (ILiveTreeSource?)LiveApp ?? Game;
+
+    /// <summary>The Godot game chosen among those running (<see cref="Games"/>), the one started last unless another was
+    /// chosen, which Passenger is the remote debugger of: its scene tree, errors and monitors; null before one. Once it
+    /// ends it stays chosen, saying so, unless another still runs, which is chosen in its place.</summary>
+    public Godot.GodotGame? Game { get; private set; }
+
+    private readonly List<Godot.GodotGame> games = [];
+
+    /// <summary>The Godot games Run, Debug and Profile started that have not ended, the first started first: each a source the
+    /// Live Visual Tree can be given (<see cref="ChooseGame"/>). Each ends with its launch's program, and all with the folder.</summary>
+    public IReadOnlyList<Godot.GodotGame> Games => games;
+
+    /// <summary>Chooses a running game as the one the Live Visual Tree and agents' tools follow.</summary>
+    public void ChooseGame(Godot.GodotGame game)
+    {
+        UiThread.Check();
+        if (games.Contains(game) && Game != game)
+        {
+            Game = game;
+            LiveAppChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>A plan as a launch starts it, a Godot game's with Passenger listening for it as its remote debugger, the game
+    /// chosen (<see cref="Game"/>) and among <see cref="Games"/> until the launch ends it with its program; any other plan as
+    /// it is, and no game. With <paramref name="scripts"/> (Debug's) its GDScript is debugged from its first line.</summary>
+    public (LaunchPlan Plan, Godot.GodotGame? Game) Listened(LaunchPlan plan, Godot.GodotScriptStart? scripts = null)
+    {
+        UiThread.Check();
+        (LaunchPlan listened, Godot.GodotGame? game) = Godot.GodotGame.Listen(plan, scripts);
+        if (game is not null && plan.GodotInPane && InPane is { } pane)
+        {
+            listened = pane(listened, game);
+        }
+        if (game is not null)
+        {
+            TakeGame(game);
+        }
+        return (listened, game);
+    }
+
+    /// <summary>What a game whose configuration draws it in the window's Game window is started with to draw there, the
+    /// window taking it to hold; the plan as it was, said why, where it cannot.</summary>
+    public Func<LaunchPlan, Godot.GodotGame, LaunchPlan>? InPane { get; set; }
+
+    /// <summary>A game taken among <see cref="Games"/> and chosen: one a launch listens for, or one Godot's editor plays, heard
+    /// through Passenger's addon there (<see cref="Godot.GodotGame.Relay"/>).</summary>
+    public void TakeGame(Godot.GodotGame game)
+    {
+        UiThread.Check();
+        if (Game is { State: LiveAppState.Ended } ended && !games.Contains(ended))
+        {
+            ended.Dispose();
+        }
+        games.Add(game);
+        game.StateChanged += (_, _) => OnGameState(game);
+        Game = game;
+        GameStarted?.Invoke(this, game);
+        LiveAppChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>A game that ended leaves <see cref="Games"/>; where it was chosen and another runs, the newest of those is.</summary>
+    private void OnGameState(Godot.GodotGame game)
+    {
+        if (game.State != LiveAppState.Ended || !games.Remove(game) || IsEnded)
+        {
+            return;
+        }
+        if (Game == game && games.Count > 0)
+        {
+            Game = games[^1];
+            game.Dispose();
+        }
+        LiveAppChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>A Godot game was launched, Passenger listening for it.</summary>
+    public event EventHandler<Godot.GodotGame>? GameStarted;
+
+    /// <summary>The errors the last Godot game launched raised, pinned to their lines.</summary>
+    public Godot.GodotErrorPins ErrorPins { get; } = new();
+
+    /// <summary>How each step of the features last run went, on its line.</summary>
+    public Bdd.StepRuns StepRuns { get; } = new();
+
+    /// <summary>The chosen Debug tab's app as <see cref="LiveAppChanged"/> last told it.</summary>
+    private LiveApp? liveAppTold;
+
+    /// <summary>Another app is being inspected, or none.</summary>
+    public event EventHandler? LiveAppChanged;
+
+    /// <summary>A plan as Debug launches it, and the app it is: an Avalonia or WPF app's carries the inspector the Live Visual
+    /// Tree talks to (its startup hook, and a socket of the app's own), which its Debug tab holds; any other's is the plan
+    /// itself, with no app.</summary>
+    public (LaunchPlan Plan, LiveApp? App) Inspected(LaunchPlan plan)
+    {
+        UiThread.Check();
+        LiveApp? app = Reloaded(LiveTree.LiveApp.For(plan, Overlays));
+        return (app?.Plan ?? plan, app);
+    }
+
+    /// <summary>An app Run, Debug or an AppHost launches, given its XAML Hot Reload, which keeps what its build read of the folder's XAML.</summary>
+    private LiveApp? Reloaded(LiveApp? app)
+    {
+        if (app is not null)
+        {
+            LiveTree.XamlHotReload xaml = new(app, setup.Editors.TextOf, Xaml.ProjectAsync);
+            app.Xaml = xaml;
+            if (Index.Root is { } root)
+            {
+                IdeErrors.Observe(xaml.KeepBuiltAsync([.. Index.Files.Where(Passenger.App.Xaml.XamlService.IsXaml).Select(f => Path.Combine(root, f))]));
+            }
+        }
+        return app;
+    }
+
+    /// <summary>A Debug tab came, went or was chosen: the chosen tab's app may be another, and the apps whose failed bindings
+    /// Problems lists others.</summary>
+    private void OnDebugTabsChanged()
+    {
+        if (IsEnded)
+        {
+            return;
+        }
+        if (LiveApp != liveAppTold)
+        {
+            liveAppTold = LiveApp;
+            LiveAppChanged?.Invoke(this, EventArgs.Empty);
+        }
+        InspectedChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>The starts of apps Run and Debug started on devices, each held from before its first step there until what it
+    /// put in is out again: Stop waits for them, and the folder's end takes out what each still holds within a limit of its
+    /// own (<see cref="EndOnDevices"/>), so a Passenger that quits leaves no port forwarded to an app, nor an app marked as
+    /// debugged.</summary>
+    private readonly List<DeviceStart> onDevices = [];
+
+    /// <summary>A start of the app of a program named <paramref name="name"/> on its device, held from now until what it puts
+    /// in there is out again, however its start, its run or session, or the folder ends.</summary>
+    public DeviceStart StartsOnDevice(string name, IDeviceApp app)
+    {
+        UiThread.Check();
+        onDevices.RemoveAll(d => d.Out.IsCompleted);
+        DeviceStart start = new(name, app);
+        onDevices.Add(start);
+        return start;
+    }
+
+    /// <summary>Done once the apps on devices of the program named <paramref name="name"/> (of every program where null) have
+    /// ended there, their processes gone and what their starts put in taken out, however each ended, and each of their
+    /// starts still under way, as Stop ends it, has taken out what it put in or handed it to its run's or session's end:
+    /// what a Stop waits for after its runs and sessions here.</summary>
+    public Task EndedOnDevicesAsync(string? name = null)
+    {
+        UiThread.Check();
+        return Task.WhenAll(onDevices.Where(d => name is null || d.Name == name).Select(d => d.Settled.IsCompleted ? d.Out : d.Settled));
+    }
+
+    /// <summary>The simulators the folder's starts booted, by their simctl and UDID, shut down again at its end
+    /// (<see cref="EndOnDevices"/>); those it found running are left as they were.</summary>
+    private readonly List<(string Simctl, string Udid)> booted = [];
+
+    private readonly Lock bootedGate = new();
+
+    /// <summary>Whether the folder's end has taken the simulators it booted, so one booted later is shut down at once.</summary>
+    private bool bootedTaken;
+
+    /// <summary>A simulator a start of the folder's booted, shut down with the folder, at once where the folder has ended. Any thread.</summary>
+    public void Booted(string simctl, string udid)
+    {
+        AppleSimulators.Booting(simctl, udid);
+        lock (bootedGate)
+        {
+            if (!bootedTaken)
+            {
+                booted.Add((simctl, udid));
+                return;
+            }
+        }
+        // Unheld: the folder has ended, and the process may wait for nothing more.
+        IdeErrors.Observe(BackgroundWork.Unheld(() => AppleSimulators.ShutDownAsync(simctl, udid)));
+    }
+
+    /// <summary>What every start on a device still holds there taken out at once, then the simulators the folder's starts
+    /// booted shut down, off the window's thread, whose loop may stop first: done once all of it is out, or
+    /// <see cref="DeviceLaunches.EndLimit"/> after, the rest named in the log.</summary>
+    private Task EndOnDevices()
+    {
+        Task starts = Task.WhenAll(onDevices.Select(d => d.Out.IsCompleted ? d.Out : BackgroundWork.Unheld(d.EndNowAsync)));
+        (string Simctl, string Udid)[] shut;
+        lock (bootedGate)
+        {
+            bootedTaken = true;
+            shut = [.. booted];
+            booted.Clear();
+        }
+        // Unheld: the process waits for it once the window's loop has stopped.
+        Task down = shut.Length == 0 ? starts : BackgroundWork.Unheld(async () =>
+        {
+            await starts.Ended();
+            await Task.WhenAll(shut.Select(b => AppleSimulators.ShutDownAsync(b.Simctl, b.Udid)));
+        });
+        return Within(DeviceLaunches.EndLimit, Folder, [("the apps on devices", down)]);
+    }
+
+    /// <summary>The Avalonia or WPF app Run started last, inspected for its failed bindings and agents' tools (the Live Visual
+    /// Tree follows the debugger's); null after any other program, or one Hot Reload runs. It ends with its run, and with the
+    /// folder.</summary>
+    public LiveApp? RunApp { get; private set; }
+
+    /// <summary>A plan as Run launches it: an Avalonia or WPF app's carries the inspector, as Debug's does, unless Hot Reload
+    /// runs it, whose dotnet watch is a .NET program of its own that would load the inspector first.</summary>
+    public LaunchPlan InspectedRun(LaunchPlan plan, bool hotReload)
+    {
+        UiThread.Check();
+        RunApp?.Dispose();
+        RunApp = hotReload ? null : Reloaded(LiveTree.LiveApp.For(plan, Overlays));
+        InspectedChanged?.Invoke(this, EventArgs.Empty);
+        return RunApp?.Plan ?? plan;
+    }
+
+    /// <summary>The Avalonia app Profile started last, which records its frames for the profiler while it is profiled and
+    /// shows the overlays the Run window sets (its output is the Run window's); null after any other program. It ends with
+    /// its run, and with the folder.</summary>
+    public LiveApp? ProfiledApp { get; private set; }
+
+    /// <summary>A plan as Profile launches it: an Avalonia app's carries the inspector, as Run's does; a WPF app's none, as
+    /// what it records (frames, overlays) is Avalonia's.</summary>
+    public LaunchPlan InspectedProfile(LaunchPlan plan)
+    {
+        UiThread.Check();
+        ProfiledApp?.Dispose();
+        ProfiledApp = LiveTree.LiveApp.For(plan, Overlays, wpf: false);
+        InspectedChanged?.Invoke(this, EventArgs.Empty);
+        return ProfiledApp?.Plan ?? plan;
+    }
+
+    /// <summary>Avalonia's renderer debug overlays (by the names of its flags) an inspected launch shows from its first
+    /// window: the launch option the Run and Debug windows' overlay toggles leave, so a launch after shows what the one
+    /// before was left showing.</summary>
+    public IReadOnlyList<string> Overlays { get; set; } = [];
+
+    /// <summary>Run, Debug or Profile launched another app, inspected or not.</summary>
+    public event EventHandler? InspectedChanged;
+
+    /// <summary>The bindings that failed in the inspected apps Problems lists (<see cref="InspectedApps"/>), each once with
+    /// its count: those of an app that ended stay until the next Run, or while its tab is there.</summary>
+    public IEnumerable<(LiveApp App, BindingFailure Failure)> FailedBindings =>
+        InspectedApps.SelectMany(app => app.Bindings.Select(failure => (app, failure)));
+
+    /// <summary>The apps the folder's launches put Passenger's inspector in, an app once: Run's last, Profile's last, each
+    /// Debug tab's, and each service an AppHost runs; ended ones too, until the next of their kind. Problems, agents' app
+    /// tools and the overlays each take those they act on from it.</summary>
+    public IReadOnlyList<InspectedApp> Inspecting => [.. new[]
+        {
+            RunApp is { } run ? new InspectedApp(run, RunningKind.Run, "run") : null,
+            ProfiledApp is { } profiled ? new InspectedApp(profiled, RunningKind.Profile, "profile") : null,
+        }.OfType<InspectedApp>()
+        .Concat(Debug.Apps.Select(a => new InspectedApp(a.App, RunningKind.Debug, a.Tab.Name) { Tab = a.Tab }))
+        .Concat(Aspire.Apps.SelectMany(app => app.Services.Where(service => service.Inspection is not null)
+            .Select(service => new InspectedApp(service.Inspection!, RunningKind.Service, app.NameOf(service)))))
+        .DistinctBy(a => a.App)];
+
+    /// <summary>The inspected apps whose failed bindings Problems lists: all but Profile's, whose output is the profiler's.</summary>
+    public IEnumerable<LiveApp> InspectedApps => Inspecting.Where(a => a.Kind != RunningKind.Profile).Select(a => a.App);
+
+    /// <summary>The runs of services under way: the container run's, and each Aspire AppHost's the window started.</summary>
+    public IReadOnlyList<ServiceRun> ServiceRuns => [.. ContainerRun is { IsStopped: false } containers ? new ServiceRun[] { containers } : [],
+        .. Aspire.Apps.Where(app => !app.IsTest && !app.IsStopped)];
+
+    /// <summary>What the folder runs now, a program once: Run's (in the Run console or the terminal, while Run's plan is its),
+    /// Profile's until its end has landed, each live Debug tab's, and each started .NET service of the runs of services under
+    /// way. The one list the Requests window, the routes' addresses and Attach Profiler read.</summary>
+    public IReadOnlyList<RunningProgram> Running
+    {
+        get
+        {
+            List<RunningProgram> running = [];
+            if (RunProgram is { IsRunning: true } run && RunPlan is { } plan)
+            {
+                running.Add(new RunningProgram(RunningKind.Run, plan.Name, plan.Project) { Process = run.ProcessId, Plan = plan, App = RunApp });
+            }
+            if (Profiled is { } program && !program.Landed.IsCompleted)
+            {
+                running.Add(new RunningProgram(RunningKind.Profile, program.Name, null)
+                {
+                    Process = program.Run.Place is null ? program.Run.ProcessId : null,
+                    App = ProfiledApp,
+                });
+            }
+            foreach (DebugTab tab in Debug.Tabs.Where(t => t.IsLive && t.Session is not null))
+            {
+                Task<int> started = tab.Session!.ProcessStarted;
+                bool local = tab.Session.IsLocal;
+                running.Add(new RunningProgram(RunningKind.Debug, tab.Name, tab.Plan?.Project)
+                {
+                    Process = local && started.IsCompletedSuccessfully ? started.Result : null,
+                    Starting = local && !started.IsCompleted ? started : null,
+                    Plan = tab.Plan,
+                    App = tab.App,
+                    Tab = tab,
+                });
+            }
+            foreach (ServiceRun services in ServiceRuns)
+            {
+                running.AddRange(services.Services.Where(s => s.Starts && !services.LeftUnstarted(s)).Select(service =>
+                    new RunningProgram(RunningKind.Service, services.NameOf(service), service.Project)
+                    {
+                        Services = services,
+                        Service = service,
+                        App = (service as AspireResourceRun)?.Inspection,
+                    }));
+            }
+            return running;
+        }
+    }
+
+    /// <summary>The folder's Git working tree, once its lookup (<see cref="Start"/>) has found one.</summary>
+    public VcsController Vcs { get; } = new();
+
+    public BookmarkStore Bookmarks { get; } = new();
+
+    /// <summary>What the folder had the container engine start, and the labels it goes on with: ended with the folder.</summary>
+    public Containers.FolderContainers Containers { get; }
+
+    /// <summary>Where the container tools come from that reach a program in a container, for Attach and a container run alike.</summary>
+    public Containers.ContainerToolsSource ContainerTools => setup.ContainerTools();
+
+    /// <summary>What the folder's .http requests may take from the person's computer to a host, as they answered.</summary>
+    public Endpoints.EndpointGrants EndpointGrants { get; } = new();
+
+    /// <summary>The OpenAPI documents the person named for the folder's web projects whose code names none.</summary>
+    public Endpoints.OpenApiNames OpenApiNames { get; } = new();
+
+    /// <summary>The OpenAPI document each of the folder's apps last gave a test or a generate.</summary>
+    public Endpoints.AppDocuments AppDocuments { get; } = new();
+
+    /// <summary>The routes the folder's web projects declare in their code, as the language server's extension last read them.</summary>
+    public Endpoints.RouteCatalog Routes { get; } = new();
+
+    /// <summary>The Reqnroll and SpecFlow projects' bindings, read from their code.</summary>
+    public Bdd.StepCatalog Steps { get; } = new();
+
+    /// <summary>The profile each project last published with, which Publish Again publishes it with.</summary>
+    public PublishMemory Publishing { get; } = new();
+
+    /// <summary>The language server on the folder's projects, or null for a folder with none (or no folder).</summary>
+    public CSharpService? CSharp { get; private set; }
+
+    /// <summary>The XAML of the folder's projects, read by Passenger's own XAML for each XAML file open.</summary>
+    public Xaml.XamlService Xaml { get; } = new();
+
+    /// <summary>The scenes and resources of the folder's Godot projects, read once each is asked about and followed.</summary>
+    public Godot.GodotSceneIndex GodotScenes { get; }
+
+    /// <summary>The run settings file a GoDotTest game's project names (RunSettingsFilePath, as MSBuild evaluates it) and
+    /// the test scene it names (<see cref="Testing.GoDotTests.SceneParameter"/>); nulls for none.</summary>
+    private async Task<(string? Settings, string? Scene)> GoDotChosenAsync(string project)
+    {
+        if (Folder is not { } root || Projects.FirstOrDefault(p => PathNames.Same(p.Path, project)) is not { } model
+            || await Testing.TestAssemblies.RunSettingsOfAsync(model, root, Workspace, CancellationToken.None) is not { } settings)
+        {
+            return (null, null);
+        }
+        return (settings, await BackgroundWork.Run(() => File.Exists(settings) ? Testing.GoDotTests.ChosenScene(File.ReadAllText(settings)) : null));
+    }
+
+    /// <summary>Where a GoDotTest game's tests start (<see cref="Testing.GoDotTests.StartOf"/>), its scripts read off the
+    /// window's thread as the disk holds them, with the game's symbols.</summary>
+    private static Task<Testing.GoDotTests.Start> GoDotStartAsync(Passenger.Workspace.GodotScenes scenes, (string? Settings, string? Scene) chosen,
+        Microsoft.CodeAnalysis.CSharp.CSharpParseOptions? parsing)
+    {
+        return BackgroundWork.Run(() => Testing.GoDotTests.StartOf(scenes, res => scenes.FileOf(res) is { } file ? Read(file) : null, chosen.Scene, parsing) with
+        {
+            Settings = chosen.Settings,
+        });
+
+        string? Read(string file)
+        {
+            try
+            {
+                return File.Exists(file) ? File.ReadAllText(file) : null;
+            }
+            catch (Exception unread) when (unread is IOException or UnauthorizedAccessException)
+            {
+                return null;
+            }
+        }
+    }
+
+    /// <summary>The engine's API and classes as the Godot Settings name or found gives them.</summary>
+    internal Godot.GodotEngineApis GodotApis { get; }
+
+    /// <summary>The stylesheets the folder's pages link, read as they are asked for and followed through the watcher.</summary>
+    public Web.PageStylesheets Stylesheets { get; }
+
+    /// <summary>The marks of the open Godot scenes and resources, read against their project's scenes and code.</summary>
+    internal Godot.GodotSceneMarks GodotMarks { get; }
+
+    /// <summary>Godot's shader front end, which the session's shaders are checked by.</summary>
+    internal Godot.GodotShaderChecker GodotShaderChecker { get; }
+
+    /// <summary>The person's Godot editors open on the folder's projects, asked for what completion offers; let go of with it.</summary>
+    internal Godot.GodotIdeLink GodotIde { get; } = new();
+
+    /// <summary>The open shaders' marks from Godot's compiler, and what it read of their uniforms.</summary>
+    internal Godot.GodotShaderMarks GodotShaders { get; }
+
+    /// <summary>The door for Passenger's addon in Godot's editors on the folder's Godot project, listening once the window
+    /// asks and ended with the session.</summary>
+    internal Godot.GodotEditorLink GodotEditors { get; } = new();
+
+    /// <summary>The open GDScripts' own trees and types.</summary>
+    internal Godot.GodotScriptTypes GodotScriptTypes { get; }
+
+    /// <summary>What the open Godot files are read against changed (the project's files, or which Godot project a file is of):
+    /// the open scenes, shaders and scripts each checked again once such changes pause.</summary>
+    private void GodotFilesChanged()
+    {
+        GodotMarks.Changed();
+        GodotShaders.Changed();
+        GodotScriptTypes.Changed();
+    }
+
+    /// <summary>Holds the next reading of an open GDScript (<see cref="Godot.GodotScriptTypes.HoldNextTyping"/>).</summary>
+    public Task HoldNextScriptReading(Task until) => GodotScriptTypes.HoldNextTyping(until);
+
+    /// <summary>The folder of the Godot project a file is of: the one its project builds a game for or runs as a host
+    /// (<see cref="ProjectModel.NamedGodotFolder"/>), else the Godot project of GDScript alone it lies in
+    /// (<see cref="WorkspaceModel.ScriptGames"/>), the innermost; null for a file of none.</summary>
+    public string? GodotOf(string path) => ProjectOf(path)?.NamedGodotFolder
+        ?? Workspace?.ScriptGames(Projects).Where(g => PathNames.IsUnder(path, g)).MaxBy(g => g.Length);
+
+    /// <summary>The folder of the Godot project a C# file's project builds a game for or runs as a host; null for a file of none.</summary>
+    private string? BuiltGodotOf(string path) => ProjectOf(path)?.NamedGodotFolder;
+
+    /// <summary>What Run, Debug and Profile run among: the folder's projects, then what stands for each Godot project of
+    /// GDScript alone it holds (<see cref="ProjectModel.OfScriptGame"/>), which no other part of the IDE takes for a project.</summary>
+    public IReadOnlyList<ProjectModel> RunProjects => Workspace?.ScriptGames(Projects).ToList() is { Count: > 0 } games
+        ? [.. Projects, .. games.Select(ProjectModel.OfScriptGame)] : Projects;
+
+    /// <summary>The code help in the folder's project, .props and .targets files, from MSBuild's evaluation in the project host.</summary>
+    public MSBuild.MSBuildService MSBuild { get; }
+
+    /// <summary>The open files Passenger reads for itself (an .editorconfig, a .slnx) marked where it cannot use what they say.</summary>
+    internal FileChecks FileChecks { get; } = new();
+
+    /// <summary>The open .feature files read and their steps matched to their project's bindings.</summary>
+    internal Bdd.FeatureChecks Features => field ??= new Bdd.FeatureChecks(this);
+
+    /// <summary>The folder's NuGet: its package sources, feeds and known vulnerabilities, and the one way its projects'
+    /// packages change, which the NuGet window, MSBuild files' code help, Migrations and an agent all use.</summary>
+    public FolderPackages Packages { get; }
+
+    /// <summary>JavaScript, TypeScript, HTML, CSS and JSON for the folder's files, each kind's language server started as
+    /// its first file opens; null with no folder.</summary>
+    public Web.WebLanguages? Web { get; private set; }
+
+    /// <summary>Where an open file's outline comes from, which File Structure, the Structure window and an agent's outline
+    /// read: a Markdown file's headings and a GDScript's members as Passenger reads them, else the C# server's document,
+    /// else its web language's, else a Godot project's scene as Passenger reads it; null while none has it.</summary>
+    public Passenger.App.Navigation.FileOutline? OutlineOf(OpenDocument document) =>
+        document.Language == Languages.Language.Markdown ? new Editors.MarkdownOutline(document.Text)
+        : document.Language == Languages.Language.Gherkin ? new Editors.FeatureOutline(document.Text, () => FeatureProjectFolder(document.Path))
+        : Godot.GodotScriptTypes.IsScript(document.Path) ? new Godot.GDScriptOutline(document.Text)
+        : (CSharp?.For(document)?.Lsp ?? Web?.For(document)?.Lsp) is { } lsp ? Passenger.App.Navigation.FileOutline.Served(lsp)
+        : Passenger.Workspace.GodotFile.IsText(document.Path) && GodotOf(document.Path) is { } folder ? new Godot.GodotSceneOutline.Source(GodotScenes, folder)
+        : null;
+
+    /// <summary>The folder of the project a .feature file belongs to, whose configuration says the language it is read in;
+    /// null for a file of no project.</summary>
+    public string? FeatureProjectFolder(string path) => ProjectOf(path) is { } project ? Path.GetDirectoryName(project.Path) : null;
+
+    /// <summary>A language server started (or none, after one ended) in place of the one before.</summary>
+    public event EventHandler? CSharpChanged;
+
+    /// <summary>The folder's solution or projects were read again: what the Explorer, the run configurations and the tests
+    /// show follows.</summary>
+    public event EventHandler? WorkspaceChanged;
+
+    /// <summary>The folder's projects as MSBuild evaluates them, in the project host.</summary>
+    public ProjectModels Models { get; } = new();
+
+    /// <summary>Why there is no run configuration to run, debug or profile (the <paramref name="verb"/>): no SDK to
+    /// load the projects with, or no executable project (<see cref="Refusals.NothingTo"/>).</summary>
+    public string NothingTo(string verb) => Refusals.NothingTo(verb, Models.MissingSdk, Folder);
+
+    /// <summary>The folder's projects as the project host builds them at design time, which the language server loads.</summary>
+    public ProjectBuilds DesignTimeBuilds { get; }
+
+    /// <summary>The projects the language server loads, those it loads first (<see cref="ActiveProjectsAsync"/>) apart.</summary>
+    private async Task<(IReadOnlyList<string> First, IReadOnlyList<string> All)> LoadOrderAsync()
+    {
+        IReadOnlyList<string> first = await ActiveProjectsAsync();
+        return (first, [.. Projects.Where(p => p.Exists).Select(p => p.Path).Distinct(StringComparer.Ordinal)]);
+    }
+
+    /// <summary>Projects evaluated (or evaluated again) landed in the workspace: what the Solution view shows of them, and
+    /// whether which projects hold tests or what packages they reference changed.</summary>
+    public event EventHandler<EvaluatedProjects>? ProjectsEvaluated;
+
+    /// <summary>When the folder opened, which its first complete Solution view is timed from; 0 once it is.</summary>
+    private long openedAt;
+
+    /// <summary>Has each project of the workspace evaluated that needs it, the file shown's first; none of a folder not trusted.</summary>
+    public void Evaluate()
+    {
+        if (!IsEnded && Trusted && Workspace is { } following)
+        {
+            Models.Follow(following, setup.Editors.Active?.Path);
+        }
+    }
+
+    /// <summary>Done once the projects stand as written, written a moment ago before the folder's watcher may have heard (an
+    /// agent's edit, the save a start or a build makes): the solution, or the filter it is read through, is read again; else
+    /// a project's file, a file one imports, or an import come where a project's wildcards look, has its projects evaluated
+    /// now; either waited for, <paramref name="waiting"/> told while it is; at once where nothing was.</summary>
+    public async Task ProjectsAsWrittenAsync(Action<string?>? waiting, CancellationToken cancel)
+    {
+        UiThread.Check();
+        if (IsEnded || Workspace is not { } before)
+        {
+            return;
+        }
+        Task<bool> solution = ProjectModels.WrittenNowAsync(before.ReadFrom, WorkspaceEdits.Catching);
+        bool projects = await Models.ReadWrittenNowAsync(WorkspaceEdits.Catching);
+        // Unless the watcher heard of it meanwhile and read it again.
+        bool reread = await solution && ReferenceEquals(Workspace?.ReadFrom, before.ReadFrom);
+        if (IsEnded || !reread && !projects)
+        {
+            return;
+        }
+        if (reread)
+        {
+            ReadAgain();
+        }
+        else
+        {
+            Evaluate();
+        }
+        waiting?.Invoke($"Waiting for {Folder ?? "the folder"}'s projects to be read");
+        try
+        {
+            await WorkspaceRead.WaitAsync(cancel);
+            await Models.Idle.WaitAsync(cancel);
+        }
+        finally
+        {
+            waiting?.Invoke(null);
+        }
+    }
+
+    /// <summary>Files or folders made, moved or deleted, by the IDE or another program, followed: what was kept of a project
+    /// that could not be evaluated where one came is let go (<see cref="ProjectModels.Came"/>), the solution is read again
+    /// given <paramref name="readAgain"/>, a project shown missing whose file stands there now is taken as it is, and each
+    /// project is evaluated that needs it.</summary>
+    public void CameOrWent(IReadOnlyCollection<string> paths, bool readAgain = false)
+    {
+        if (IsEnded)
+        {
+            return;
+        }
+        Models.Came(paths);
+        if (readAgain)
+        {
+            ReadAgain();
+            return;
+        }
+        HashSet<string> back = [.. (Workspace?.Projects ?? []).Where(p => !p.Exists && paths.Any(c => PathNames.Within(p.Path, c)) && File.Exists(p.Path)).Select(p => p.Path)];
+        if (back.Count > 0)
+        {
+            Reload(Workspace!.WithProjects(p => back.Contains(p.Path) ? ProjectModel.Unevaluated(p.Path) : p));
+            return;
+        }
+        Evaluate();
+    }
+
+    /// <summary><see cref="ActiveProjects"/> once the evaluation has said what each of them references (the file shown's
+    /// project is evaluated first), which the language server waits a few seconds for at most, the folder's first round
+    /// waited for even before it has begun.</summary>
+    private async Task<IReadOnlyList<string>> ActiveProjectsAsync()
+    {
+        Deadline until = Deadline.In(TimeSpan.FromSeconds(5));
+        while ((!Models.Followed || !Models.Idle.IsCompleted) && !until.Passed && ActiveProjects(evaluated: true) is null)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(100));
+        }
+        return ActiveProjects() ?? [];
+    }
+
+    /// <summary>The project of the file shown and every project it references, through their references, as MSBuild
+    /// evaluated them, those unloaded left out: what the language server opens before the rest. None when that is every
+    /// project, or nothing is shown; null, asked for <paramref name="evaluated"/> ones only, while one is not evaluated yet.</summary>
+    private IReadOnlyList<string>? ActiveProjects(bool evaluated = false)
+    {
+        IReadOnlyList<ProjectModel> loaded = Projects;
+        if (setup.Editors.Active?.Path is not { } shown || ProjectModel.Owning(loaded, shown) is not { } owner)
+        {
+            return [];
+        }
+        Dictionary<string, ProjectModel> byPath = loaded.DistinctBy(p => p.Path).ToDictionary(p => p.Path, StringComparer.Ordinal);
+        List<string> found = [];
+        HashSet<string> seen = new(StringComparer.Ordinal);
+        Queue<string> next = new([owner.Path]);
+        while (next.TryDequeue(out string? path))
+        {
+            if (!seen.Add(path) || !byPath.TryGetValue(path, out ProjectModel? project))
+            {
+                continue;
+            }
+            if (evaluated && project.Evaluated is null)
+            {
+                return null;
+            }
+            found.Add(path);
+            foreach (string reference in project.ProjectReferences)
+            {
+                next.Enqueue(reference);
+            }
+        }
+        return found.Count < byPath.Count ? found : [];
+    }
+
+    /// <summary>Evaluations landed: the workspace and the run configurations take them in, and the window hears which.</summary>
+    private void OnEvaluated(IReadOnlyCollection<string> changed)
+    {
+        if (IsEnded || Workspace is not { } before)
+        {
+            return;
+        }
+        Workspace = Models.Apply(before);
+        Configurations.Configure(Projects);
+        // A project evaluated again is loaded again by the language server too, which watches only some imports.
+        CSharp?.Reload([.. before.Projects.Where(p => changed.Contains(p.Path) && !Unloaded.Contains(p.Path) && p.Evaluated is { Complete: true }).Select(p => p.Path).Distinct(StringComparer.Ordinal)]);
+        bool tests = !before.Projects.Where(p => p.IsTestProject).Select(p => p.Path).SequenceEqual(Workspace.Projects.Where(p => p.IsTestProject).Select(p => p.Path))
+            || before.Projects.Zip(Workspace.Projects).Any(p => changed.Contains(p.First.Path) && TestFinder.HoldsTests(p.Second)
+                && (!ReferenceEquals(CompilationSymbols.Of(p.First), CompilationSymbols.Of(p.Second))
+                    || !TestFinder.Elsewhere(p.First).SequenceEqual(TestFinder.Elsewhere(p.Second), PathNames.Comparer)))
+            // A Godot project's folder, whose GDScript GUT's tests may be in, is known once its C# project is evaluated.
+            || !before.Projects.Select(p => p.NamedGodotFolder).SequenceEqual(Workspace.Projects.Select(p => p.NamedGodotFolder));
+        // A multi-targeted project's outer evaluation lacks its frameworks' own references: told once they are in.
+        bool packages = before.Projects.Zip(Workspace.Projects).Any(p => changed.Contains(p.First.Path) && p.Second.Evaluated is not { Complete: false }
+            && (p.First.Evaluated is { Complete: false } || !FrameworkPackages(p.First).SequenceEqual(FrameworkPackages(p.Second))));
+        ProjectsEvaluated?.Invoke(this, new EvaluatedProjects([.. Workspace.Projects.Where(p => changed.Contains(p.Path))], tests, packages));
+        if (Workspace.Solution is null)
+        {
+            // With no solution, what the folder builds as is what its projects declare.
+            ReadBuildChoices();
+        }
+        Web?.Checks.CodeChanged();
+        // The programs a file's code runs in, and what configures them, are known only as their projects are evaluated.
+        if (!before.Projects.Select(ConfiguresAs).SequenceEqual(Workspace.Projects.Select(ConfiguresAs)))
+        {
+            CSharp?.ConfigurationChanged();
+        }
+        MSBuild.ProjectsEvaluated();
+        TimeSolutionView();
+    }
+
+    /// <summary>What of a project the configuration its code runs with is found from (<see cref="ConfiguredCodeOf"/>): whether
+    /// it runs as a program or owns a configuration, what it references, its UserSecretsId and whether it is an AppHost.</summary>
+    private static (string Path, bool Runs, bool Owns, bool Host, string? Secrets, string References) ConfiguresAs(ProjectModel project) =>
+        (project.Path, project.IsRunnable, project.OwnsConfiguration, project.IsAspireHost, project.Property(Passenger.Host.CarriedProperties.UserSecretsId),
+            string.Join('\n', project.ProjectReferences));
+
+    /// <summary>A project's package references, each framework's, as a change of any one is told.</summary>
+    private static IEnumerable<(string? Framework, string Name, string? Version)> FrameworkPackages(ProjectModel project) =>
+        project.Evaluated is { Dependencies.Count: > 0 } evaluated
+            ? evaluated.Dependencies.SelectMany(d => d.Packages.Select(r => (d.Framework, r.Name, r.Version)))
+            : project.Packages.Select(r => ((string?)null, r.Name, r.Version));
+
+    /// <summary>The log's phase of a folder's opening: the Solution view with every project as MSBuild evaluates it.</summary>
+    private void TimeSolutionView()
+    {
+        if (openedAt != 0 && Workspace is { } shown && shown.Projects.Where(p => p.Exists).All(p => p.Evaluated is { Complete: true }))
+        {
+            IdeErrors.Write($"Solution view shows the {shown.Projects.Count} projects of {shown.Name} as MSBuild evaluates them {Durations.Said(System.Diagnostics.Stopwatch.GetElapsedTime(openedAt))} after the folder opened ({Models.Evaluations} evaluated)");
+            openedAt = 0;
+        }
+    }
+
+    /// <summary>Whether the session has been left, or its window closed.</summary>
+    public bool IsEnded => closing || ending is not null;
+
+    /// <summary>The folder's documents from now on: what the store kept of the folder's own (its breakpoints, bookmarks,
+    /// configurations, Find in Files' scope, unloaded projects, folds and recent files) taken first, so restoring them writes
+    /// nothing back.</summary>
+    public void Keep(ProjectState kept)
+    {
+        UiThread.Check();
+        Debug.Breakpoints.Restore(kept.Breakpoints.Value);
+        Bookmarks.Restore(kept.Bookmarks.Value);
+        EndpointGrants.Keep(kept.Endpoints);
+        OpenApiNames.Keep(kept.Endpoints);
+        Publishing.Keep(kept.Publish);
+        FindScope = kept.Find.Value;
+        WorkspaceState workspace = kept.Workspace.Value;
+        foreach (string project in workspace.UnloadedProjects)
+        {
+            Unloaded.Add(project);
+        }
+        State = kept;
+        Frameworks.Keep(kept.Workspace);
+        MigrationEnvironments.Keep(kept.Workspace);
+        Targets.Keep(kept.Workspace);
+        BuildChoices.Keep(kept.Workspace);
+        Configurations.Keep(kept.RunConfigurations, Projects);
+        Folds.Restore(workspace.Folds);
+        foreach (string file in workspace.RecentFiles.Where(File.Exists).Reverse())
+        {
+            Opened(file);
+        }
+    }
+
+    /// <summary>A file the editor opened: the latest of the recent files.</summary>
+    public void Opened(string path)
+    {
+        recent.Remove(path);
+        recent.Insert(0, path);
+        if (recent.Count > RecentLimit)
+        {
+            recent.RemoveAt(recent.Count - 1);
+        }
+    }
+
+    /// <summary>A file the editor opened: the language server, the debugger, Git, the bookmarks and the places follow it,
+    /// its gutter showing their marks.</summary>
+    public void Attach(OpenDocument document)
+    {
+        CSharp?.Attach(document);
+        Web?.Attach(document);
+        Xaml.Attach(document);
+        GodotScenes.Attach(document);
+        GodotMarks.Attach(document);
+        GodotShaders.Attach(document);
+        GodotScriptTypes.Attach(document);
+        MSBuild.Attach(document);
+        FileChecks.Attach(document);
+        Features.Attach(document);
+        Debug.Attach(document);
+        Vcs.Attach(document);
+        Bookmarks.Attach(document.Path, document.Text);
+        Navigation.Attach(document.Path, document.Text);
+    }
+
+    /// <summary>The checks of Passenger's beside C#'s that mark a file opened here, each as an agent is told while it is
+    /// under way; none for a file no check reads, whose lack of marks says nothing of it.</summary>
+    public IReadOnlyList<string> ChecksOf(OpenDocument document)
+    {
+        List<string> checks = [];
+        if (Web?.For(document) is { } web)
+        {
+            checks.Add(web.Checker);
+        }
+        if (Xaml.For(document) is not null)
+        {
+            checks.Add(Passenger.App.Xaml.XamlDocument.Checker);
+        }
+        if (MSBuild.For(document) is not null)
+        {
+            checks.Add(Passenger.App.MSBuild.MSBuildDocument.Checker);
+        }
+        foreach (string? check in (string?[])[GodotMarks.CheckOf(document), GodotShaders.CheckOf(document), GodotScriptTypes.CheckOf(document), FileChecks.CheckOf(document), Features.CheckOf(document)])
+        {
+            if (check is not null)
+            {
+                checks.Add(check);
+            }
+        }
+        return checks;
+    }
+
+    /// <summary>A file the editor closed, which they follow no more.</summary>
+    public void Detach(OpenDocument document)
+    {
+        CSharp?.Detach(document);
+        Web?.Detach(document);
+        Xaml.Detach(document);
+        GodotScenes.Detach(document);
+        GodotMarks.Detach(document);
+        GodotShaders.Detach(document);
+        GodotScriptTypes.Detach(document);
+        MSBuild.Detach(document);
+        FileChecks.Detach(document);
+        Features.Detach(document);
+        Debug.Detach(document);
+        Vcs.Detach(document);
+        Bookmarks.Detach(document.Path);
+        Navigation.Detach(document.Path);
+    }
+
+    /// <summary>A file or folder moved: its bookmarks and breakpoints, Git, the recent files, the places, Local History and
+    /// the solution or project opened by name follow it, and the language server knows an open file at its new path.</summary>
+    public void Moved(FileMove move)
+    {
+        if (NamedSolution is { } named)
+        {
+            NamedSolution = PathNames.Moved(named, move.From, move.To);
+        }
+        Vcs.Moved(move.From, move.To);
+        LocalHistory?.Moved(move.From, move.To);
+        Followed(move);
+    }
+
+    /// <summary>A folder another program moved, which open files followed: its bookmarks and breakpoints, the recent
+    /// files and the places follow it too, and the language servers know the open files at their new paths. Git and
+    /// Local History read that move from the disk themselves.</summary>
+    public void Followed(FileMove move)
+    {
+        Bookmarks.Move(move.From, move.To);
+        Debug.Breakpoints.Move(move.From, move.To);
+        Navigation.Move(move.From, move.To);
+        for (int i = 0; i < recent.Count; i++)
+        {
+            recent[i] = PathNames.Moved(recent[i], move.From, move.To);
+        }
+        foreach (OpenDocument document in move.Documents)
+        {
+            CSharp?.Detach(document);
+            CSharp?.Attach(document);
+            Web?.Detach(document);
+            Web?.Attach(document);
+            Xaml.Detach(document);
+            Xaml.Attach(document);
+            MSBuild.Detach(document);
+            MSBuild.Attach(document);
+            FileChecks.Detach(document);
+            FileChecks.Attach(document);
+            Features.Detach(document);
+            Features.Attach(document);
+            GodotMarks.Detach(document);
+            GodotMarks.Attach(document);
+            GodotShaders.Detach(document);
+            GodotShaders.Attach(document);
+            GodotScriptTypes.Detach(document);
+            GodotScriptTypes.Attach(document);
+        }
+    }
+
+    /// <summary>Reads the folder's solution again (after a package or project change, here or on disk), keeping the run
+    /// configuration chosen when it is still there.</summary>
+    public void ReadAgain()
+    {
+        if (Folder is not null)
+        {
+            Read(WorkspaceModel.ReadSolution(Folder, NamedSolution, out UnreadSolution? unread), unread);
+        }
+    }
+
+    /// <summary>The same folder opened again, with the solution or project named this time, or none: the folder is read
+    /// again with it, and the language server starts again only when what it loads changed.</summary>
+    public void Reopen(string? named, WorkspaceModel? withSolution, UnreadSolution? unread)
+    {
+        NamedSolution = named;
+        OpenedByPerson(withSolution);
+        Read(withSolution, unread);
+    }
+
+    /// <summary>A solution opened outside an agent's call is the person's to reach from, what an agent wrote of it taken as
+    /// theirs, as it is in a Passenger started anew (<see cref="Mcp.AgentReach.Opened"/>).</summary>
+    private static void OpenedByPerson(WorkspaceModel? read)
+    {
+        if (Mcp.AgentCall.Current is null)
+        {
+            foreach (Passenger.Host.Stamp solution in read?.ReadFrom ?? [])
+            {
+                Mcp.AgentReach.Opened(PathNames.Canonical(solution.Path));
+            }
+        }
+    }
+
+    /// <summary>Takes the folder's solution, read now, with the programs beside it it had; or for a folder without one (or
+    /// with one that does not read, <paramref name="unread"/>) the projects it had, read again now; and those added or gone
+    /// since once a worker has walked its folders for them.</summary>
+    private void Read(WorkspaceModel? withSolution, UnreadSolution? unread)
+    {
+        reads++;
+        Reload(withSolution?.KeepingPrograms(Workspace!) ?? Workspace!.Reread() with { Unread = unread });
+        WalkForProjects();
+    }
+
+    /// <summary>Starts what a folder runs once the window has bound its views to the session: Git's lookup, the language
+    /// server, and the walk for its programs (and, for a folder without a solution, its projects).</summary>
+    public void Start()
+    {
+        IdeErrors.Observe(Vcs.OpenAsync(Folder!));
+        StartCSharp();
+        // The walk begun ahead is the first, and what the session has not taken of the opening once it lands is ended.
+        WalkForProjects(ahead?.Read);
+        // Once the files it opens with are open, so the one shown's project is evaluated first.
+        UiThread.Post(Evaluate);
+        // Its solution's configurations, or its projects' as the evaluations it opened with say them.
+        ReadBuildChoices();
+    }
+
+    /// <summary>Walks the folder for its projects off the window's thread, as background work, or takes the walk given
+    /// (begun ahead), and takes what it finds when it differs from what the session has, unless another read came first
+    /// or the session was left.</summary>
+    private void WalkForProjects(Task<WorkspaceModel>? begun = null)
+    {
+        string walking = Folder!;
+        string? named = NamedSolution;
+        int walk = ++reads;
+        TaskCompletionSource landed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        WorkspaceRead = landed.Task;
+        // Held through the walk, then by the crossing, which lets go of what it can never deliver.
+        IDisposable held = BackgroundWork.Scope();
+        IdeErrors.Observe((begun ?? BackgroundWork.Unheld(() => WorkspaceModel.Read(walking, named))).ContinueWith(walked =>
+        {
+            // Seen here, so a walk that failed after another read began is no unobserved task's error later.
+            _ = walked.Exception;
+            UiThread.Post(() =>
+            {
+                try
+                {
+                    if (walk == reads && !IsEnded && walked.GetAwaiter().GetResult() is { } found
+                        && (!Workspace!.LoadsAs(found) || !Workspace.GodotGames.SequenceEqual(found.GodotGames, PathNames.Comparer)))
+                    {
+                        Reload(found);
+                    }
+                }
+                finally
+                {
+                    landed.TrySetResult();
+                    if (begun is not null)
+                    {
+                        IdeErrors.Observe(EndAhead());
+                    }
+                }
+            });
+            held.Dispose();
+        }, TaskScheduler.Default));
+    }
+
+    /// <summary>Ends what the session did not take of the opening begun ahead (the language server it started), once.</summary>
+    private Task EndAhead()
+    {
+        HeadStart? ended = ahead;
+        ahead = null;
+        return ended?.EndAsync() ?? Task.CompletedTask;
+    }
+
+    /// <summary>Takes a new read of the folder. The language server starts again only when what it loaded changed: another
+    /// solution, or other projects.</summary>
+    private void Reload(WorkspaceModel read)
+    {
+        bool loaded = Workspace is not null && Workspace.LoadsAs(read);
+        IReadOnlyList<string>? programs = loaded ? null : Workspace?.ProgramsAddedIn(read);
+        TakeFilter(read);
+        Workspace = Models.Apply(read);
+        Configurations.Configure(Projects);
+        // Programs found beside what it loaded are loaded beside them, where a server fed its projects can take them.
+        if (!loaded && !(programs is not null && CSharp?.Load(Workspace, programs) == true))
+        {
+            StartCSharp();
+        }
+        // A Godot project of GDScript alone found by the walk is the open Godot files' project from now on.
+        GodotFilesChanged();
+        WorkspaceChanged?.Invoke(this, EventArgs.Empty);
+        ReadBuildChoices();
+        // Each project whose evaluation no longer stands (its file or an import changed) is evaluated again.
+        Evaluate();
+    }
+
+    /// <summary>What the folder's watcher saw, for the C# language server: told through its service, or kept for the one the
+    /// session makes while a server started ahead waits for it.</summary>
+    public void FilesChanged(FolderChanges changes)
+    {
+        if (CSharp is { } csharp)
+        {
+            csharp.FilesChanged(changes);
+        }
+        else if (ahead is not null && Folder is { } folder)
+        {
+            (unheardAhead ??= new HeldChanges(folder)).Add(changes);
+        }
+    }
+
+    /// <summary>The language server on the workspace, in place of the one before, the files open its too; none for a
+    /// folder with neither a solution nor a project, one not trusted, nor in a window that starts none.</summary>
+    private void StartCSharp()
+    {
+        IdeErrors.Observe(CSharp?.DisposeAsync().AsTask() ?? Task.CompletedTask);
+        CSharp = null;
+        Tests.Finder.ServerLoading = false;
+        if (!IsEnded && Trusted && setup.StartsLanguageServer && Workspace is { } opening && (opening.Solution is not null || opening.Projects.Count > 0))
+        {
+            Settings.AppSettings shown = setup.Settings();
+            CSharp = new CSharpService(setup.WarmServer, ahead)
+            {
+                SolutionWide = setup.SolutionWide(),
+                Hints = (shown.ParameterHints, shown.TypeHints),
+                FirstProjects = ActiveProjectsAsync,
+                ProjectsNow = () => Projects,
+                UnloadedNow = () => [.. Workspace?.Projects.Where(p => Unloaded.Contains(p.Path)) ?? []],
+                Frameworks = Frameworks,
+                Feed = DesignTimeBuilds.Feed,
+                // Razor's HTML is the HTML server's to answer.
+                HtmlServer = Web is { } web ? web.HtmlAsync : null,
+                AspireRoleOf = AspireFiles.RoleOf,
+                AspireAppHostOf = path => AspireFiles.AppHostOf(path) is { } host
+                    ? new AspireAppHostSettings(host, Projects.FirstOrDefault(p => PathNames.Same(p.Path, host))?.Property(Passenger.Host.CarriedProperties.UserSecretsId))
+                    : null,
+                ComposeGaps = () => Web?.Checks.Gaps ?? [],
+                ConfiguredCodeOf = ConfiguredCodeOf,
+                Texts = setup.Editors.Texts,
+                Unseen = document => !setup.Editors.HasTab(document),
+                GodotOf = BuiltGodotOf,
+                GodotProjects = folder => WorkspaceModel.BuildingGodot(Projects, folder),
+                GodotScenes = GodotScenes,
+                GodotIde = GodotIde,
+                GodotCodeRead = GodotMarks.Changed,
+                Stylesheets = Stylesheets,
+            };
+            CSharpChanged?.Invoke(this, EventArgs.Empty);
+            CSharpService started = CSharp;
+            Tests.Finder.ServerLoading = true;
+            bool loaded = false;
+            started.StateChanged += (_, _) =>
+            {
+                // Loaded, the projects' code can be read for what their compose files' services need.
+                if (started.IsReady != loaded && (loaded = started.IsReady) && CSharp == started)
+                {
+                    Web?.Checks.CodeChanged();
+                    GodotMarks.Changed();
+                    Xaml.ServerLoaded();
+                }
+            };
+            // A project the server loaded again (a script moved or added) is code the open scenes were read against as it was.
+            started.ProjectsLoaded += (_, _) =>
+            {
+                if (CSharp == started)
+                {
+                    GodotMarks.Changed();
+                    if (started.IsReady)
+                    {
+                        Xaml.ServerLoaded();
+                    }
+                    // The test projects' files are read at full pace once the server says the whole solution loaded.
+                    Tests.Finder.ServerLoading = !started.IsReady;
+                }
+            };
+            CSharp.Start(opening);
+            foreach (FolderChanges held in unheardAhead?.Take() ?? [])
+            {
+                CSharp.FilesChanged(held);
+            }
+            foreach (OpenDocument open in setup.Editors.Documents)
+            {
+                CSharp.Attach(open);
+            }
+            return;
+        }
+        CSharpChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Leaves the folder while its window stays: everything it runs ends (one the debugger attached to let go as the
+    /// window's close lets it go, <see cref="DebugController.LeaveAsync"/>), and the task finishes once each end has landed
+    /// (a stopped build's outcome, a killed program's exit, said before another folder takes the views) and the session has
+    /// let go of the window's views, or <see cref="MainWindow.EndLimit"/> after (apps on devices <see cref="DeviceLaunches.EndLimit"/>),
+    /// each late one named in the log; what else ends with it (the folder's terminals, the window's) alike.</summary>
+    public Task LeaveAsync(params (string What, Task Ending)[] with)
+    {
+        UiThread.Check();
+        if (ending is not null)
+        {
+            return ending;
+        }
+        Task debuggers = Debug.LeaveAsync();
+        List<(string What, Task Ending)> parts = [.. with, ("the debuggers", debuggers)];
+        // Their ends are posted to the window's thread, which carries on while it waits.
+        if (Builder.IsRunning)
+        {
+            parts.Add(("the build", Builder.Ended));
+        }
+        if (RunProgram.IsRunning)
+        {
+            parts.Add((RunProgram == InTerminal ? "the program in the terminal" : "the program", RunProgram.Ended));
+        }
+        if (Profiled is { } program)
+        {
+            parts.Add(("the profiled program", program.Landed));
+        }
+        Task ended = Task.WhenAll(Within(MainWindow.EndLimit, Folder, End(parts, debuggers)), EndOnDevices());
+        ending = LetGoOnceEnded();
+        return ending;
+
+        async Task LetGoOnceEnded()
+        {
+            await ended;
+            LetGo();
+        }
+    }
+
+    /// <summary>Ends what the folder runs as its window closes: programs and builds killed, the rest asked to end, and the
+    /// task finishes once those have, or <see cref="MainWindow.EndLimit"/> after (its apps' ends on devices
+    /// <see cref="DeviceLaunches.EndLimit"/>). It needs no UI thread once begun, so the process can wait for it after the
+    /// window's loop has stopped.</summary>
+    public Task CloseAsync(params (string What, Task Ending)[] with)
+    {
+        UiThread.Check();
+        if (ending is not null)
+        {
+            return ending;
+        }
+        Task debuggers = Debug.CloseAsync();
+        ending = Task.WhenAll(Within(MainWindow.EndLimit, Folder, End([.. with, ("the debuggers", debuggers)], debuggers)), EndOnDevices());
+        LetGo();
+        return ending;
+    }
+
+    public ValueTask DisposeAsync() => new(CloseAsync());
+
+    /// <summary>What ends at once (the store's documents, the watcher, Local History, the bookmarks', places' and breakpoints'
+    /// hold on the files left open, programs, builds, the profiled run and its port, a test run), and what is asked to end:
+    /// a git that may ask, its questions refused, the test runner and the language server, with the parts given.</summary>
+    private List<(string What, Task Ending)> End(List<(string What, Task Ending)> parts, Task debuggers)
+    {
+        closing = true;
+        State = null;
+        reached?.Dispose();
+        Models.Close();
+        DesignTimeBuilds.Close();
+        Watcher?.Dispose();
+        LocalHistory?.Release();
+        // Files left open are the next session's to follow; what each store kept of them stays where it was carried.
+        Bookmarks.DetachAll();
+        Navigation.DetachAll();
+        Debug.Breakpoints.DetachAll();
+        // A build stopped now says so with nothing of this folder's in Problems, which another folder's take next.
+        Problems.Clear();
+        parts.Add(("the Aspire applications", Aspire.DisposeAsync().AsTask()));
+        parts.Add(("git", Vcs.EndGitAsync()));
+        RunProgram.Stop();
+        Builder.Stop();
+        Packages.Stop();
+        ProfileStarting?.Cancel();
+        foreach (Run.StartUnderWay start in Starting.ToList())
+        {
+            start.Work.Cancel();
+        }
+        // Profile's program ends with the others, and each run, read by no one now, leaves no port listening.
+        Profiled?.Kill();
+        foreach (ProfilingSession run in new[] { Profiling, Profiled?.Run }.OfType<ProfilingSession>().Distinct())
+        {
+            // Not held, and off the window's thread, whose loop may stop first: nothing it does is drawn.
+            parts.Add(("the profiler", BackgroundWork.Unheld(() => run.LetGoAsync().AsTask())));
+        }
+        Profiling = null;
+        foreach ((_, LiveApp app) in Debug.Apps)
+        {
+            app.Dispose();
+        }
+        RunApp?.Dispose();
+        ProfiledApp?.Dispose();
+        foreach (Godot.GodotGame running in games.ToList())
+        {
+            running.Dispose();
+        }
+        Game?.Dispose();
+        Tests.Stop();
+        parts.Add(("the test runner", Tests.DisposeAsync().AsTask()));
+        parts.Add(("the language server", CSharp?.DisposeAsync().AsTask() ?? Task.CompletedTask));
+        CSharp = null;
+        parts.Add(("the language server started ahead", EndAhead()));
+        parts.Add(("the web language servers", Web?.DisposeAsync().AsTask() ?? Task.CompletedTask));
+        Web = null;
+        // No child holds a container: the engine ends what the folder started, once Compose has stopped making them.
+        Task abandoned = ContainerRun?.Abandon() ?? Task.CompletedTask;
+        parts.Add(("the folder's containers", Containers.EndAsync(Task.WhenAll(debuggers, abandoned))));
+        Xaml.Dispose();
+        GodotScenes.Stop();
+        GodotMarks.Dispose();
+        GodotShaders.Dispose();
+        GodotScriptTypes.Dispose();
+        parts.Add(("Godot's editors", GodotEditors.DisposeAsync().AsTask()));
+        parts.Add(("the Godot editor's IDE messaging connection", GodotIde.DisposeAsync().AsTask()));
+        MSBuild.Dispose();
+        FileChecks.Dispose();
+        Features.Dispose();
+        return parts;
+    }
+
+    /// <summary>The session lets go of the window's consoles, Debug window and open files, which the next session's runners,
+    /// debugger and Git take.</summary>
+    private void LetGo()
+    {
+        WorkspaceTrust.Lend(this, Folder ?? string.Empty, []);
+        Builder.Dispose();
+        Runner.Dispose();
+        Debug.Dispose();
+        Vcs.Dispose();
+    }
+
+    /// <summary>Waits for what is ending, for at most the limit, naming in the log what had not ended by then.</summary>
+    private static Task Within(TimeSpan limit, string? folder, IReadOnlyList<(string What, Task Ending)> parts)
+    {
+        if (parts.All(p => p.Ending.IsCompleted))
+        {
+            return Task.CompletedTask;
+        }
+        // Not held: nothing it does is drawn, and the process waits for it once the window's loop has stopped.
+        return BackgroundWork.Unheld(async () =>
+        {
+            try
+            {
+                await Task.WhenAll(parts.Select(p => p.Ending)).WaitAsync(limit);
+            }
+            catch (TimeoutException)
+            {
+                string late = Plural.Listed([.. parts.Where(p => !p.Ending.IsCompleted).Select(p => p.What)]);
+                IdeErrors.Write($"Closing{(folder is null ? string.Empty : $" {folder}")}: {late} had not ended after {Durations.Said(limit)}");
+            }
+            catch (Exception error)
+            {
+                IdeErrors.Write($"Closing{(folder is null ? string.Empty : $" {folder}")}: ending what it started failed: {error}");
+            }
+        });
+    }
+}

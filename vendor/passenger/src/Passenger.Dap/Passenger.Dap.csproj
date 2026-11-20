@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The Debug Adapter Protocol: the messages and the connection, for both ends (the IDE and the adapter). -->
+  <PropertyGroup>
+    <RootNamespace>Passenger.Dap</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The requests waiting for their answers, kept as every peer of Passenger's keeps them (PendingRequests). -->
+    <ProjectReference Include="../Passenger.Core/Passenger.Core.csproj" />
+  </ItemGroup>
+</Project>

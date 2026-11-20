@@ -1,0 +1,794 @@
+using System.Buffers;
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+using System.Text;
+using System.Text.RegularExpressions;
+using Microsoft.Win32.SafeHandles;
+
+namespace Passenger.Core;
+
+/// <summary>A .NET program a debugger can attach to: its process, its executable's name, its command line, and the user it
+/// runs as, <see cref="IsMine"/> when that is the person running Passenger.</summary>
+public sealed record DotnetProcess(int Id, string Name, string CommandLine, string User, bool IsMine)
+{
+    /// <summary>The container it runs in, by name, or null for a program of this machine. Its <see cref="Id"/> is then the
+    /// container's own, and 0 until Passenger's tools in the container have said which it is.</summary>
+    public string? Container { get; init; }
+
+    /// <summary>Started held with DOTNET_MODIFIABLE_ASSEMBLIES=debug, so a debugger attached to it may change its code
+    /// (Hot Reload).</summary>
+    public bool HotReload { get; init; }
+
+    /// <summary>What a person should know before attaching (a Release build's code, a container's processor emulated), or null.</summary>
+    public string? Note { get; init; }
+
+    /// <summary>Why no debugger can attach to it (its runtime's diagnostics turned off), or null when one can.</summary>
+    public string? WhyNot { get; init; }
+
+    /// <summary>What the program is to a person: the .dll the dotnet host runs ("Shop.Api" for "dotnet Shop.Api.dll"),
+    /// else the executable's name without its extension.</summary>
+    public string Program => IsHosted && Assembly is { } dll ? Named(dll) : Executable;
+
+    /// <summary>The program's own assembly as its command line names it, a path or a name in its working folder: the
+    /// first .dll after the dotnet host or Passenger's helper host (<see cref="ChildProcesses.HelperHost"/>) but the
+    /// helper host's own, else the .dll beside its apphost; null where the host names none.</summary>
+    public string? Assembly
+    {
+        get
+        {
+            List<string> words = Words(CommandLine);
+            if (IsHosted)
+            {
+                return words.Skip(1).FirstOrDefault(word => word.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && Named(word) != ChildProcesses.HelperHost);
+            }
+            return words.Count == 0 ? null : (words[0].EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? words[0][..^4] : words[0]) + ".dll";
+        }
+    }
+
+    /// <summary>The command line's words, the program first, each as it was given.</summary>
+    public IReadOnlyList<string> CommandWords => Words(CommandLine);
+
+    /// <summary>The name without Windows' .exe; any other dot is the name's own ("Passenger.Tests").</summary>
+    private string Executable => Name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? Name[..^4] : Name;
+
+    /// <summary>Whether the dotnet host or Passenger's helper host runs it, the program's .dll among its arguments.</summary>
+    private bool IsHosted => Executable.Equals("dotnet", StringComparison.OrdinalIgnoreCase) || Executable.Equals(ChildProcesses.HelperHost, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A .dll's name without its folder (of any system's) or its extension.</summary>
+    private static string Named(string dll) => dll[(dll.LastIndexOfAny(['/', '\\']) + 1)..^4];
+
+    /// <summary>Whether a search typed into Attach to Process finds it: in its name, its process id, its user, its command
+    /// line or its container's name.</summary>
+    public bool Matches(string search) => search.Length == 0
+        || Name.Contains(search, StringComparison.OrdinalIgnoreCase)
+        || Container?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
+        || Id.ToString(CultureInfo.InvariantCulture).Contains(search, StringComparison.Ordinal)
+        || User.Contains(search, StringComparison.OrdinalIgnoreCase)
+        || CommandLine.Contains(search, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A command line's words as one is joined (<see cref="ChildProcesses.Quote"/>, or Windows' own): apart by
+    /// white space, a stretch in double quotes held in its word, a quote escaped by a backslash.</summary>
+    private static List<string> Words(string commandLine)
+    {
+        List<string> words = [];
+        StringBuilder word = new();
+        bool quoted = false;
+        bool any = false;
+        for (int i = 0; i < commandLine.Length; i++)
+        {
+            char c = commandLine[i];
+            if (c == '\\' && i + 1 < commandLine.Length && commandLine[i + 1] == '"')
+            {
+                word.Append('"');
+                any = true;
+                i++;
+            }
+            else if (c == '"')
+            {
+                quoted = !quoted;
+                any = true;
+            }
+            else if (char.IsWhiteSpace(c) && !quoted)
+            {
+                if (any)
+                {
+                    words.Add(word.ToString());
+                    word.Clear();
+                    any = false;
+                }
+            }
+            else
+            {
+                word.Append(c);
+                any = true;
+            }
+        }
+        if (any)
+        {
+            words.Add(word.ToString());
+        }
+        return words;
+    }
+}
+
+/// <summary>The .NET programs on this machine a debugger can attach to: CoreCLR's alone, found by what their runtime
+/// opens for a debugger (.NET Framework and Mono open neither). On macOS and Linux that is its debugger transport's pipes
+/// in the user's temporary folder, named for the process and the time it started, so a crashed program's are told from a
+/// process given its number since; on Windows its diagnostic port's named pipe. Passenger's own process is left out,
+/// since no process debugs itself.</summary>
+public static partial class DotnetProcesses
+{
+    /// <summary>The runtime's debugger transport (dbgshim's handshake and ICorDebug's channel) on macOS and Linux.</summary>
+    [GeneratedRegex(@"^clr-debug-pipe-(?<id>\d+)-(?<started>\d+)-in$")]
+    private static partial Regex Transport();
+
+    /// <summary>A diagnostic port's pipe on Windows.</summary>
+    [GeneratedRegex(@"^dotnet-diagnostic-(?<id>\d+)$")]
+    private static partial Regex DiagnosticPort();
+
+    /// <summary>Every .NET program a debugger can attach to now, by name then process id. Slow enough to be read off the UI
+    /// thread: each process's command line and user is a call into the system.</summary>
+    public static IReadOnlyList<DotnetProcess> List()
+    {
+        List<DotnetProcess> found = [];
+        foreach ((int id, long? started) in Candidates())
+        {
+            if (id != Environment.ProcessId && Read(id, started) is { } process)
+            {
+                found.Add(process);
+            }
+        }
+        return [.. found.DistinctBy(p => p.Id).OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ThenBy(p => p.Id)];
+    }
+
+    /// <summary>The program with this process id, when it is one a debugger can attach to.</summary>
+    public static DotnetProcess? Find(int id) => List().FirstOrDefault(p => p.Id == id);
+
+    /// <summary>A process as the system describes it (name, command line, user), whether or not a debugger can attach to it;
+    /// null when it has gone or cannot be read.</summary>
+    public static DotnetProcess? Describe(int id) => Read(id, null);
+
+    /// <summary>Whether a process with this id runs, any program's: one this user may not open (another user's, an elevated
+    /// one) runs too.</summary>
+    public static bool Runs(int id)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            // .NET's HasExited takes a process Windows will not open for one that has ended.
+            using SafeProcessHandle process = Kernel32.OpenProcess(Kernel32.ProcessQueryLimitedInformation | Kernel32.Synchronize, false, (uint)id);
+            return process.IsInvalid ? Marshal.GetLastPInvokeError() == AccessDenied : Kernel32.WaitForSingleObject(process, 0) == WaitTimeout;
+        }
+        try
+        {
+            using System.Diagnostics.Process process = System.Diagnostics.Process.GetProcessById(id);
+            return !process.HasExited && !Zombie(id);
+        }
+        catch (Exception gone) when (gone is ArgumentException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Whether a process Passenger holds runs: one it started by .NET's hold on it, which hears of its end however
+    /// soon another process takes its id, so once this says it has ended its exit code reads; one it found as
+    /// <see cref="Runs(int)"/> finds it, a zombie ended. A process it never started or has let go of is not running.</summary>
+    public static bool Runs(System.Diagnostics.Process process)
+    {
+        try
+        {
+            return !process.HasExited && (OperatingSystem.IsWindows() || !Zombie(process.Id) || Started(process));
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // Windows opens another user's process, or an elevated one, for no question of .NET's.
+            return Runs(process.Id);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>When a process started, in UTC, as the system recorded it; null when it has gone or cannot be read (another
+    /// user's, an elevated one).</summary>
+    public static DateTime? StartedAt(int id)
+    {
+        try
+        {
+            using System.Diagnostics.Process process = System.Diagnostics.Process.GetProcessById(id);
+            return process.StartTime.ToUniversalTime();
+        }
+        catch (Exception unread) when (unread is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>A variable of the environment a process started with, as the system keeps it (KERN_PROCARGS2 on macOS, /proc
+    /// on Linux), which it gives for a process of the same user; null where the process has none, or it cannot be read (gone,
+    /// another user's, a program of the system's own, Windows).</summary>
+    public static string? VariableOf(int id, string name)
+    {
+        IReadOnlyList<string> environment;
+        try
+        {
+            environment = OperatingSystem.IsMacOS() ? MacStarted(id).Environment
+                : OperatingSystem.IsLinux() ? File.ReadAllText($"/proc/{id}/environ").Split('\0', StringSplitOptions.RemoveEmptyEntries)
+                : [];
+        }
+        catch (Exception unread) when (unread is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+        foreach (string variable in environment)
+        {
+            if (variable.Length > name.Length && variable[name.Length] == '=' && variable.StartsWith(name, StringComparison.Ordinal))
+            {
+                return variable[(name.Length + 1)..];
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Whether this <see cref="System.Diagnostics.Process"/> started its process: a zombie of its own is .NET's to
+    /// take, which it is about to, where a process found by its id has no start to give.</summary>
+    private static bool Started(System.Diagnostics.Process process)
+    {
+        try
+        {
+            return process.StartInfo is not null;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Whether a process has ended and waits for its parent to take its exit: one of another's, which .NET still finds
+    /// running then.</summary>
+    private static unsafe bool Zombie(int id)
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            // The short BSD side is given for another user's process too, and none (ESRCH) for a zombie, whose task is gone.
+            byte* info = stackalloc byte[ShortBsdInfoSize];
+            return ProcPidInfo(id, ProcPidtShortBsdInfo, 0, info, ShortBsdInfoSize) == ShortBsdInfoSize
+                ? *(uint*)(info + ShortBsdStatusOffset) == ZombieStatus
+                : Marshal.GetLastPInvokeError() == NoSuchProcess;
+        }
+        try
+        {
+            string stat = File.ReadAllText($"/proc/{id}/stat");
+            return stat.LastIndexOf(')') is int end and >= 0 && end + 2 < stat.Length && stat[end + 2] == 'Z';
+        }
+        catch (Exception unread) when (unread is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Why macOS lets no other program read a process's memory (a dump, a heap's snapshot), even a program of its
+    /// own user's: its executable is signed with the hardened runtime and without the get-task-allow entitlement, as an app
+    /// notarized for release is (Godot's own builds among them). Null where it may be read, it cannot be asked, or off macOS.</summary>
+    public static unsafe string? WhyUnreadable(int id)
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            return null;
+        }
+        uint flags = 0;
+        if (CodeSigning(id, CodeSigningStatus, &flags, sizeof(uint)) != 0 || (flags & HardenedRuntime) == 0 || (flags & GetTaskAllow) != 0)
+        {
+            return null;
+        }
+        string? executable = Libc.ExecutableOf(id);
+        // An app's executable is its bundle's, which is what is signed.
+        string named = executable is null ? $"process {id}" : PathNames.Shown(MacBundles.Of(executable) ?? executable, null);
+        return $"{named} is signed with macOS's hardened runtime and without the com.apple.security.get-task-allow entitlement, so macOS lets no other "
+            + "program read its memory: signed again with that entitlement (as a native debugger needs), or run on Linux or Windows, it can be";
+    }
+
+    /// <summary>csops' question of a process's code signing flags (CS_OPS_STATUS), and the flags of the hardened runtime
+    /// (CS_RUNTIME) and of get-task-allow (CS_GET_TASK_ALLOW).</summary>
+    private const uint CodeSigningStatus = 0;
+    private const uint HardenedRuntime = 0x10000;
+    private const uint GetTaskAllow = 0x4;
+
+    [LibraryImport("libc", EntryPoint = "csops")]
+    private static unsafe partial int CodeSigning(int pid, uint operation, void* answer, nuint size);
+
+    /// <summary>The folder of the CoreCLR a process runs on (its libcoreclr or coreclr.dll, where the runtime's own tools lie
+    /// beside it), read from the modules it has mapped; null when it has gone, is not readable, or maps none (a single-file
+    /// app's runtime is inside its executable).</summary>
+    public static string? RuntimeFolder(int id)
+    {
+        try
+        {
+            string? runtime = OperatingSystem.IsWindows() ? RuntimeWindows(id)
+                : OperatingSystem.IsMacOS() ? RuntimeMac(id)
+                : RuntimeLinux(id);
+            return Path.GetDirectoryName(runtime);
+        }
+        catch (Exception gone) when (gone is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException
+            or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static string? RuntimeLinux(int id)
+    {
+        foreach (string line in File.ReadLines($"/proc/{id}/maps"))
+        {
+            // A mapped file's path is the line's last field and its only slashes.
+            if (line.EndsWith("/libcoreclr.so", StringComparison.Ordinal))
+            {
+                return line[line.IndexOf('/', StringComparison.Ordinal)..];
+            }
+        }
+        return null;
+    }
+
+    private static string? RuntimeWindows(int id)
+    {
+        using System.Diagnostics.Process process = System.Diagnostics.Process.GetProcessById(id);
+        foreach (System.Diagnostics.ProcessModule module in process.Modules)
+        {
+            if (module.FileName.EndsWith(@"\coreclr.dll", StringComparison.OrdinalIgnoreCase))
+            {
+                return module.FileName;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Writes a minidump of a Windows process's heap to <paramref name="path"/> as the runtime's createdump.exe
+    /// writes one (with its private memory, where the GC heap is), through the system's dbghelp, which holds the
+    /// process's threads while it writes: createdump.exe dumps only the process that started it. Throws a
+    /// <see cref="System.ComponentModel.Win32Exception"/> saying why when it cannot.</summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public static void WriteHeapDump(int id, string path)
+    {
+        const uint ProcessQueryInformation = 0x0400;
+        const uint ProcessVmRead = 0x0010;
+        // MiniDumpWithPrivateReadWriteMemory, DataSegs, HandleData, UnloadedModules, FullMemoryInfo, ThreadInfo, TokenInformation.
+        const uint WithHeap = 0x200 | 0x1 | 0x4 | 0x20 | 0x800 | 0x1000 | 0x40000;
+        using SafeProcessHandle process = Kernel32.OpenProcess(ProcessQueryInformation | ProcessVmRead, false, (uint)id);
+        if (process.IsInvalid)
+        {
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError());
+        }
+        using SafeFileHandle file = File.OpenHandle(path, FileMode.Create, FileAccess.ReadWrite);
+        if (!MiniDumpWriteDump(process, (uint)id, file, WithHeap, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero))
+        {
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError());
+        }
+    }
+
+    // macOS: proc_pidinfo's regions with their files (struct proc_regionwithpathinfo), each given for a process of the
+    // same user: the region at or after an address, its start and size, then the file's vnode and path.
+    private const int ProcPidRegionPathInfo = 8;
+    private const int RegionPathInfoSize = 1272;
+    private const int RegionAddressOffset = 80;
+    private const int RegionSizeOffset = 88;
+    private const int RegionPathOffset = 248;
+
+    private static unsafe string? RuntimeMac(int id)
+    {
+        byte* info = stackalloc byte[RegionPathInfoSize];
+        ulong at = 0;
+        // Bounded by the regions a process can have, should a region ever be given back for an address past its end.
+        for (int regions = 0; regions < 1_000_000; regions++)
+        {
+            if (ProcPidInfo(id, ProcPidRegionPathInfo, at, info, RegionPathInfoSize) < RegionPathInfoSize)
+            {
+                return null;
+            }
+            ReadOnlySpan<byte> path = MemoryMarshal.CreateReadOnlySpanFromNullTerminated(info + RegionPathOffset);
+            if (path.EndsWith("/libcoreclr.dylib"u8))
+            {
+                return Encoding.UTF8.GetString(path);
+            }
+            ulong next = *(ulong*)(info + RegionAddressOffset) + *(ulong*)(info + RegionSizeOffset);
+            if (next <= at)
+            {
+                return null;
+            }
+            at = next;
+        }
+        return null;
+    }
+
+    /// <summary>The .NET programs a debugger can attach to that a process started, or that those started in turn (the app
+    /// dotnet watch runs, under the CLI's own processes), the nearest first. Read off the UI thread, as the list is.</summary>
+    public static IReadOnlyList<DotnetProcess> Under(int ancestor)
+    {
+        List<(DotnetProcess Process, int Depth)> found = [];
+        foreach ((int id, long? started) in Candidates())
+        {
+            if (id != ancestor && id != Environment.ProcessId && Depth(id, ancestor) is int depth && Read(id, started) is { } process)
+            {
+                found.Add((process, depth));
+            }
+        }
+        return [.. found.DistinctBy(f => f.Process.Id).OrderBy(f => f.Depth).Select(f => f.Process)];
+    }
+
+    /// <summary>The processes a process started that still run, any program's, by id (a console wrapper's program). Read off
+    /// the UI thread: each process's parent is a call into the system.</summary>
+    public static IReadOnlyList<int> StartedBy(int parent)
+    {
+        List<int> started = [];
+        foreach (System.Diagnostics.Process process in System.Diagnostics.Process.GetProcesses())
+        {
+            using (process)
+            {
+                if (process.Id != parent && ParentOf(process.Id) == parent)
+                {
+                    started.Add(process.Id);
+                }
+            }
+        }
+        return started;
+    }
+
+    /// <summary>How many parents up from a process its ancestor is, or null when it is none of its nearest few.</summary>
+    private static int? Depth(int id, int ancestor)
+    {
+        int at = id;
+        for (int depth = 1; depth <= 8; depth++)
+        {
+            if (ParentOf(at) is not int parent || parent <= 0 || parent == at)
+            {
+                return null;
+            }
+            if (parent == ancestor)
+            {
+                return depth;
+            }
+            at = parent;
+        }
+        return null;
+    }
+
+    /// <summary>The process that started a process, or null when it has gone or the system will not say.</summary>
+    private static int? ParentOf(int id)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                return ParentWindows(id);
+            }
+            if (OperatingSystem.IsMacOS())
+            {
+                return ParentMac(id);
+            }
+            string stat = File.ReadAllText($"/proc/{id}/stat");
+            // The fields after the name, which may hold spaces and parentheses itself: the parent is the 4th field.
+            return int.Parse(stat[(stat.LastIndexOf(')') + 2)..].Split(' ')[1], CultureInfo.InvariantCulture);
+        }
+        catch (Exception gone) when (gone is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or FormatException
+            or IndexOutOfRangeException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Each process the runtime's pipes name, with the start its transport's pipes were made for (none on Windows,
+    /// whose pipes go with their process).</summary>
+    private static IEnumerable<(int Id, long? Started)> Candidates()
+    {
+        string folder = OperatingSystem.IsWindows() ? @"\\.\pipe\" : Path.GetTempPath();
+        Regex named = OperatingSystem.IsWindows() ? DiagnosticPort() : Transport();
+        string[] names;
+        try
+        {
+            names = Directory.GetFiles(folder);
+        }
+        catch (Exception unreadable) when (unreadable is IOException or UnauthorizedAccessException)
+        {
+            yield break;
+        }
+        foreach (string name in names)
+        {
+            if (named.Match(Path.GetFileName(name)) is { Success: true } match && int.TryParse(match.Groups["id"].ValueSpan, CultureInfo.InvariantCulture, out int id))
+            {
+                yield return (id, match.Groups["started"].Success && long.TryParse(match.Groups["started"].ValueSpan, CultureInfo.InvariantCulture, out long started) ? started : null);
+            }
+        }
+    }
+
+    /// <summary>A process as the system describes it, or null when it has gone, or is not the one its pipes were made for.</summary>
+    private static DotnetProcess? Read(int id, long? started)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                return ReadWindows(id);
+            }
+            if (OperatingSystem.IsMacOS())
+            {
+                return ReadMac(id, started);
+            }
+            return ReadLinux(id, started);
+        }
+        catch (Exception gone) when (gone is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or System.Security.SecurityException)
+        {
+            return null;
+        }
+    }
+
+    // macOS: proc_pidinfo's BSD side, proc_pidpath and sysctl's KERN_PROCARGS2, each given for a process of the same user.
+    private const int ProcPidTbsdInfo = 3;
+    private const int BsdInfoSize = 136;
+    private const int BsdParentOffset = 16;
+
+    /// <summary>proc_pidinfo's short BSD side (PROC_PIDT_SHORTBSDINFO), which it gives for any user's process.</summary>
+    private const int ProcPidtShortBsdInfo = 13;
+    private const int ShortBsdInfoSize = 64;
+    private const int ShortBsdStatusOffset = 12;
+
+    /// <summary>The BSD side's status of a process that has ended and waits for its parent (SZOMB).</summary>
+    private const uint ZombieStatus = 5;
+
+    /// <summary>ESRCH: no process has the id, or none but a zombie, which has no task.</summary>
+    private const int NoSuchProcess = 3;
+
+    private const int BsdUidOffset = 20;
+    private const int BsdStartOffset = 120;
+
+    private static unsafe int? ParentMac(int id)
+    {
+        byte* info = stackalloc byte[BsdInfoSize];
+        return ProcPidInfo(id, ProcPidTbsdInfo, 0, info, BsdInfoSize) == BsdInfoSize ? (int)*(uint*)(info + BsdParentOffset) : null;
+    }
+
+    private static unsafe DotnetProcess? ReadMac(int id, long? started)
+    {
+        byte* info = stackalloc byte[BsdInfoSize];
+        if (ProcPidInfo(id, ProcPidTbsdInfo, 0, info, BsdInfoSize) != BsdInfoSize)
+        {
+            return null;
+        }
+        long began = *(long*)(info + BsdStartOffset);
+        if (started is long expected && expected != began)
+        {
+            return null;
+        }
+        uint uid = *(uint*)(info + BsdUidOffset);
+        IReadOnlyList<string> arguments = MacStarted(id).Arguments;
+        string name = Libc.ExecutableOf(id) is { } path ? Path.GetFileName(path)
+            : arguments.Count > 0 ? Path.GetFileName(arguments[0])
+            : id.ToString(CultureInfo.InvariantCulture);
+        return new DotnetProcess(id, name, Joined(arguments), UserName(uid), uid == Libc.EffectiveUserId());
+    }
+
+    /// <summary>A process's arguments and environment as it started, from KERN_PROCARGS2 (<see cref="Started"/>); none where
+    /// the system gives none.</summary>
+    private static unsafe (IReadOnlyList<string> Arguments, IReadOnlyList<string> Environment) MacStarted(int id)
+    {
+        const int CtlKern = 1;
+        const int KernArgMax = 8;
+        const int KernProcArgs2 = 49;
+        int* query = stackalloc int[3];
+        query[0] = CtlKern;
+        query[1] = KernArgMax;
+        int most = 0;
+        nuint size = sizeof(int);
+        if (SysCtl(query, 2, (byte*)&most, &size, null, 0) != 0 || most <= 0)
+        {
+            return ([], []);
+        }
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(most);
+        try
+        {
+            query[1] = KernProcArgs2;
+            query[2] = id;
+            size = (nuint)most;
+            fixed (byte* into = buffer)
+            {
+                if (SysCtl(query, 3, into, &size, null, 0) != 0)
+                {
+                    return ([], []);
+                }
+            }
+            return Started(buffer.AsSpan(0, (int)size));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    /// <summary>KERN_PROCARGS2's record of how a process started: its count of arguments, the executable's path, padding,
+    /// each argument, then each variable of its environment up to an empty one, every string ending with a NUL. What it
+    /// holds, as far as it goes.</summary>
+    internal static (IReadOnlyList<string> Arguments, IReadOnlyList<string> Environment) Started(ReadOnlySpan<byte> record)
+    {
+        if (record.Length < sizeof(int))
+        {
+            return ([], []);
+        }
+        int count = BitConverter.ToInt32(record);
+        int at = sizeof(int);
+        // The executable's path, then the padding after it.
+        Next(record, ref at);
+        while (at < record.Length && record[at] == 0)
+        {
+            at++;
+        }
+        List<string> arguments = [];
+        while (arguments.Count < count && at < record.Length)
+        {
+            arguments.Add(Next(record, ref at));
+        }
+        List<string> environment = [];
+        while (at < record.Length && record[at] != 0)
+        {
+            environment.Add(Next(record, ref at));
+        }
+        return (arguments, environment);
+
+        static string Next(ReadOnlySpan<byte> record, ref int at)
+        {
+            int length = record[at..].IndexOf((byte)0);
+            string text = Encoding.UTF8.GetString(record.Slice(at, length < 0 ? record.Length - at : length));
+            at = length < 0 ? record.Length : at + length + 1;
+            return text;
+        }
+    }
+
+    /// <summary>A user's name, or their number when the system names none.</summary>
+    private static string UserName(uint uid) => Libc.Account(uid).Name ?? uid.ToString(CultureInfo.InvariantCulture);
+
+    // Linux: /proc.
+
+    private static DotnetProcess? ReadLinux(int id, long? started)
+    {
+        string folder = $"/proc/{id}";
+        string stat = File.ReadAllText($"{folder}/stat");
+        // The fields after the name, which may hold spaces and parentheses itself: the start is the 22nd field.
+        string[] fields = stat[(stat.LastIndexOf(')') + 2)..].Split(' ');
+        if (started is long expected && (fields.Length < 20 || fields[19] != expected.ToString(CultureInfo.InvariantCulture)))
+        {
+            return null;
+        }
+        string[] arguments = File.ReadAllText($"{folder}/cmdline").Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        string name;
+        try
+        {
+            name = Path.GetFileName(new FileInfo($"{folder}/exe").LinkTarget ?? File.ReadAllText($"{folder}/comm").Trim());
+        }
+        catch (Exception unreadable) when (unreadable is IOException or UnauthorizedAccessException)
+        {
+            name = arguments.Length > 0 ? Path.GetFileName(arguments[0]) : File.ReadAllText($"{folder}/comm").Trim();
+        }
+        uint uid = 0;
+        foreach (string line in File.ReadLines($"{folder}/status"))
+        {
+            if (line.StartsWith("Uid:", StringComparison.Ordinal))
+            {
+                uid = uint.Parse(line.Split('\t', StringSplitOptions.RemoveEmptyEntries)[2], CultureInfo.InvariantCulture);
+                break;
+            }
+        }
+        return new DotnetProcess(id, name, Joined(arguments), UserName(uid), uid == Libc.EffectiveUserId());
+    }
+
+    /// <summary>Arguments as one command line, as a command is shown (<see cref="ChildProcesses.Quote"/>).</summary>
+    private static string Joined(IEnumerable<string> arguments) => string.Join(' ', arguments.Select(ChildProcesses.Quote));
+
+    // Windows: the process opened for limited queries, which a process of another user allows unless it is protected.
+
+    private const uint TokenQuery = 0x0008;
+    private const int AccessDenied = 5;
+    private const uint WaitTimeout = 0x102;
+    private const int ProcessCommandLineInformation = 60;
+
+    /// <summary>A process's parent, where it began no later than the process (<see cref="Kernel32.BeganUnder"/>).</summary>
+    private static int? ParentWindows(int id)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+        using SafeProcessHandle process = Kernel32.OpenProcess(Kernel32.ProcessQueryLimitedInformation, false, (uint)id);
+        if (process.IsInvalid || Kernel32.ParentOf(process) is not { } parent)
+        {
+            return null;
+        }
+        using SafeProcessHandle above = Kernel32.OpenProcess(Kernel32.ProcessQueryLimitedInformation, false, (uint)parent);
+        return !above.IsInvalid && Kernel32.BeganAt(above) is { } began && Kernel32.BeganUnder(process, parent, began) is not null ? parent : null;
+    }
+
+    private static DotnetProcess? ReadWindows(int id)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+        using SafeProcessHandle process = Kernel32.OpenProcess(Kernel32.ProcessQueryLimitedInformation, false, (uint)id);
+        if (process.IsInvalid)
+        {
+            // Protected, or another user's the system will not describe: listed by its id, as the debugger may still be let in.
+            return new DotnetProcess(id, id.ToString(CultureInfo.InvariantCulture), string.Empty, string.Empty, false);
+        }
+        string name = ImagePath(process) is { } path ? Path.GetFileName(path) : $"{id}";
+        (string user, bool mine) = Owner(process);
+        return new DotnetProcess(id, name, WindowsCommandLine(process) ?? string.Empty, user, mine);
+    }
+
+    private static unsafe string? ImagePath(SafeProcessHandle process)
+    {
+        char* buffer = stackalloc char[32768];
+        uint length = 32768;
+        return QueryFullProcessImageName(process, 0, buffer, &length) ? new string(buffer, 0, (int)length) : null;
+    }
+
+    /// <summary>The command line as the program was given it (NtQueryInformationProcess, Windows 8.1 on): a UNICODE_STRING
+    /// pointing into the buffer after it.</summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static unsafe string? WindowsCommandLine(SafeProcessHandle process)
+    {
+        uint needed = 0;
+        _ = Kernel32.NtQueryInformationProcess(process, ProcessCommandLineInformation, null, 0, &needed);
+        if (needed == 0)
+        {
+            return null;
+        }
+        byte[] buffer = new byte[needed];
+        fixed (byte* into = buffer)
+        {
+            if (Kernel32.NtQueryInformationProcess(process, ProcessCommandLineInformation, into, needed, &needed) != 0)
+            {
+                return null;
+            }
+            ushort bytes = *(ushort*)into;
+            char* text = *(char**)(into + IntPtr.Size);
+            return text is null ? null : new string(text, 0, bytes / sizeof(char));
+        }
+    }
+
+    private static (string User, bool Mine) Owner(SafeProcessHandle process)
+    {
+        if (!OperatingSystem.IsWindows() || !OpenProcessToken(process, TokenQuery, out SafeAccessTokenHandle token))
+        {
+            return (string.Empty, false);
+        }
+        using (token)
+        {
+            using WindowsIdentity owner = new(token.DangerousGetHandle());
+            using WindowsIdentity me = WindowsIdentity.GetCurrent();
+            string name = owner.Name;
+            return (name[(name.LastIndexOf('\\') + 1)..], owner.User is { } sid && sid == me.User);
+        }
+    }
+
+    [LibraryImport("libc", EntryPoint = "proc_pidinfo", SetLastError = true)]
+    private static unsafe partial int ProcPidInfo(int pid, int flavor, ulong argument, byte* buffer, int size);
+
+    [LibraryImport("libc", EntryPoint = "sysctl")]
+    private static unsafe partial int SysCtl(int* name, uint length, byte* old, nuint* oldLength, byte* value, nuint valueLength);
+
+    [LibraryImport("libc", EntryPoint = "getegid")]
+    private static partial uint GetEffectiveGroupId();
+
+    /// <summary>This process's user and group ids as "uid:gid" on macOS and Linux (a container given them reads what this
+    /// user's files allow); null on Windows.</summary>
+    public static string? UserAndGroup => OperatingSystem.IsWindows() ? null : $"{Libc.EffectiveUserId()}:{GetEffectiveGroupId()}";
+
+    [LibraryImport("dbghelp.dll", EntryPoint = "MiniDumpWriteDump", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool MiniDumpWriteDump(SafeProcessHandle process, uint id, SafeFileHandle file, uint type, IntPtr exception, IntPtr stream, IntPtr callback);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static unsafe partial bool QueryFullProcessImageName(SafeProcessHandle process, uint flags, char* name, uint* size);
+
+    [LibraryImport("advapi32.dll", EntryPoint = "OpenProcessToken")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool OpenProcessToken(SafeProcessHandle process, uint access, out SafeAccessTokenHandle token);
+}

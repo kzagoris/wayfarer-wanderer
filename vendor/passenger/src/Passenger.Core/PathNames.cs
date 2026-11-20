@@ -1,0 +1,402 @@
+using System.IO.Enumeration;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+namespace Passenger.Core;
+
+/// <summary>A path as the file system itself names it: links and junctions resolved, each name in the case it has on
+/// disk, and on Windows its long name for an 8.3 one (C:\Users\RUNNER~1). Git, MSBuild and Roslyn report paths so (macOS's
+/// /var is /private/var), so every path the IDE compares with another goes through <see cref="Canonical"/> first.</summary>
+public static partial class PathNames
+{
+    /// <summary>FILE_FLAG_BACKUP_SEMANTICS, without which a folder cannot be opened.</summary>
+    private const uint BackupSemantics = 0x02000000;
+
+    /// <summary>FILE_READ_ATTRIBUTES, all a folder's case sensitivity is read with.</summary>
+    private const uint ReadAttributes = 0x80;
+
+    /// <summary>FileCaseSensitiveInfo, and FILE_CS_FLAG_CASE_SENSITIVE_DIR in what it answers.</summary>
+    private const int CaseSensitiveInfo = 23;
+    private const uint CaseSensitiveFolder = 0x1;
+
+    /// <summary>pathconf's _PC_CASE_SENSITIVE, and the errors of a path that is not there (ENOENT, ENOTDIR).</summary>
+    private const int CaseSensitive = 11;
+    private const int NoEntry = 2;
+    private const int NotFolder = 20;
+
+    /// <summary>ERROR_FILE_NOT_FOUND and ERROR_PATH_NOT_FOUND.</summary>
+    private const int FileNotFound = 2;
+    private const int PathNotFound = 3;
+
+    /// <summary>Windows' and macOS's folders, asked whether they tell case apart; Linux's always do.</summary>
+    private static readonly PathComparer? Volumes = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? new(IgnoresCase) : null;
+
+    /// <summary>How two names compare where no folder is asked: ignoring case on Windows and macOS, whose own volumes do. A
+    /// path's folders are asked by <see cref="Comparer"/>, <see cref="Same"/> and <see cref="IsUnder"/>, names in one
+    /// folder by <see cref="NamesIn"/>.</summary>
+    public static StringComparison Comparison { get; } = Volumes is null ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+
+    /// <summary>How two paths compare: as one place where every name differing only in case is in a folder that ignores
+    /// case, as Windows' and macOS's do unless made case-sensitive (Linux's never do). A canonical path has the disk's case
+    /// already; a name not made yet keeps the case it was given. Every collection keyed by paths takes this one.</summary>
+    public static StringComparer Comparer { get; } = Volumes ?? StringComparer.Ordinal;
+
+    /// <summary>How the names in a folder, or paths below it given from it, compare: telling case apart where the folder
+    /// does, as it said when first asked.</summary>
+    public static StringComparer NamesIn(string folder) => CaseIgnoredIn(folder) ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    /// <summary>Whether a folder ignores case in its entries' names, as it said when first asked; one not there answers as
+    /// the nearest folder above it that is.</summary>
+    public static bool CaseIgnoredIn(string folder) => Volumes is { } volumes && volumes.IgnoresCaseIn(folder);
+
+    /// <summary>The path as the file system names it. Of a path that is not there (yet, or any more), the part that is
+    /// there is resolved and the names below it are kept as given. A path the system names as given is itself, no copy.</summary>
+    public static string Canonical(string path)
+    {
+        string full = Path.GetFullPath(path);
+        // A device (a pipe, a console) is no file to resolve; opening one to ask would connect to it.
+        if (OperatingSystem.IsWindows() && full.StartsWith(@"\\.\", StringComparison.Ordinal))
+        {
+            return full;
+        }
+        for (string? at = full; at is not null; at = Path.GetDirectoryName(at))
+        {
+            if (Resolved(at) is { } resolved)
+            {
+                // A folder spelled as the system spells it holds the names below it as given.
+                return ReferenceEquals(resolved, at) ? full
+                    : at.Length == full.Length ? resolved
+                    : Path.Join(resolved, full.AsSpan(at.Length).TrimStart(Separators));
+            }
+        }
+        return full;
+    }
+
+    /// <summary>A path as a walk of its folder names it (<see cref="FilesUnder"/>): its own name in its folder's canonical
+    /// path, which a link's <paramref name="canonical"/> path is not; where nothing along it is a link, its canonical path.</summary>
+    public static string Walked(string path, string canonical) =>
+        canonical == path || Path.GetDirectoryName(path) is not { } folder ? canonical : Path.Join(Canonical(folder), Path.GetFileName(path.AsSpan()));
+
+    /// <summary>Whether two paths name the same place, compared as the file system compares names.</summary>
+    public static bool Same(string path, string other) => Comparer.Equals(path, other);
+
+    /// <summary>Whether two paths name one file, as written or once each is made canonical (one reached through a link).</summary>
+    public static bool SameFile(string path, string other) => Same(path, other) || Same(Canonical(path), Canonical(other));
+
+    /// <summary>Whether a path lies inside a folder, at any depth: the folder's name and then a separator begin it, so
+    /// /x/app2/Foo.cs is not under /x/app. The folder itself is not under itself.</summary>
+    public static bool IsUnder(string path, string folder) => IsUnder(path.AsSpan(), folder);
+
+    /// <inheritdoc cref="IsUnder(string, string)"/>
+    public static bool IsUnder(ReadOnlySpan<char> path, string folder) => IsUnder(path, folder, Volumes);
+
+    /// <summary>Whether a path lies inside a folder, its folders asked of <paramref name="volumes"/> whether they tell case
+    /// apart, and with none telling it apart everywhere.</summary>
+    internal static bool IsUnder(ReadOnlySpan<char> path, ReadOnlySpan<char> folder, PathComparer? volumes)
+    {
+        ReadOnlySpan<char> top = folder.TrimEnd(Separators);
+        return path.Length > top.Length + 1 && Separators.Contains(path[top.Length])
+            && (volumes is null ? path[..top.Length].SequenceEqual(top) : volumes.Same(path[..top.Length], top));
+    }
+
+    /// <summary>Whether two spellings name one place, as <see cref="Comparer"/> compares them.</summary>
+    private static bool Alike(ReadOnlySpan<char> path, ReadOnlySpan<char> other) =>
+        Volumes is { } volumes ? volumes.Same(path, other) : path.SequenceEqual(other);
+
+    /// <summary>The names from a folder down to a path under it ("src/App/App.cs"), as the path spells them; empty for the
+    /// folder itself or a path outside it.</summary>
+    public static ReadOnlySpan<char> Below(ReadOnlySpan<char> path, string folder) =>
+        IsUnder(path, folder) ? path[(folder.AsSpan().TrimEnd(Separators).Length + 1)..] : [];
+
+    /// <summary>The names from a folder down to a path under it in forward slashes ("src/App/App.cs"), as a URL, a glob, a
+    /// container's path or a file the IDE keeps writes one: "." for the folder itself, and null for a path outside it,
+    /// never a "..". A backslash parts names only on Windows; elsewhere it is a letter of one and stays.</summary>
+    public static string? Relative(string path, string folder)
+    {
+        string full = Path.GetFullPath(path);
+        string top = Path.GetFullPath(folder);
+        return IsUnder(full, top) ? Slashed(Below(full, top).ToString())
+            : Alike(full.AsSpan().TrimEnd(Separators), top.AsSpan().TrimEnd(Separators)) ? "." : null;
+    }
+
+    /// <summary>The way from a folder to a path in forward slashes, climbing out of the folder by ".." where the path lies
+    /// outside it ("../Api/Api.csproj"), as one project's file names another: "." for the folder itself, and on Windows a
+    /// path on another drive whole.</summary>
+    public static string Route(string path, string folder) => Slashed(Path.GetRelativePath(folder, path));
+
+    /// <summary>A path with forward slashes between its names: its backslashes made slashes on Windows, where they part
+    /// names, and kept elsewhere, where they are letters of one.</summary>
+    public static string Slashed(string path) => OperatingSystem.IsWindows() ? path.Replace('\\', '/') : path;
+
+    /// <summary>Whether a path is a file or folder, or under it.</summary>
+    public static bool Within(string path, string place) => Same(path, place) || IsUnder(path, place);
+
+    /// <summary>Where a path is once a file or folder moved: the new place when it was that or under it, else itself.</summary>
+    public static string Moved(string path, string from, string to) => Within(path, from) ? to + path[from.Length..] : path;
+
+    /// <summary>A path as the IDE shows it to a person: from the open folder when it is inside it ("src/App/App.cs"), the
+    /// folder itself by its name, and anywhere else (or with no folder open) whole, which says where it is.</summary>
+    public static string Shown(string path, string? folder)
+    {
+        if (folder is not { Length: > 0 })
+        {
+            return path;
+        }
+        if (IsUnder(path, folder))
+        {
+            return Path.GetRelativePath(folder, path);
+        }
+        ReadOnlySpan<char> top = folder.AsSpan().TrimEnd(Separators);
+        return Alike(path.AsSpan().TrimEnd(Separators), top) ? Path.GetFileName(top).ToString() : path;
+    }
+
+    /// <summary>The path a "~/" at the start of one names in the person's home folder ("~\" too on Windows), as git's
+    /// config and a program's output write one; null for a path that does not start so.</summary>
+    public static string? Expanded(string path) => path.Length >= 2 && path[0] == '~' && Separators.Contains(path[1])
+        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), path[2..])
+        : null;
+
+    /// <summary>A folder and the folders under it that <paramref name="enters"/> lets the walk into, nearest first,
+    /// each once by its canonical path whatever links reach it (named as first reached), and none a link goes up to
+    /// (the first folder or one above it), which would have the walk go round the tree for good. A folder that cannot
+    /// be read is passed over.</summary>
+    public static IEnumerable<string> FoldersUnder(string start, Func<string, bool> enters) =>
+        Walk(start, (sub, _) => enters(sub), inside: false, named: null).Select(f => f.At);
+
+    /// <summary>The files in a folder and in the folders under it that <paramref name="enters"/> lets the walk into (asked of
+    /// each by its canonical path), folder by folder, nearest first, all by their canonical paths: each folder once
+    /// whatever links reach it and none a link leads to outside the first, so no walk loops or leaves it; the system's own
+    /// files (<see cref="IsSystemFile"/>) passed over.</summary>
+    public static IEnumerable<(string Folder, IReadOnlyList<string> Files)> FilesUnder(string start, Func<string, bool> enters, FileNamed? named = null) =>
+        Walk(start, (_, canonical) => enters(canonical), inside: true, named ?? Joined).Select(f => (f.Canonical, f.Files));
+
+    /// <summary>How a walk names a file of a folder it reached (by the folder's canonical path): its name after a part the
+    /// folder's files share, so they sort as their names do; null passes the file over.</summary>
+    public delegate string? FileNamed(string folder, ReadOnlySpan<char> name);
+
+    private static string Joined(string folder, ReadOnlySpan<char> name) => Path.Join(folder, name);
+
+    /// <summary>Whether a path's extension is one of these, in any letter case, read where it lies.</summary>
+    public static bool HasExtension(string path, ReadOnlySpan<string> extensions)
+    {
+        ReadOnlySpan<char> extension = Path.GetExtension(path.AsSpan());
+        foreach (string one in extensions)
+        {
+            if (extension.Equals(one, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Whether a file is the system's own record of its folder (Finder's .DS_Store, Explorer's Thumbs.db), which no
+    /// walk or listing of a folder shows and no project means to hold.</summary>
+    public static bool IsSystemFile(string name) => IsSystemFile(name.AsSpan());
+
+    /// <inheritdoc cref="IsSystemFile(string)"/>
+    public static bool IsSystemFile(ReadOnlySpan<char> name)
+    {
+        foreach (string system in SystemFiles)
+        {
+            if (name.Equals(system, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static readonly string[] SystemFiles = [".DS_Store", "Thumbs.db"];
+
+    /// <summary>How a walk lists a folder: every entry, hidden and system ones too.</summary>
+    private static readonly EnumerationOptions Listing = new() { AttributesToSkip = 0, IgnoreInaccessible = false, RecurseSubdirectories = false };
+
+    /// <summary>The walk under <see cref="FoldersUnder"/> and <see cref="FilesUnder"/>, breadth first, each folder's folders
+    /// and files in the order of their names, read from the system's entries without an object for each; files only where
+    /// <paramref name="named"/> names them, and <paramref name="inside"/> enters no folder outside the first.</summary>
+    private static IEnumerable<(string At, string Canonical, IReadOnlyList<string> Files)> Walk(string start, Func<string, string, bool> enters, bool inside, FileNamed? named)
+    {
+        string root = Canonical(start);
+        HashSet<string> walked = new(Comparer) { root };
+        Queue<(string At, string Canonical)> waiting = new([(start, root)]);
+        List<(string At, bool Link)> subs = [];
+        while (waiting.TryDequeue(out (string At, string Canonical) folder))
+        {
+            List<string> found = [];
+            subs.Clear();
+            try
+            {
+                foreach ((string? path, bool isFolder, bool link) in Entries(folder.At, folder.Canonical, named))
+                {
+                    if (isFolder)
+                    {
+                        subs.Add((path!, link));
+                    }
+                    else if (path is not null)
+                    {
+                        found.Add(path);
+                    }
+                }
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                // Gone or shut: it holds nothing to walk.
+                found.Clear();
+                subs.Clear();
+            }
+            found.Sort(StringComparer.Ordinal);
+            subs.Sort(static (a, b) => string.CompareOrdinal(a.At, b.At));
+            foreach ((string at, bool link) in subs)
+            {
+                // Only a link (or another reparse point) is asked where it leads: any other folder is its name in its parent.
+                string canonical = link ? Canonical(at) : string.Equals(folder.At, folder.Canonical, StringComparison.Ordinal) ? at : Path.Join(folder.Canonical, Path.GetFileName(at.AsSpan()));
+                if ((inside ? IsUnder(canonical, root) : !Within(root, canonical)) && Enters(at, canonical) && walked.Add(canonical))
+                {
+                    waiting.Enqueue((at, canonical));
+                }
+            }
+            yield return (folder.At, folder.Canonical, found);
+        }
+
+        bool Enters(string sub, string canonical)
+        {
+            try
+            {
+                return enters(sub, canonical);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+    }
+
+    /// <summary>A folder's entries: each folder by its path and whether it is a link, each file as <paramref name="named"/>
+    /// names it (null for one passed over, the system's own files among them); no files without it.</summary>
+    private static FileSystemEnumerable<(string? Path, bool Folder, bool Link)> Entries(string at, string canonical, FileNamed? named) =>
+        new(at, (ref FileSystemEntry entry) => entry.IsDirectory
+            ? (entry.ToFullPath(), true, (entry.Attributes & FileAttributes.ReparsePoint) != 0)
+            : (named is null || IsSystemFile(entry.FileName) ? null : named(canonical, entry.FileName), false, false), Listing)
+        {
+            ShouldIncludePredicate = named is null ? static (ref FileSystemEntry entry) => entry.IsDirectory : null,
+        };
+
+    /// <summary>The characters that part a path's names: both slashes on Windows.</summary>
+    public static ReadOnlySpan<char> Separators => OperatingSystem.IsWindows() ? @"\/" : "/";
+
+    /// <summary>How many names this thread has asked the file system to resolve, each a call into the system: read to
+    /// bound what the window's thread asks of the disk.</summary>
+    public static int ResolvedOnThisThread => resolvedOnThread;
+
+    [ThreadStatic]
+    private static int resolvedOnThread;
+
+    /// <summary>An existing file or folder's name as the system resolves it; null for one that is not there.</summary>
+    private static string? Resolved(string path)
+    {
+        resolvedOnThread++;
+        if (OperatingSystem.IsWindows())
+        {
+            return FinalPath(path);
+        }
+        IntPtr resolved = RealPath(path, IntPtr.Zero);
+        if (resolved == IntPtr.Zero)
+        {
+            return null;
+        }
+        try
+        {
+            return Spelled(resolved, path);
+        }
+        finally
+        {
+            Free(resolved);
+        }
+    }
+
+    /// <summary>The name the system gave, as <paramref name="asked"/> itself where it is spelled the same, as most are: a
+    /// path already canonical costs no string to make it so again.</summary>
+    private static unsafe string Spelled(IntPtr given, string asked)
+    {
+        ReadOnlySpan<byte> name = MemoryMarshal.CreateReadOnlySpanFromNullTerminated((byte*)given);
+        if (name.Length == asked.Length && System.Text.Ascii.Equals(name, asked))
+        {
+            return asked;
+        }
+        string decoded = System.Text.Encoding.UTF8.GetString(name);
+        return decoded == asked ? asked : decoded;
+    }
+
+    /// <summary>Windows' own name for a file or folder, asked of a handle opened for nothing but that (any other program
+    /// may still read, write or delete it meanwhile). The name comes as \\?\C:\... or \\?\UNC\server\share\..., which
+    /// .NET and every tool spell without the prefix.</summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static unsafe string? FinalPath(string path)
+    {
+        using SafeFileHandle handle = Kernel32.CreateFile(Openable(path), 0, FileShare.ReadWrite | FileShare.Delete, IntPtr.Zero, FileMode.Open, BackupSemantics, IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            return null;
+        }
+        char[] buffer = new char[path.Length + 64];
+        while (true)
+        {
+            uint length;
+            fixed (char* into = buffer)
+            {
+                length = GetFinalPathNameByHandle(handle, into, (uint)buffer.Length, 0);
+            }
+            if (length == 0)
+            {
+                return null;
+            }
+            if (length >= buffer.Length)
+            {
+                // Too small: the length asked for counts the terminating null.
+                buffer = new char[length];
+                continue;
+            }
+            string final = new(buffer, 0, (int)length);
+            return final.StartsWith(@"\\?\UNC\", StringComparison.Ordinal) ? @"\\" + final[8..]
+                : final.StartsWith(@"\\?\", StringComparison.Ordinal) ? final[4..]
+                : final;
+        }
+    }
+
+    /// <summary>A Windows path as it opens: past MAX_PATH only with the prefix that turns Win32's parsing of it off.</summary>
+    internal static string Openable(string path) =>
+        path.Length < 260 || path.StartsWith(@"\\?\", StringComparison.Ordinal) ? path
+            : path.StartsWith(@"\\", StringComparison.Ordinal) ? @"\\?\UNC\" + path[2..]
+            : @"\\?\" + path;
+
+    /// <summary>Whether a folder ignores case in its entries' names: on macOS as its volume says, on Windows as the folder
+    /// itself does (one made case-sensitive says so); null for one that is not there. One that cannot say ignores it.</summary>
+    private static unsafe bool? IgnoresCase(string folder)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            nint told = PathConf(folder, CaseSensitive);
+            return told >= 0 ? told == 0 : Marshal.GetLastPInvokeError() is NoEntry or NotFolder ? null : true;
+        }
+        using SafeFileHandle handle = Kernel32.CreateFile(Openable(folder), ReadAttributes, FileShare.ReadWrite | FileShare.Delete, IntPtr.Zero, FileMode.Open, BackupSemantics, IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            return Marshal.GetLastPInvokeError() is FileNotFound or PathNotFound ? null : true;
+        }
+        uint flags = 0;
+        return !Kernel32.GetFileInformationByHandleEx(handle, CaseSensitiveInfo, &flags, sizeof(uint)) || (flags & CaseSensitiveFolder) == 0;
+    }
+
+    [LibraryImport("kernel32.dll", EntryPoint = "GetFinalPathNameByHandleW", SetLastError = true)]
+    private static unsafe partial uint GetFinalPathNameByHandle(SafeFileHandle file, char* buffer, uint length, uint flags);
+
+    [LibraryImport("libc", EntryPoint = "pathconf", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial nint PathConf(string path, int name);
+
+    [LibraryImport("libc", EntryPoint = "realpath", StringMarshalling = StringMarshalling.Utf8)]
+    private static partial IntPtr RealPath(string path, IntPtr resolved);
+
+    [LibraryImport("libc", EntryPoint = "free")]
+    private static partial void Free(IntPtr pointer);
+}

@@ -1,0 +1,698 @@
+using Avalonia.Controls;
+using Avalonia.Interactivity;
+using Avalonia.Threading;
+using Passenger.App.Updates;
+using Passenger.Core;
+using Passenger.Packages;
+
+namespace Passenger.App;
+
+/// <summary>The check for updates, and the update: the person's window asks for the latest release as it starts and a
+/// day after each answer by the wall clock (an hour after a check that failed) while Check for updates is on. A copy
+/// its installer, disk image or archive put in place downloads a newer one in the background, saying so in the status
+/// bar, checks it, offers Restart to Update and installs it as Passenger ends (or says the command that installs it);
+/// any other copy says once per version that one is out, linking this system's download, or, for a package manager's
+/// copy, that the package manager updates it. Help, Check for Updates asks when a person wants. The window watching
+/// does it all once for the process, and every window shows its notice and offers Restart to Update, one opened later
+/// too. Every answer is logged; only one a person asked for, or a download that did not land, is said. A security release
+/// (<see cref="ReleaseNotes.SecurityOf"/>) is named one in the notice, in the warning colour, saying what it fixes and asking
+/// to be put in soon; the status bar says so once, and once it is ready offers to restart into it now.</summary>
+public partial class MainWindow
+{
+    /// <summary>The words when there is nothing newer.</summary>
+    public const string UpToDate = "Passenger is up to date";
+
+    private static readonly TimeSpan UpdateInterval = TimeSpan.FromDays(1);
+
+    /// <summary>Ends a check or download under way as the window closes, so a feed that never answers holds nothing after it.</summary>
+    private readonly CancellationTokenSource updatesEnd = new();
+    private DispatcherTimer? updateTimer;
+    private bool watchesUpdates;
+
+    /// <summary>The window's own check under way, or its last.</summary>
+    private Task? ownCheck;
+
+    /// <summary>When the last check was answered, by <see cref="UpdateClock"/>; null before any was, and after one that
+    /// failed.</summary>
+    private DateTimeOffset? answeredAt;
+
+    /// <summary>The clock a day between checks is counted on: the wall clock, which goes on while the machine sleeps, where
+    /// a timer's own time does not.</summary>
+    public TimeProvider UpdateClock { get; init; } = TimeProvider.System;
+
+    /// <summary>How often the window looks whether a check is due, in the time the machine is awake.</summary>
+    public TimeSpan UpdateLook { get; init; } = TimeSpan.FromHours(1);
+
+    /// <summary>The release announced, for a window that keeps no state; the person's keeps it in the store.</summary>
+    private string? announcedHere;
+
+    /// <summary>The download under way, ended when the setting goes off or a newer release replaces it.</summary>
+    private CancellationTokenSource? downloading;
+    private LatestRelease? downloadingRelease;
+    private Task? downloadTask;
+
+    /// <summary>The release downloaded, checked and waiting to install, and whether the person chose to restart into it.</summary>
+    private LatestRelease? readyRelease;
+    private bool restartToUpdate;
+
+    /// <summary>What the status bar's notice offers, which its click does.</summary>
+    private UpdateNotice notice;
+
+    /// <summary>What the watching window's notice says, which every window shows; null while it says nothing.</summary>
+    private NoticeSaid? said;
+
+    /// <summary>Where this window asks for the latest release: GitHub's, or the one PASSENGER_RELEASES names, unless
+    /// one is given.</summary>
+    public ReleaseFeed Releases { get; init; } = ReleaseFeed.Default;
+
+    /// <summary>How this copy installs a newer release, or null for one that only says it is out: every window but the
+    /// person's own (App gives it this copy's, which the window after it takes as it closes), and theirs too when
+    /// Passenger runs from anywhere its installer or disk image did not put it.</summary>
+    public Updater? SelfUpdate
+    {
+        get => selfUpdate;
+        init => selfUpdate = value;
+    }
+
+    private Updater? selfUpdate;
+
+    /// <summary>The newer release the status bar shows, its version and what its link opens, or null while it shows
+    /// none.</summary>
+    public LatestRelease? UpdateShown => UpdatesOwner.shownRelease;
+
+    private LatestRelease? shownRelease;
+
+    /// <summary>The release downloaded and checked, which installs as Passenger ends, or null.</summary>
+    public LatestRelease? UpdateReady => UpdatesOwner.readyRelease;
+
+    /// <summary>The command that installs the release downloaded and checked where this copy cannot install it itself,
+    /// which the notice's click copies; or null.</summary>
+    public string? UpdateByHand => UpdatesOwner.byHand;
+
+    private string? byHand;
+
+    /// <summary>The window that checks, downloads and installs for every window, whose notice each shows: the one
+    /// watching for updates while it is open, else this one.</summary>
+    private MainWindow UpdatesOwner => PassengerApp.UpdatesWatcher is { } watcher && watcher != this && watcher.IsVisible ? watcher : this;
+
+    private void AddUpdates()
+    {
+        actions!.Add(new IdeAction(AppActions.CheckForUpdates, "Check for Updates…", "Help",
+            context => IdeErrors.Observe(UpdatesOwner.CheckForUpdatesAsync(asker: this)))
+        {
+            Menus = OperatingSystem.IsMacOS() ? [] : [new MenuPlace("Help", 3, 1)],
+        });
+        actions.Add(new IdeAction(AppActions.RestartToUpdate, "Restart to Update", "Help", _ => RestartToUpdate())
+        {
+            WhyNot = context => AskedByAgent(context) ? Refusals.RestartIsThePersons
+                : UpdatesOwner.readyRelease is null ? "No update is downloaded and ready to install"
+                : null,
+        });
+        // The agents an install would cut off come and go: the notice says who, as the pointer comes to it.
+        UpdateButton.PointerEntered += (_, _) =>
+        {
+            if (UpdatesOwner is { notice: UpdateNotice.Ready, readyRelease: { } ready } owner)
+            {
+                owner.ShowReady(ready);
+            }
+        };
+        // A window opened while a release is said says it too.
+        if (UpdatesOwner is { said: { } shown } watching && watching != this)
+        {
+            ShowNotice(shown);
+        }
+        Closed += (_, _) =>
+        {
+            updateTimer?.Stop();
+            updatesEnd.Cancel();
+            // Closed alone, another window open takes the watch over, and with it the update made ready (PassengerApp).
+            if (readyRelease is { } ready && !HandsOnUpdates())
+            {
+                IdeErrors.Write($"Updates: closing with Passenger {ready.Version} ready to install{(restartToUpdate ? ", to start it again" : string.Empty)}");
+                // An install that asks for a password is left for Restart to Update: closing alone installs nothing.
+                if (keepsSettings && (restartToUpdate || selfUpdate?.Asks is null))
+                {
+                    state!.Updates.Set(state.Updates.Value with { Installing = ready.Version });
+                    state.Updates.Flush();
+                }
+            }
+        };
+    }
+
+    /// <summary>The person's window asks for the latest release now and once a day after, while its setting is on; a
+    /// headless window (a test's, an agent's, a screenshot's) asks only when Check for Updates is chosen. It says first
+    /// how the update the last session installed went.</summary>
+    public void WatchForUpdates()
+    {
+        PassengerApp.WatchUpdatesIn(this);
+        watchesUpdates = true;
+        SayInstalled();
+        if (selfUpdate is { } tidying)
+        {
+            // Not held: removing a release replaced is the disk's work, which nothing drawn waits for.
+            IdeErrors.Observe(BackgroundWork.Unheld(tidying.TidyAsync));
+        }
+        if (!settings.CheckForUpdates)
+        {
+            // Off: nothing left from a session it was on in installs.
+            Discard();
+        }
+        WatchUpdates(settings.CheckForUpdates);
+    }
+
+    /// <summary>Whether the window closing hands its watch for updates to another window open, rather than installing
+    /// what it made ready as Passenger ends: it closes alone, not as Passenger quits.</summary>
+    internal bool HandsOnUpdates() =>
+        !quitting && PassengerApp.Windows.Any(w => w != this && w.IsVisible);
+
+    /// <summary>The process's one watch for updates, taken from the window that had it as that one closed with this one
+    /// open: its way of installing and the update it made ready, which this window offers and installs as Passenger ends,
+    /// and the checks, the first now.</summary>
+    internal void TakeOverUpdates(MainWindow from)
+    {
+        if (!IsVisible)
+        {
+            return;
+        }
+        selfUpdate ??= from.selfUpdate;
+        if (said is null && from.said is not null)
+        {
+            (said, notice) = (from.said, from.notice);
+        }
+        shownRelease ??= from.shownRelease;
+        byHand ??= from.byHand;
+        announcedHere ??= from.announcedHere;
+        if (from.readyRelease is { } ready && selfUpdate is not null)
+        {
+            readyRelease = ready;
+            ShowReady(ready);
+        }
+        watchesUpdates = true;
+        WatchUpdates(settings.CheckForUpdates);
+    }
+
+    /// <summary>Has the agents' relays of the install wait for the update about to be installed as the last window closes,
+    /// rather than start the app being replaced (<see cref="Updater.HoldRelays"/>).</summary>
+    public void HoldRelaysForUpdate()
+    {
+        if (readyRelease is not null && SelfUpdate is { } updater)
+        {
+            updater.HoldRelays();
+        }
+    }
+
+    /// <summary>Installs the update made ready, once the window has closed and what it started has ended, as the
+    /// process ends: at once on macOS, by Velopack's Update.exe once this process has gone on Windows, then starting
+    /// the new version when the person chose Restart to Update.</summary>
+    public void InstallUpdate()
+    {
+        if (readyRelease is not null && SelfUpdate is { } updater)
+        {
+            updater.Install(restartToUpdate);
+            // As the process ends, with no window left to keep the state: the next start says why.
+            if (updater.NotInstalled is { } why && keepsSettings)
+            {
+                state!.Updates.ChangeNow(kept => kept with { NotInstalled = why });
+            }
+            IdeErrors.Flush();
+        }
+    }
+
+    /// <summary>Starts the checks, the first now, as the setting comes on, and stops them (and drops a download made or
+    /// under way) as it goes off. A look after asks once a check is due: a day after the last answer, after a check that
+    /// failed, or with the clock set back before the last answer.</summary>
+    private void WatchUpdates(bool on)
+    {
+        if (!watchesUpdates || on == (updateTimer is not null))
+        {
+            return;
+        }
+        if (!on)
+        {
+            updateTimer!.Stop();
+            updateTimer = null;
+            Discard();
+            return;
+        }
+        updateTimer = new DispatcherTimer { Interval = UpdateLook };
+        updateTimer.Tick += (_, _) =>
+        {
+            DateTimeOffset now = UpdateClock.GetUtcNow();
+            if (answeredAt is not { } at || now - at >= UpdateInterval || now < at)
+            {
+                AskForUpdates();
+            }
+        };
+        updateTimer.Start();
+        AskForUpdates();
+    }
+
+    /// <summary>The window's own check, unless one is under way (its download included).</summary>
+    private void AskForUpdates()
+    {
+        if (ownCheck is { IsCompleted: false })
+        {
+            return;
+        }
+        ownCheck = CheckForUpdatesAsync(asker: null);
+        IdeErrors.Observe(ownCheck);
+    }
+
+    /// <summary>Asks for the latest release, off the UI thread. A newer one downloads when this copy installs updates
+    /// and the setting is on; otherwise it is shown when a person asked or it is newer than the one announced last. A
+    /// person who asked is told the rest too, in the window they asked in, while a check of the window's own only logs
+    /// it.</summary>
+    private async Task CheckForUpdatesAsync(MainWindow? asker)
+    {
+        bool asked = asker is not null;
+        if (asker is not null)
+        {
+            asker.status.Text = "Checking for updates…";
+        }
+        ReleaseFeed feed = Releases;
+        CancellationToken end = updatesEnd.Token;
+        ReleaseAnswer answer = await BackgroundWork.Run(() => Updates.Releases.AskAsync(feed, Product.Version, end));
+        if (end.IsCancellationRequested)
+        {
+            return;
+        }
+        answeredAt = answer is ReleaseAnswer.Failed ? null : UpdateClock.GetUtcNow();
+        IdeErrors.Write($"Updates: {answer.Said}");
+        UpdatedElsewhere? elsewhere = null;
+        if (answer is ReleaseAnswer.Newer && SelfUpdate is { } installs && settings.CheckForUpdates)
+        {
+            try
+            {
+                elsewhere = await BackgroundWork.Run(() => installs.ElsewhereAsync(end));
+            }
+            catch (OperationCanceledException) when (end.IsCancellationRequested)
+            {
+                return;
+            }
+            if (end.IsCancellationRequested)
+            {
+                return;
+            }
+            if (elsewhere is not null)
+            {
+                IdeErrors.Write($"Updates: this copy does not install it: {elsewhere.Why}");
+            }
+        }
+        switch (answer)
+        {
+            case ReleaseAnswer.Newer { Release: var release } when SelfUpdate is { } updater && settings.CheckForUpdates && elsewhere is null:
+                Announced = release.Version;
+                if (readyRelease?.Version == release.Version)
+                {
+                    ShowReady(release);
+                    if (asker is not null)
+                    {
+                        asker.status.Text = $"Passenger {release.Version} is ready: restart to update";
+                    }
+                }
+                else
+                {
+                    if (asker is not null)
+                    {
+                        asker.status.Text = release.Security is null ? $"Passenger {release.Version} is available, and downloading" : $"{SecurityWords(release)}, and downloading";
+                    }
+                    if (downloadingRelease?.Version != release.Version)
+                    {
+                        await DownloadAsync(updater, release);
+                    }
+                }
+                break;
+            case ReleaseAnswer.Newer { Release: var release }:
+                bool told = Announced is { } before && VersionOrder.Instance.Compare(release.Version, before) <= 0;
+                if (asked || !told)
+                {
+                    ShowUpdate(release, elsewhere is { Download: false } ? release.Page : release.Link, elsewhere?.Why);
+                }
+                if (!told)
+                {
+                    Announced = release.Version;
+                    if (release.Security is not null && asker is null)
+                    {
+                        Say($"{SecurityWords(release)}. Install it soon", new StatusPlace("open its release page", () => Browse(release.Page)));
+                    }
+                }
+                if (asker is not null)
+                {
+                    asker.status.Text = release.Security is null ? $"Passenger {release.Version} is available" : $"{SecurityWords(release)}. Install it soon";
+                }
+                break;
+            case ReleaseAnswer.Failed { Reason: var reason } when asker is not null:
+                asker.status.Text = $"Could not check for updates: {reason}";
+                break;
+            case ReleaseAnswer.Current when asker is not null:
+                asker.status.Text = UpToDate;
+                break;
+        }
+    }
+
+    /// <summary>Downloads and checks the release's package, the status bar saying how far it has come, then offers
+    /// Restart to Update; a package refused, or one that would not come, is said, and the notice links the release
+    /// instead.</summary>
+    private async Task DownloadAsync(Updater updater, LatestRelease release)
+    {
+        downloading?.Cancel();
+        CancellationTokenSource mine = CancellationTokenSource.CreateLinkedTokenSource(updatesEnd.Token);
+        downloading = mine;
+        downloadingRelease = release;
+        readyRelease = null;
+        byHand = null;
+        ShowDownloading(release, 0);
+        CancellationToken cancel = mine.Token;
+        // Progress posted before the download ended can land after its outcome, which it must not cover.
+        Action<int> progress = UiThread.Marshal<int>(percent =>
+        {
+            if (downloading == mine && !cancel.IsCancellationRequested)
+            {
+                ShowDownloading(release, percent);
+            }
+        });
+        // Not BackgroundWork: a download of minutes would hold every screenshot; its progress lands as it goes.
+        Task<UpdateOutcome> running = BackgroundWork.Unheld(() => updater.DownloadAsync(release, progress, cancel), cancel);
+        downloadTask = running;
+        UpdateOutcome? outcome = null;
+        try
+        {
+            outcome = await running;
+        }
+        catch (OperationCanceledException)
+        {
+            // Ended by the setting going off, a newer release or the window closing, each of which says what follows.
+        }
+        catch (Exception error)
+        {
+            // Not one an updater expects (those are its outcomes): an IDE error, and the download did not land.
+            IdeErrors.Report(error);
+            outcome = new UpdateOutcome.Failed(error.Message, $"could not download Passenger {release.Version}: {error.Message}");
+        }
+        finally
+        {
+            if (downloading == mine)
+            {
+                downloading = null;
+                downloadingRelease = null;
+            }
+            if (cancel.IsCancellationRequested)
+            {
+                outcome = null;
+            }
+            mine.Dispose();
+        }
+        if (outcome is null)
+        {
+            return;
+        }
+        IdeErrors.Write($"Updates: {outcome.Said}");
+        switch (outcome)
+        {
+            case UpdateOutcome.Ready:
+                readyRelease = release;
+                ShowReady(release);
+                if (release.Security is not null)
+                {
+                    Say($"{SecurityWords(release)}, downloaded and checked", new StatusPlace("restart into it now", () => Request(AppActions.RestartToUpdate)));
+                }
+                break;
+            case UpdateOutcome.ByHand { Command: var command }:
+                byHand = command;
+                ShowByHand(release, command);
+                break;
+            case UpdateOutcome.Refused { Reason: var reason }:
+                ShowRefused(release, $"Passenger {release.Version} was not installed: {reason}");
+                status.Text = $"Passenger {release.Version} was not installed: {reason}";
+                break;
+            case UpdateOutcome.Failed { Reason: var reason }:
+                ShowUpdate(release, release.Link, $"Could not download Passenger {release.Version}: {reason}");
+                status.Text = $"Could not download Passenger {release.Version}: {reason}";
+                break;
+            default:
+                ShowUpdate(release, release.Link);
+                break;
+        }
+    }
+
+    /// <summary>Restart to Update asked in this window, wherever it was asked (its notice, the status bar, Find Action):
+    /// refused to an agent's input (<see cref="RefusedToAgentsInput"/>), else the window watching for updates restarts.</summary>
+    private void RestartToUpdate()
+    {
+        if (!RefusedToAgentsInput(Refusals.RestartIsThePersons))
+        {
+            IdeErrors.Observe(UpdatesOwner.RestartToUpdateAsync());
+        }
+    }
+
+    /// <summary>Quits Passenger, every window closing, to install the update and start it, as the person chose; a window
+    /// that does not close (a file it could not save) installs nothing yet, and one that asks first restarts once answered.
+    /// Another program running from the install (but an agent's relay, which follows the update) holds it back, named in
+    /// the notice.</summary>
+    private async Task RestartToUpdateAsync()
+    {
+        if (readyRelease is not { } ready || SelfUpdate is not { } updater)
+        {
+            return;
+        }
+        OtherCopy[] blocking = [.. updater.Others().Where(other => !other.Relay)];
+        if (blocking.Length > 0)
+        {
+            string[] named = await BackgroundWork.Run(() => Task.WhenAll(blocking.Select(other => Updater.NamedAsync(other.ProcessId))));
+            if (readyRelease == ready)
+            {
+                ShowBlocked(ready, updater.Installed, named);
+            }
+            return;
+        }
+        // A window kept open keeps the update for the next end, which starts nothing.
+        restartToUpdate = true;
+        updater.HoldRelays();
+        PassengerApp.Quit(givenUp: () =>
+        {
+            restartToUpdate = false;
+            updater.LetRelaysGo();
+        });
+    }
+
+    /// <summary>Stops a download and drops what was downloaded, the notice going back to a link to the release.</summary>
+    private void Discard()
+    {
+        downloading?.Cancel();
+        downloading = null;
+        downloadingRelease = null;
+        if (SelfUpdate is not { } updater)
+        {
+            return;
+        }
+        if (notice is UpdateNotice.Downloading or UpdateNotice.Ready or UpdateNotice.Blocked or UpdateNotice.ByHand && shownRelease is { } shown)
+        {
+            ShowUpdate(shown, shown.Link);
+        }
+        readyRelease = null;
+        byHand = null;
+        // Once the download stopped has let go of its files. Not drawn: removing hundreds of megabytes is the disk's work.
+        Task? stopping = downloadTask;
+        IdeErrors.Observe(BackgroundWork.Unheld(async () =>
+        {
+            if (stopping is not null)
+            {
+                await stopping.Ended();
+            }
+            await updater.DiscardAsync();
+        }));
+    }
+
+    /// <summary>What the last session's install came to, said once: the version it installed, or that it did not.</summary>
+    private void SayInstalled()
+    {
+        if (!keepsSettings || state!.Updates.Value.Installing is not { } installing)
+        {
+            return;
+        }
+        string? why = state.Updates.Value.NotInstalled;
+        state.Updates.Set(state.Updates.Value with { Installing = null, NotInstalled = null });
+        if (installing == Product.Version)
+        {
+            status.Text = $"Passenger was updated to {installing}";
+            IdeErrors.Write($"Updates: Passenger {installing} was installed as the last session ended");
+        }
+        else
+        {
+            Say(why is null ? $"Passenger {installing} did not install: Help, Show Log says why" : $"Passenger {installing} did not install: {why}", LogPlace);
+            IdeErrors.Write($"Updates: Passenger {installing} was to install as the last session ended, but this is {Product.Version}{(why is null ? string.Empty : $": {why}")}");
+        }
+    }
+
+    /// <summary>The newest version announced: the store's in the window a person uses, so a restart does not say it
+    /// again.</summary>
+    private string? Announced
+    {
+        get => keepsSettings ? state!.Updates.Value.Announced : announcedHere;
+        set
+        {
+            announcedHere = value;
+            if (keepsSettings)
+            {
+                state!.Updates.Set(state.Updates.Value with { Announced = value });
+            }
+        }
+    }
+
+    /// <summary>What a security release fixes, as its notice and the status bar say it.</summary>
+    private static string SecurityWords(LatestRelease release) =>
+        release.Security is { Length: > 0 } fixes ? $"Passenger {release.Version} is a security update: {fixes}" : $"Passenger {release.Version} is a security update";
+
+    /// <summary>A security release's first lines in its notice's tip, asking for it soon; nothing for any other release.</summary>
+    private static string SecurityTip(LatestRelease release, string soon) => release.Security is null ? string.Empty : $"{SecurityWords(release)}\n{soon}\n";
+
+    /// <summary>The release as a link to this system's download (or its page, for a release without one).</summary>
+    private void ShowUpdate(LatestRelease release, Uri link, string? why = null)
+    {
+        shownRelease = release with { Link = link };
+        string opens = link == release.Link && release.Asset is { } asset ? $"Download {asset}" : $"Open the release page of {release.Tag}";
+        bool security = release.Security is not null;
+        Notice(UpdateNotice.Available, security ? IconKeys.Lock : IconKeys.ArrowDown, security ? TokenKeys.Warning : TokenKeys.Link,
+            security ? $"Security update: Passenger {release.Version} available" : $"Passenger {release.Version} available",
+            $"{SecurityTip(release, "Install it as soon as you can.")}{(why is null ? string.Empty : why + "\n")}{opens}\n{link}");
+    }
+
+    /// <summary>The download's progress, then, once it has all come (100), its check, which takes a while for a disk image.</summary>
+    private void ShowDownloading(LatestRelease release, int percent)
+    {
+        shownRelease = release;
+        bool security = release.Security is not null;
+        string named = security ? $"security update Passenger {release.Version}" : $"Passenger {release.Version}";
+        Notice(UpdateNotice.Downloading, security ? IconKeys.Lock : IconKeys.ArrowDown, security ? TokenKeys.Warning : TokenKeys.Link,
+            percent < 100 ? $"Downloading {named}: {percent}%" : $"Checking {named}…",
+            $"{SecurityTip(release, "Restart into it once it is ready.")}Passenger {release.Version} is downloading from GitHub, to be checked and installed when Passenger restarts.\nClick to open its release page.");
+    }
+
+    private void ShowReady(LatestRelease release)
+    {
+        shownRelease = release;
+        string how = SelfUpdate?.Asks is { } asks
+            ? $"Click to restart into it.\n{asks}, and only Restart to Update installs it."
+            : "Click to restart into it;\notherwise it installs when Passenger closes.";
+        bool security = release.Security is not null;
+        Notice(UpdateNotice.Ready, IconKeys.Rerun, security ? TokenKeys.Warning : TokenKeys.Link,
+            security ? $"Restart to install security update Passenger {release.Version}" : $"Restart to update to Passenger {release.Version}",
+            $"{SecurityTip(release, "Restart into it now rather than later.")}Passenger {release.Version} is downloaded and checked. {how}{RelaysEnded()}");
+    }
+
+    /// <summary>A release downloaded and checked that this copy cannot install itself: the command that does, which a
+    /// click copies.</summary>
+    private void ShowByHand(LatestRelease release, string command)
+    {
+        shownRelease = release with { Link = release.Page };
+        bool security = release.Security is not null;
+        Notice(UpdateNotice.ByHand, security ? IconKeys.Lock : IconKeys.ArrowDown, security ? TokenKeys.Warning : TokenKeys.Link,
+            security ? $"Security update: Passenger {release.Version} ready to install" : $"Passenger {release.Version} ready to install",
+            $"{SecurityTip(release, "Install it as soon as you can.")}Passenger {release.Version} is downloaded and checked, but this user cannot write {SelfUpdate?.Installed}, where it is installed for everyone.\n"
+            + $"To install it, run this in a terminal, then start Passenger again:\n{command}\nClick to copy the command.");
+    }
+
+    /// <summary>What installing does to the agents connected through relays of this install, said before, with the folders
+    /// they work in: each goes on into the new version, or, on Windows, is ended and reconnects.</summary>
+    private string RelaysEnded()
+    {
+        if (SelfUpdate is not { } updater)
+        {
+            return string.Empty;
+        }
+        string[] folders = [.. updater.Others().Where(other => other.Relay).Select(other => other.Folder!)];
+        if (folders.Length == 0)
+        {
+            return string.Empty;
+        }
+        string on = string.Join(", ", folders.Distinct(PathNames.Comparer));
+        return OperatingSystem.IsWindows()
+            ? $"\nInstalling it ends {Plural.Of(folders.Length, "agent's connection", "agents' connections")} to Passenger, on {on}: each agent reconnects to go on (/mcp in Claude Code)."
+            : $"\n{Plural.Of(folders.Length, "agent's connection", "agents' connections")} to Passenger, on {on}, {Plural.Agreeing(folders.Length, "goes", "go")} on into the new version.";
+    }
+
+    /// <summary>The update held back by programs running from the install, each named in full, with what to do; a click
+    /// tries again.</summary>
+    private void ShowBlocked(LatestRelease release, string installed, IReadOnlyList<string> named)
+    {
+        shownRelease = release;
+        bool one = named.Count == 1;
+        Notice(UpdateNotice.Blocked, IconKeys.Error, TokenKeys.Warning, $"Passenger {release.Version} waits for {Plural.Of(named.Count, "program")} to close",
+            $"Passenger {release.Version} cannot be installed while {(one ? "this runs" : "these run")} from {installed}:\n"
+            + string.Join("\n", named.Select(n => $"• {n}"))
+            + $"\nQuit {(one ? "it" : "each")} (an agent's own Passenger, --mcp, ends with that agent's session), then click here to restart to update.");
+    }
+
+    /// <summary>A download refused, in the editor's warning colour, its link the release's page rather than the file
+    /// that did not match.</summary>
+    private void ShowRefused(LatestRelease release, string why)
+    {
+        shownRelease = release with { Link = release.Page };
+        Notice(UpdateNotice.Refused, IconKeys.Error, TokenKeys.Warning, $"Passenger {release.Version} not installed",
+            $"{why}\nOpen the release page of {release.Tag}\n{release.Page}");
+    }
+
+    /// <summary>The notice as it now stands, said in every window.</summary>
+    private void Notice(UpdateNotice now, string icon, string brush, string text, string tip)
+    {
+        notice = now;
+        said = new NoticeSaid(icon, brush, text, tip);
+        foreach (MainWindow window in PassengerApp.Windows.Where(w => w != this).Append(this))
+        {
+            window.ShowNotice(said);
+        }
+    }
+
+    private void ShowNotice(NoticeSaid shown)
+    {
+        UpdateText.Text = shown.Text;
+        ToolTip.SetTip(UpdateButton, shown.Tip);
+        UpdateIcon.Bind(PathIcon.DataProperty, UpdateIcon.GetResourceObservable(shown.Icon));
+        UpdateIcon.Bind(PathIcon.ForegroundProperty, UpdateIcon.GetResourceObservable(shown.Brush));
+        UpdateText.Bind(TextBlock.ForegroundProperty, UpdateText.GetResourceObservable(shown.Brush));
+        UpdateButton.IsVisible = true;
+    }
+
+    /// <summary>The notice's click, in whichever window shows it: the download (or the release's page) in the person's
+    /// browser, through the system's own launcher as a link anywhere opens; Restart to Update once the update is
+    /// ready.</summary>
+    private void OnUpdateClicked(object? sender, RoutedEventArgs e)
+    {
+        MainWindow owner = UpdatesOwner;
+        if (owner.notice is UpdateNotice.Ready or UpdateNotice.Blocked)
+        {
+            Request(AppActions.RestartToUpdate);
+        }
+        else if (owner.notice == UpdateNotice.ByHand && owner.byHand is { } command && owner.shownRelease is { } ready)
+        {
+            IdeErrors.Observe(CopyCommandAsync(command, ready.Version));
+        }
+        else if (owner.shownRelease is { } shown)
+        {
+            Browse(owner.notice == UpdateNotice.Downloading ? shown.Page : shown.Link);
+        }
+    }
+
+    /// <summary>The command that installs a release, on the clipboard for the person to paste into a terminal.</summary>
+    private async Task CopyCommandAsync(string command, string version)
+    {
+        if (Clipboard is { } clipboard)
+        {
+            await Avalonia.Input.Platform.ClipboardExtensions.SetTextAsync(clipboard, command);
+        }
+        status.Text = $"Copied the command that installs Passenger {version}: paste it into a terminal";
+    }
+
+    /// <summary>What a notice shows: its icon and colour by their keys, its words and its tip.</summary>
+    private sealed record NoticeSaid(string Icon, string Brush, string Text, string Tip);
+
+    private enum UpdateNotice
+    {
+        Available,
+        Downloading,
+        Ready,
+        Blocked,
+        Refused,
+        ByHand,
+    }
+}

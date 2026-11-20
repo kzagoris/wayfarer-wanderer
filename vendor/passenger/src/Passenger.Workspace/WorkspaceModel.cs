@@ -1,0 +1,427 @@
+using Passenger.Core;
+using Passenger.Host;
+
+namespace Passenger.Workspace;
+
+/// <summary>The open folder's solution and projects, decided here alone for the Explorer, the language server, Build,
+/// Run, NuGet and the test runner: the solution, solution filter or project opened by name while it is there, else the
+/// solution at the folder's top; with none, the projects anywhere under the folder but its build output, dependencies and
+/// hidden folders. Beside them, its file-based programs (<see cref="IsProgram"/>) outside every project's folder, each a
+/// project of its own named by its C# file. Read when the folder opens and again when the folder watcher sees a
+/// solution, project or program change, never on each use.</summary>
+public sealed record WorkspaceModel(string Folder, SolutionModel? Solution, IReadOnlyList<ProjectModel> Projects)
+{
+    /// <summary>The most projects taken from a folder with no solution, so a monorepo does not load hundreds at once.</summary>
+    private const int ProjectLimit = 200;
+
+    /// <summary>The most folders searched for them, so a folder that is really a disk is not walked for minutes.</summary>
+    private const int FolderLimit = 5_000;
+
+    /// <summary>The C# project the workspace was opened as: its one project, with no solution, whatever else its folder
+    /// holds. Null for a folder or a solution.</summary>
+    public string? ProjectFile { get; init; }
+
+    /// <summary>The solution filter it was opened as: its solution is <see cref="Solution"/>, every project of it is in
+    /// <see cref="Projects"/>, and those the filter leaves out are the session's to unload. Null for any other workspace.</summary>
+    public SolutionFilter? Filter { get; init; }
+
+    /// <summary>The solution the folder opens by that does not read, in whose place the folder's own projects are read;
+    /// null for any other workspace.</summary>
+    public UnreadSolution? Unread { get; init; }
+
+    /// <summary>The solution file it was read from and the filter it was read through, each stamped just before it was read:
+    /// one whose stamp no longer holds was written since.</summary>
+    public IReadOnlyList<Stamp> ReadFrom { get; init; } = [];
+
+    /// <summary>The build configuration and platform chosen for its builds, evaluations and runs; null for what MSBuild takes
+    /// when given none, which nothing is given for, where it maps each project as a build of it given nothing builds it.</summary>
+    public BuildChoice? Build { get; init; }
+
+    /// <summary>The global properties a project takes for <see cref="Build"/>, none for the configuration MSBuild takes.</summary>
+    public IReadOnlyDictionary<string, string> BuildPropertiesOf(string project) =>
+        Build is { } chosen ? chosen.PropertiesOf(project, PlatformsOf(project))
+            : new Dictionary<string, string>();
+
+    /// <summary>The global properties a build of a project alone is given for <see cref="Build"/>, as <see cref="BuildArgumentsFor"/>
+    /// gives them: its own (<see cref="BuildPropertiesOf"/>), and what the solution maps those it references to where the
+    /// build must be told (<see cref="BuildChoice.ToldOf"/>).</summary>
+    public IReadOnlyDictionary<string, string> BuiltWith(string project) => BuiltTogetherWith([project])(project);
+
+    /// <summary>The global properties each of projects built side by side in one build is given (<see cref="BuiltWith"/>'s),
+    /// each told of every project any of them must be told of: a project two of them reach is then given the same
+    /// properties by each, so the build builds it once.</summary>
+    public Func<string, IReadOnlyDictionary<string, string>> BuiltTogetherWith(IReadOnlyList<string> projects)
+    {
+        if (Build is not { } chosen)
+        {
+            return _ => new Dictionary<string, string>();
+        }
+        List<SolutionBuilt> told = [.. projects.SelectMany(project => chosen.ToldOf(project, PlatformsOf(project), ReferencesOf)).Distinct()];
+        return project =>
+        {
+            Dictionary<string, string> properties = new(BuildPropertiesOf(project), StringComparer.OrdinalIgnoreCase);
+            if (told.Count > 0)
+            {
+                properties[MSBuildNames.CurrentSolutionConfigurationContents] = BuildChoice.Contents(told);
+            }
+            return properties;
+        };
+    }
+
+    /// <summary>The platforms a project declares, as last evaluated; null for one not among <see cref="Projects"/>.</summary>
+    private string? PlatformsOf(string project) => Projects.FirstOrDefault(p => PathNames.Same(p.Path, project))?.Property(CarriedProperties.Platforms);
+
+    /// <summary>The configuration and platform a project builds as for <see cref="Build"/>: those it is given, else the .NET
+    /// SDK's Debug and AnyCPU, which a build given none takes; a solution's Any CPU as the project's AnyCPU.</summary>
+    public BuildConfiguration BuiltAs(string project)
+    {
+        IReadOnlyDictionary<string, string> given = BuildPropertiesOf(project);
+        string platform = given.GetValueOrDefault(MSBuildNames.Platform) is { Length: > 0 } named ? BuildConfigurations.OfProject(named) : BuildConfigurations.GivenNone.Platform;
+        return new BuildConfiguration(given.GetValueOrDefault(MSBuildNames.Configuration) is { Length: > 0 } configuration ? configuration : BuildConfigurations.GivenNone.Configuration,
+            platform);
+    }
+
+    /// <summary>The first of a project and those it references (as <paramref name="other"/> has them) that it and another
+    /// workspace build as a different configuration or platform (<see cref="BuiltAs"/>), with what each builds it as; null
+    /// where they build them all alike.</summary>
+    public (string Project, BuildConfiguration Here, BuildConfiguration There)? BuiltUnlike(WorkspaceModel other, string project)
+    {
+        IEnumerable<string> paths = other.Projects.FirstOrDefault(p => PathNames.Same(p.Path, project)) is { } model
+            ? model.WithReferenced(other.Projects).Select(p => p.Path) : [project];
+        foreach (string path in paths)
+        {
+            BuildConfiguration here = BuiltAs(path);
+            BuildConfiguration there = other.BuiltAs(path);
+            if (!here.Is(there))
+            {
+                return (path, here, there);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>What a dotnet build of a target (the solution, a project, a program) is given for <see cref="Build"/>, a
+    /// project's with what the solution maps those it references to, as its projects reference each other; none for the
+    /// configuration MSBuild takes, or the folder itself. dotnet watch's (<paramref name="watched"/>) in its own words.</summary>
+    public IReadOnlyList<string> BuildArgumentsFor(string target, bool watched = false) =>
+        Build is not { } chosen || PathNames.Same(target, Folder) ? []
+        : chosen.ArgumentsFor(target, Solution is { } solution && PathNames.Same(solution.Path, target),
+            PlatformsOf(target), watched, ReferencesOf);
+
+    /// <summary>The projects a project references, as last evaluated; none for one not among <see cref="Projects"/>.</summary>
+    public IReadOnlyList<string> ReferencesOf(string project) => Projects.FirstOrDefault(p => PathNames.Same(p.Path, project))?.ProjectReferences ?? [];
+
+    /// <summary>What a dotnet publish of a project is given to build it as its build does: <see cref="BuildArgumentsFor"/>'s,
+    /// else the configuration its build takes given none (<paramref name="builtAs"/>, as its evaluation says), which a
+    /// publish given none would take Release in place of.</summary>
+    public IReadOnlyList<string> PublishArgumentsFor(string project, string? builtAs) =>
+        BuildArgumentsFor(project) is { Count: > 0 } chosen ? chosen : builtAs is { Length: > 0 } ? ["-c", builtAs] : [];
+
+    /// <summary>What it was opened as, which Recent Solutions keeps and reopens: the solution filter, the solution, the
+    /// project, else the folder.</summary>
+    public string OpenedAs => Filter?.Path ?? Solution?.Path ?? ProjectFile ?? Folder;
+
+    /// <summary>Its name as the toolbar, the window's title and Recent Solutions show it: the solution filter's, the
+    /// solution's, the project's, else the folder's.</summary>
+    public string Name => Filter is { } filter ? Path.GetFileNameWithoutExtension(filter.Path)
+        : Solution?.Name ?? (ProjectFile is { } project ? Path.GetFileNameWithoutExtension(project) : Path.GetFileName(Folder));
+
+    /// <summary>A solution's extensions, and a solution filter's.</summary>
+    private static readonly string[] SolutionExtensions = [".sln", ".slnx", SolutionFilter.Extension];
+
+    /// <summary>The extensions of a project file MSBuild evaluates as itself: a C#, F# or Visual Basic project's, and one of
+    /// MSBuild's alone (.proj).</summary>
+    private static readonly string[] ProjectExtensions = [".csproj", ".fsproj", ".vbproj", ".proj"];
+
+    /// <summary>Whether a file opens as the workspace rather than in an editor: a solution (.sln, .slnx), a solution
+    /// filter (.slnf) or a C# project (.csproj).</summary>
+    public static bool Opens(string path) => IsSolution(path) || IsProject(path);
+
+    /// <summary>Whether a file is a solution or a solution filter, either of which opens a solution.</summary>
+    public static bool IsSolution(string path) => PathNames.HasExtension(path, SolutionExtensions);
+
+    /// <summary>Whether a file is a C# project, the one kind of project that opens as the workspace.</summary>
+    public static bool IsProject(string path) => Path.GetExtension(path).Equals(".csproj", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether a file is a project file of any kind MSBuild evaluates as itself (<see cref="ProjectExtensions"/>),
+    /// a C# project's among them.</summary>
+    public static bool IsProjectFile(string path) => PathNames.HasExtension(path, ProjectExtensions);
+
+    /// <summary>Whether a solution's project is a Docker Compose project (.dcproj).</summary>
+    public static bool IsComposeProject(string path) => Path.GetExtension(path).Equals(".dcproj", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Reads a folder, with the solution or project it was opened by, which stays its workspace while it is there,
+    /// and walks it for its programs (a folder without either for its projects too), which is a worker's job, never the
+    /// window's thread's.</summary>
+    public static WorkspaceModel Read(string folder, string? named = null)
+    {
+        List<string> games = [];
+        return ReadSolution(folder, named, out UnreadSolution? unread) is { } read
+            ? read.WithPrograms(Walk(folder, [.. read.Projects.Where(p => !p.IsProgram).Select(p => p.Folder)], games)) with { GodotGames = games }
+            : new WorkspaceModel(folder, null, [.. Walk(folder, null, games).Select(ProjectModel.Unevaluated)]) { Unread = unread, GodotGames = games };
+    }
+
+    /// <summary>The folders of the Godot projects its walk found with no C# project of their own: a project.godot in a
+    /// folder holding no project file, none inside another (Godot's editor passes over a folder with a project.godot of its
+    /// own). Each runs its game on Godot as it is, its GDScript needing no build; one a project elsewhere builds C# for
+    /// (its GodotProjectDir) is that project's (<see cref="ScriptGames"/>).</summary>
+    public IReadOnlyList<string> GodotGames { get; init; } = [];
+
+    /// <summary>The Godot projects of GDScript alone among those found (<see cref="GodotGames"/>): those no project of these
+    /// builds C# for or runs as a host (<see cref="ProjectModel.NamedGodotFolder"/>).</summary>
+    public IEnumerable<string> ScriptGames(IEnumerable<ProjectModel> projects)
+    {
+        List<string> built = [.. projects.Select(p => p.NamedGodotFolder).OfType<string>()];
+        return GodotGames.Where(g => !built.Any(b => PathNames.Same(b, g)));
+    }
+
+    /// <summary>The project files of those of some projects that build a Godot project's game or run it as a host, as each's
+    /// evaluation says it (<see cref="ProjectModel.NamedGodotFolder"/>), wherever they lie beside its folder.</summary>
+    public static IReadOnlyList<string> BuildingGodot(IEnumerable<ProjectModel> projects, string folder) =>
+        [.. projects.Where(p => p.NamedGodotFolder is { } game && PathNames.Same(game, folder)).Select(p => p.Path)];
+
+    /// <summary>A folder read through the solution or project it was opened by, else its own solution: a listing of the
+    /// folder's top and the files the solution names, quick enough for the window's thread. Null for a folder without one
+    /// (or one that does not read), whose projects only a walk of its folders finds.</summary>
+    public static WorkspaceModel? ReadSolution(string folder, string? named = null) => ReadSolution(folder, named, out _);
+
+    /// <summary>A folder read as <see cref="ReadSolution(string, string?)"/> reads it, with why its solution did not read in
+    /// <paramref name="unread"/> when that is why there is none.</summary>
+    public static WorkspaceModel? ReadSolution(string folder, string? named, out UnreadSolution? unread)
+    {
+        unread = null;
+        if (named is not null && IsProject(named) && File.Exists(named))
+        {
+            return new WorkspaceModel(folder, null, [ProjectModel.Unevaluated(named)]) { ProjectFile = named };
+        }
+        string? path = named is not null && IsSolution(named) && File.Exists(named) ? named : SolutionModel.Find(folder);
+        List<Stamp> stamped = path is null ? [] : [Stamps.File(path)];
+        SolutionFilter? filter = path is not null && SolutionFilter.Is(path) ? SolutionFilter.Read(path) : null;
+        if (path is not null && SolutionFilter.Is(path))
+        {
+            path = filter?.Solution;
+            if (path is not null)
+            {
+                stamped.Add(Stamps.File(path));
+            }
+        }
+        // A Docker Compose project is read as XML for its run configurations, a shared project for its files: neither loads.
+        return path is not null && SolutionModel.Load(path, out unread) is { } solution
+            ? new WorkspaceModel(folder, solution, [.. solution.Projects.Where(p => !IsComposeProject(p.Path) && !Workspace.SharedProjects.Is(p.Path))])
+            {
+                Filter = filter,
+                ReadFrom = stamped,
+            }
+            : null;
+    }
+
+    /// <summary>The solution's shared projects (.shproj), each the home of the files its items file brings into the projects
+    /// importing it (<see cref="Workspace.SharedProjects"/>).</summary>
+    public IReadOnlyList<string> SharedProjects => Solution is null ? []
+        : [.. Solution.Projects.Where(p => p.Exists && Workspace.SharedProjects.Is(p.Path)).Select(p => p.Path)];
+
+    /// <summary>The solution's Docker Compose projects (.dcproj), each a compose configuration of its own.</summary>
+    public IReadOnlyList<string> ComposeProjects => Solution is null ? []
+        : [.. Solution.Projects.Where(p => p.Exists && IsComposeProject(p.Path)).Select(p => p.Path)];
+
+    /// <summary>The same workspace with each project as <paramref name="map"/> gives it: MSBuild's evaluation of it, in
+    /// the solution's folders and in <see cref="Projects"/> alike.</summary>
+    public WorkspaceModel WithProjects(Func<ProjectModel, ProjectModel> map) =>
+        this with { Solution = Solution?.WithProjects(map), Projects = [.. Projects.Select(map)] };
+
+    /// <summary>A folder without a solution read again through the projects found before: those still there, as quick as
+    /// a solution's read. Only the walk finds those added since.</summary>
+    public WorkspaceModel Reread() =>
+        new(Folder, null, [.. Projects.Where(p => File.Exists(p.Path)).Select(p => ProjectModel.Unevaluated(p.Path))]) { GodotGames = GamesStill(this) };
+
+    /// <summary>The Godot projects of GDScript alone a read before found, those still there, until the walk for them lands.</summary>
+    private static IReadOnlyList<string> GamesStill(WorkspaceModel before) =>
+        [.. before.GodotGames.Where(g => File.Exists(Path.Combine(g, GodotProject.FileName)))];
+
+    /// <summary>A solution's or project's read with the programs found beside it before, those still there, until the walk
+    /// for them lands: what the language server loaded stays loaded meanwhile.</summary>
+    public WorkspaceModel KeepingPrograms(WorkspaceModel before) =>
+        WithPrograms(before.Programs.Where(p => File.Exists(p.Path)).Select(p => p.Path)) with { GodotGames = GamesStill(before) };
+
+    /// <summary>The same workspace with these programs in place of those it had, after its solution's or folder's projects.</summary>
+    public WorkspaceModel WithPrograms(IEnumerable<string> programs) =>
+        this with { Projects = [.. Projects.Where(p => !p.IsProgram), .. programs.Distinct(PathNames.Comparer).Select(ProjectModel.Unevaluated)] };
+
+    /// <summary>Its file-based programs, which no solution lists: those beside a solution's or project's, or among a folder's.</summary>
+    public IEnumerable<ProjectModel> Programs => Projects.Where(p => p.IsProgram);
+
+    /// <summary>What building the whole builds: the solution and each program beside it, or each project loaded in turn
+    /// when some are unloaded or there is no solution; the folder when it has neither, for the .NET command line to say why.</summary>
+    public IReadOnlyList<string> BuildTargets(IReadOnlyList<ProjectModel> loaded) =>
+        BuiltSolution(loaded) is { } solution ? [solution, .. Programs.Select(p => p.Path)]
+        : Solution is null && Projects.Count == 0 ? [Folder]
+        : [.. loaded.Select(p => p.Path)];
+
+    /// <summary>The solution building the whole builds (<see cref="BuildTargets"/>), which gives each project the
+    /// configuration and platform it maps it to; null where the whole is built project by project.</summary>
+    public string? BuiltSolution(IReadOnlyList<ProjectModel> loaded) =>
+        Solution is not null && loaded.Count == Projects.Count && ComposeProjects.Count == 0 ? Solution.Path : null;
+
+    /// <summary>Whether a language server loaded from one has the other's projects: the same solution listing the same
+    /// projects, through the same filter of them if any, or the same projects without one. A server is told its solution
+    /// or projects once, when it starts, so other projects need a new server.</summary>
+    public bool LoadsAs(WorkspaceModel other) =>
+        Solution?.Path == other.Solution?.Path && Projects.Select(p => p.Path).SequenceEqual(other.Projects.Select(p => p.Path))
+        && (Filter is null ? other.Filter is null : Filter.Keeps(other.Filter));
+
+    /// <summary>The programs a read of the same folder has beyond this one's, when nothing else differs: the same solution
+    /// through the same filter, every project of this one's still there. Null for any other difference, or none.</summary>
+    public IReadOnlyList<string>? ProgramsAddedIn(WorkspaceModel read)
+    {
+        List<string> added = [.. read.Programs.Select(p => p.Path).Where(p => !Projects.Any(q => PathNames.Same(q.Path, p)))];
+        bool kept = Solution?.Path == read.Solution?.Path && (Filter is null ? read.Filter is null : Filter.Keeps(read.Filter))
+            && Projects.All(p => read.Projects.Any(q => PathNames.Same(q.Path, p.Path)))
+            && read.Projects.Count == Projects.Count + added.Count;
+        return kept && added.Count > 0 ? added : null;
+    }
+
+    /// <summary>The project files and programs under a folder, those nearer the top first, as a walk for what projects build
+    /// finds them (<see cref="FolderWalk"/>): hidden folders are version control's, IDEs' and tools' own (a worktree's copy
+    /// of them). A program is looked for only outside every project's folder. Given the folders of a solution's or project's
+    /// own (<paramref name="solved"/>), the walk enters none of them and takes programs alone, a project file it finds
+    /// keeping its folder's files its own.</summary>
+    private static List<string> Walk(string folder, IReadOnlyList<string>? solved, List<string> games)
+    {
+        List<string> found = [];
+        List<string> projectFolders = [.. solved ?? []];
+        if (projectFolders.Any(p => PathNames.Within(folder, p)))
+        {
+            return found;
+        }
+        HashSet<string> passed = new(projectFolders, PathNames.Comparer);
+        // C# files of no directive that begin with top-level statements, which are programs where the folder has no project.
+        List<string> plain = [];
+        foreach ((string at, IReadOnlyList<string> files) in FolderWalk.Folders(folder, built: true, enters: f => !passed.Contains(f)).Take(FolderLimit))
+        {
+            List<string> projects = [.. files.Where(IsProject)];
+            if (projects.Count == 0 && files.Any(f => Path.GetFileName(f) == GodotProject.FileName) && !games.Any(g => PathNames.IsUnder(at, g))
+                && !projectFolders.Any(p => PathNames.IsUnder(at, p)))
+            {
+                games.Add(at);
+            }
+            if (projects.Count > 0)
+            {
+                projectFolders.Add(at);
+                if (solved is null)
+                {
+                    found.AddRange(projects);
+                }
+            }
+            else if (!projectFolders.Any(p => PathNames.IsUnder(at, p)))
+            {
+                foreach (string file in files.Where(ProgramFiles.IsProgram))
+                {
+                    List<string> head = ProgramFiles.Head(file);
+                    if (IsProgram(file, head))
+                    {
+                        found.Add(file);
+                    }
+                    else if (solved is null && head.Count == 0 && plain.Count < ProjectLimit && ProgramFiles.BeginsWithStatement(file))
+                    {
+                        plain.Add(file);
+                    }
+                }
+            }
+            if (found.Count >= ProjectLimit)
+            {
+                break;
+            }
+        }
+        if (projectFolders.Count == 0)
+        {
+            found.AddRange(plain.Take(ProjectLimit - found.Count));
+        }
+        // A file a program includes, from any folder or by a wildcard, is that program's code, whatever its own head says.
+        List<(string Program, List<ItemPath> Patterns)> including = [.. found.Where(ProgramFiles.IsProgram).Select(p => (p, Included(p).ToList()))];
+        found.RemoveAll(q => ProgramFiles.IsProgram(q) && including.Any(i => !PathNames.Same(i.Program, q) && i.Patterns.Any(pattern => ItemPaths.Matches(pattern, q, PathNames.CaseIgnoredIn))));
+        // A program another references (#:ref lib.cs) is one, its project the SDK's, whatever its head says.
+        for (int i = 0; i < found.Count; i++)
+        {
+            foreach (string referenced in ProgramFiles.IsProgram(found[i]) ? Named(found[i], "ref").ToList() : [])
+            {
+                if (File.Exists(referenced) && !found.Contains(referenced, PathNames.Comparer))
+                {
+                    found.Add(referenced);
+                }
+            }
+        }
+        return [.. found.Take(ProjectLimit)];
+    }
+
+    /// <summary>The C# files a program's directives of a kind name by a path of their own (no wildcard nor property in it).</summary>
+    private static IEnumerable<string> Named(string program, string kind)
+    {
+        foreach (string directive in ProgramFiles.Head(program))
+        {
+            if (ProgramFiles.Parse(directive) is ({ } named, { Length: > 0 } value) && named == kind && value.IndexOfAny(['*', '?', '$']) < 0
+                && ProgramFiles.IsProgram(value))
+            {
+                yield return PathNames.Canonical(Path.GetFullPath(value, Path.GetDirectoryName(program)!));
+            }
+        }
+    }
+
+    /// <summary>The C# files a program's <c>#:include</c> directives name, each from the program's folder as MSBuild reads
+    /// the SDK's Compile item of it, wildcards (<c>lib/*.cs</c>, <c>**</c>) and all; none that names a property.</summary>
+    private static IEnumerable<ItemPath> Included(string program)
+    {
+        foreach (string directive in ProgramFiles.Head(program))
+        {
+            if (ProgramFiles.Parse(directive) is ("include", { Length: > 0 } value) && !value.Contains('$', StringComparison.Ordinal)
+                && (ProgramFiles.IsProgram(value) || value.EndsWith('*')) && ItemPaths.Read(value) is { } included)
+            {
+                yield return included.FromFolder(Path.GetDirectoryName(program)!);
+            }
+        }
+    }
+
+    /// <summary>Whether a C# file's head makes it a file-based program, as <c>dotnet run</c> runs it: a <c>#!</c> line or a
+    /// <c>#:</c> directive, unless it is a single-file Aspire AppHost, which Aspire runs. A folder's walk takes one only
+    /// outside every project's folder, whose files are the project's; in a folder with no project, a file of no directive
+    /// that begins with top-level statements is one too (<see cref="TakesPlainPrograms"/>).</summary>
+    public static bool IsProgram(string path, IReadOnlyList<string> head) =>
+        ProgramFiles.IsProgram(path) && head.Count > 0 && !head.Any(IsAspireSdk);
+
+    /// <summary>Whether its C# files of no directive that begin with top-level statements are programs, as <c>dotnet run</c>
+    /// runs them: a folder opened with no solution or project in it, nor any found under it.</summary>
+    public bool TakesPlainPrograms => Solution is null && ProjectFile is null && Projects.All(p => p.IsProgram);
+
+    /// <summary>Whether a C# file is a program in this workspace by its text: its head makes it one, or it has none and
+    /// begins with top-level statements where the workspace takes such files (<see cref="TakesPlainPrograms"/>).</summary>
+    public bool IsProgramFile(string path)
+    {
+        List<string> head = ProgramFiles.Head(path);
+        return IsProgram(path, head) || head.Count == 0 && ProgramFiles.IsProgram(path) && TakesPlainPrograms && ProgramFiles.BeginsWithStatement(path);
+    }
+
+    /// <summary>Whether a C# file opened alone opens with its folder, a program of it: its head makes it one, or it has none
+    /// and begins with top-level statements in a folder holding no project or solution.</summary>
+    public static bool OpensAsProgram(string path)
+    {
+        List<string> head = ProgramFiles.Head(path);
+        if (IsProgram(path, head))
+        {
+            return true;
+        }
+        if (head.Count > 0 || !ProgramFiles.IsProgram(path) || !ProgramFiles.BeginsWithStatement(path))
+        {
+            return false;
+        }
+        try
+        {
+            return !Directory.EnumerateFiles(Path.GetDirectoryName(path)!).Any(f => IsProject(f) || IsSolution(f));
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsAspireSdk(string directive) =>
+        ProgramFiles.Parse(directive) is ("sdk", { } sdk) && sdk.Split('@')[0].Trim().Equals("Aspire.AppHost.Sdk", StringComparison.OrdinalIgnoreCase);
+}

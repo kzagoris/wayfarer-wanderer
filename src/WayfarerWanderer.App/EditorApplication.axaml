@@ -1,15 +1,23 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             x:Class="WayfarerWanderer.App.EditorApplication">
+             xmlns:shell="using:WayfarerWanderer.App.Shell"
+             x:Class="WayfarerWanderer.App.EditorApplication"
+             Name="Wayfarer Wanderer"
+             RequestedThemeVariant="Dark">
   <Application.Resources>
     <ResourceDictionary>
       <ResourceDictionary.MergedDictionaries>
-        <ResourceInclude Source="/Theme/Tokens.axaml" />
-        <ResourceInclude Source="/Theme/Icons.axaml" />
+        <ResourceInclude Source="/Shell/Theme/Tokens.axaml" />
+        <!-- Fluent's own keys as the tokens of whichever theme is in force (Themes lays any other theme after these). -->
+        <shell:FluentKeys />
+        <ResourceInclude Source="/Shell/Theme/Icons.axaml" />
+        <ResourceInclude Source="/Shell/Theme/FileIconSet.axaml" />
+        <ResourceInclude Source="/Shell/Theme/ControlThemes.axaml" />
       </ResourceDictionary.MergedDictionaries>
     </ResourceDictionary>
   </Application.Resources>
   <Application.Styles>
     <FluentTheme />
+    <StyleInclude Source="/Shell/Theme/Shell.axaml" />
   </Application.Styles>
 </Application>

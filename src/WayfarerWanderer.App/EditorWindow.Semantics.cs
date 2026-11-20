@@ -44,7 +44,7 @@ public sealed partial class EditorWindow
 
     private MenuItem SemanticMenu()
     {
-        MenuItem menu = new() { Header = "_Code", Items = { MenuAction(CompleteAction), MenuAction(RenameAction), MenuAction(UndoRenameAction) } };
+        MenuItem menu = new() { Header = "Code", Items = { MenuAction(CompleteAction), MenuAction(RenameAction), MenuAction(UndoRenameAction) } };
         menu.SubmenuOpened += (_, _) => RefreshActions(menu);
         return menu;
     }
@@ -70,7 +70,7 @@ public sealed partial class EditorWindow
         catch (OperationCanceledException) { }
         catch (Exception error)
         {
-            tools.SelectedIndex = 0;
+            ToolDock.ShowBehind(Shell.ToolWindowIds.Build);
             BuildTool.Append(error.Message);
         }
         finally { semanticBusy = false; }
