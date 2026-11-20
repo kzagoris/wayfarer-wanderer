@@ -729,7 +729,7 @@ public sealed partial class Vim
                 return Said(name is "sw" or "shiftwidth" or "ts" or "tabstop" or "et" or "expandtab" or "sts" or "softtabstop" or "ai" or "autoindent"
                     ? $"{name} is the file's indent, which Settings › Editor and an .editorconfig set"
                     : name is "nu" or "number" or "rnu" or "relativenumber" or "wrap" or "list" or "cursorline"
-                        ? $"{name} is one of Passenger's settings (Settings › Editor)"
+                        ? $"{name} is one of {Product.Name}'s settings (Settings › Editor)"
                         : $"E518: Unknown option: {name}");
             }
             bool now = option.Get(Options);

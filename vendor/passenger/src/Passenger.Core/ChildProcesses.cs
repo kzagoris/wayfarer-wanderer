@@ -176,7 +176,7 @@ public static class ChildProcesses
         }
         if (!File.Exists(program) || !File.Exists(helper))
         {
-            throw new FileNotFoundException($"Passenger's helper host is missing from {beside}", program);
+            throw new FileNotFoundException($"{Product.Name}'s helper host is missing from {beside}", program);
         }
         return AsDotnet(Command(program, [.. words, assembly, .. arguments], folder));
     }

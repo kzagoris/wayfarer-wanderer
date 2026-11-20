@@ -12,6 +12,9 @@ else upstream has (its tests, site, docs, scripts) is never copied.
 
 The upstream history lives in artifacts/passenger-upstream.git (a mirror, made on first use), never in Wayfarer's own
 history, and nothing is ever pushed anywhere.
+
+After an update, build and run the tests: NoPassengerInUiTests lists any upstream literal that would show "Passenger" in
+Wayfarer's window. Edit it in vendor/passenger to say Product.Name (Wayfarer Wanderer at run time) or neutral words.
 """
 import argparse
 import difflib

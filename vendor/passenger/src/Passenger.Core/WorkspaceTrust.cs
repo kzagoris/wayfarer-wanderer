@@ -10,7 +10,7 @@ namespace Passenger.Core;
 public static class WorkspaceTrust
 {
     /// <summary>Why a folder's code does not run, in the one sentence every refusal of it says.</summary>
-    public const string Untrusted = "The folder is not trusted: Passenger runs none of its code until it is";
+    public static string Untrusted => $"The folder is not trusted: {Product.Name} runs none of its code until it is";
 
     private static readonly Lock Gate = new();
     private static TrustedFolders folders = TrustedFolders.None;

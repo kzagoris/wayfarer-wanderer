@@ -1,9 +1,13 @@
 # Wayfarer Wanderer
 
-The desktop host embeds Passenger's editor and shell. Passenger's source is
-copied into `vendor/passenger` (see [Passenger copy](#passenger-copy)). Install
-the .NET SDK named in `global.json` and Python 3, then build from a clone in its
-own directory.
+Wayfarer Wanderer is an IDE for Java and Kotlin/JVM projects. It builds on
+[Passenger](https://github.com/Zaneris/passenger)'s editor and libraries, copied
+into `vendor/passenger` (see [Passenger copy](#passenger-copy)). The window
+itself is Wayfarer's own: the shell pieces it took from Passenger live in
+`src/WayfarerWanderer.App/Shell/`, each file headed with the Passenger file it
+came from. Wayfarer references only Passenger.Core, Text, Editor, Dap, Terminal
+and Vcs, never Passenger.App. Install the .NET SDK named in `global.json` and
+Python 3, then build from a clone in its own directory.
 
 ```sh
 git clone https://github.com/kzagoris/wayfarer-wanderer.git
@@ -43,6 +47,23 @@ markers and listed. Afterwards run
 `dotnet restore WayfarerWanderer.slnx --force-evaluate --configfile vendor/passenger/nuget.config`
 to refresh the lock files, then build, test and commit. After editing the keep
 rules, `prune` deletes what they no longer keep.
+
+### No "Passenger" in the window
+
+Wayfarer never shows the word "Passenger". `NoPassengerInUiTests` reads every
+string literal in Wayfarer's projects and in the vendored libraries they
+reference, and fails on any that says it. Comments, namespaces, provenance
+headers and resource keys such as `Passenger.Panel` don't count. The few
+literals that name Passenger without showing it, such as the default
+`Product.Name` and the look ID that old settings kept, are listed in the test
+with a reason. The test also fails when one of those listed literals is gone.
+`WelcomeTests` render the Welcome screen, the first start and Settings
+headlessly and check that they say "Wayfarer Wanderer".
+
+After an `update`, run the tests. Fix any upstream text the scan lists with
+`Product.Name` (which `EditorApplication.Identify` sets to Wayfarer Wanderer) or
+neutral words, editing `vendor/passenger` in place. Add a literal to the test's
+list only when no one sees it.
 
 ## Editor themes and publish check
 

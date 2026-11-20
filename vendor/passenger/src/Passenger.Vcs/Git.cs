@@ -2055,7 +2055,7 @@ public sealed partial class Git
             if (merged is null)
             {
                 return (null, false, new GitResult(1, string.Empty,
-                    $"{System.IO.Path.GetFileName(name)} has staged changes Passenger can't keep beside the ones chosen: commit it whole, or unstage it first"));
+                    $"{System.IO.Path.GetFileName(name)} has staged changes {Product.Name} can't keep beside the ones chosen: commit it whole, or unstage it first"));
             }
             (GitResult Ran, string? Read) written = await RunAsync(Root, ["hash-object", "-w", "--stdin", "--no-filters"], TextAsync, merged);
             if (!written.Ran.Succeeded)

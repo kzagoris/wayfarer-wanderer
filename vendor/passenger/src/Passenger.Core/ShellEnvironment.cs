@@ -138,7 +138,7 @@ public static class ShellEnvironment
         PassengerLog.WriteMasked(mask =>
         {
             string line = string.Join(' ', mask(said).Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
-            return $"The login shell's environment was not read, so programs are looked for on the PATH Passenger was given ({path}): "
+            return $"The login shell's environment was not read, so programs are looked for on the PATH {Product.Name} was given ({path}): "
                 + $"{shell} -l -i: {why}{(line.Length == 0 ? string.Empty : $": {line}")}";
         });
     }

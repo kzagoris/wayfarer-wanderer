@@ -87,7 +87,7 @@ public static unsafe partial class SharedConsole
         }
         if (unmade is not null)
         {
-            PassengerLog.Write($"No console was made for the programs Passenger starts to share ({unmade}): each has one of its own, in the system's code page");
+            PassengerLog.Write($"No console was made for the programs {Product.Name} starts to share ({unmade}): each has one of its own, in the system's code page");
         }
         return unmade is null;
     }

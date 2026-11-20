@@ -9,7 +9,7 @@ namespace WayfarerWanderer.App.Shell;
 public static class Refusals
 {
     /// <summary>The folder open is not trusted, so Wayfarer runs none of its code (<see cref="WorkspaceTrust"/>).</summary>
-    public const string Untrusted = WorkspaceTrust.Untrusted;
+    public static string Untrusted => WorkspaceTrust.Untrusted;
 
     /// <summary>The window has no folder open.</summary>
     public const string NoFolder = "No folder is open";

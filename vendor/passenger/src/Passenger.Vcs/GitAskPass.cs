@@ -246,7 +246,7 @@ public static class GitAskPass
 
     /// <summary>How the helper's words begin where it gives none for want of the IDE, on git's errors, from which the IDE's
     /// log takes them (<see cref="Prompting.Heard"/>).</summary>
-    internal const string NoAnswer = "Passenger gave git no answer: ";
+    internal const string NoAnswer = "The IDE gave git no answer: ";
 
     /// <summary>What Main asks before anything starts: where git runs this executable to ask (<see cref="Variable"/> set, one prompt given), the
     /// answer written for git, and the exit code; else null, and Passenger starts as itself.</summary>

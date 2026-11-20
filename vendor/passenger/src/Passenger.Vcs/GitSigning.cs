@@ -292,7 +292,7 @@ public static class SigningFailure
             _ when Has(said, "No secret key") || Has(said, "secret key not available") || Has(said, "No such file or directory") && setup.Format is not SigningFormat.Ssh =>
                 $"there is no secret key for {key}. Import it, or choose another in {SetUp}",
             _ when Has(said, "Inappropriate ioctl for device") || Has(said, "No pinentry") || Has(said, "Operation cancelled") =>
-                $"the passphrase of {key} could not be asked for. Commit again from Passenger, which asks for it",
+                $"the passphrase of {key} could not be asked for. Commit again from {Product.Name}, which asks for it",
             _ when Has(said, "failed to sign the data") || Has(said, "signing failed") =>
                 Line(said, "signing failed") ?? Line(said, "failed to sign the data"),
             _ => null,

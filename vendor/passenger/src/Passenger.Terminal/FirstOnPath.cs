@@ -56,7 +56,7 @@ public sealed record FirstOnPath(string Folder, string Variable, string Value, s
     /// <summary>Passenger's .zshenv: zsh's startup files are then the person's own, from their ZDOTDIR or the home, and
     /// before the first prompt <see cref="Again"/> runs once.</summary>
     public static readonly string ZshEnv = $$"""
-        # Passenger's terminal: the person's startup files, then the folder Passenger keeps first on the PATH, at the first prompt.
+        # The IDE's terminal: the person's startup files, then the folder the IDE keeps first on the PATH, at the first prompt.
         if [ -n "${{{ZdotdirVariable}}+x}" ]; then ZDOTDIR=${{ZdotdirVariable}}; else unset ZDOTDIR; fi
         unset {{ZdotdirVariable}}
         if [ -f "${ZDOTDIR:-$HOME}/.zshenv" ]; then . "${ZDOTDIR:-$HOME}/.zshenv"; fi

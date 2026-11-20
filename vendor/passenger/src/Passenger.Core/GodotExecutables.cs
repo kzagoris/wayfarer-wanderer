@@ -24,13 +24,13 @@ public sealed record GodotFound(string Executable, string From)
     /// <summary>Why it cannot run a Godot 4 project's C#, in words for the person, or null when it can.</summary>
     public string? WhyNot => !Exists ? $"{From} names {Executable}, which is not there"
         : Sharp is null ? $"{Executable} is a build of Godot without .NET, which cannot run C#: Godot's .NET build can"
-        : Major < 4 ? $"{Executable} is Godot {Version}, whose C# runs on Mono: Passenger runs C# on Godot 4's .NET build"
+        : Major < 4 ? $"{Executable} is Godot {Version}, whose C# runs on Mono: {Product.Name} runs C# on Godot 4's .NET build"
         : null;
 
     /// <summary>Why it cannot run a Godot 4 project of GDScript alone, which any build of Godot 4 runs, .NET or not: it is not
     /// there, or it is an older Godot, whose projects and debugger are not Godot 4's; null when it can.</summary>
     public string? WhyNotScripts => !Exists ? $"{From} names {Executable}, which is not there"
-        : Major < 4 ? $"{Executable} is Godot {Version}: Passenger runs Godot 4's projects"
+        : Major < 4 ? $"{Executable} is Godot {Version}: {Product.Name} runs Godot 4's projects"
         : null;
 
     /// <summary>Its major version, or null where none is known.</summary>
