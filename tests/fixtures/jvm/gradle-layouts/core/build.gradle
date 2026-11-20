@@ -1,0 +1,21 @@
+plugins {
+    id 'java-library'
+    id 'java-test-fixtures'
+}
+java { toolchain { languageVersion = JavaLanguageVersion.of(8) } }
+
+def generated = layout.buildDirectory.dir('generated/sources/version/java')
+def writeVersion = tasks.register('writeVersion') {
+    outputs.dir(generated)
+    doLast {
+        def file = generated.get().file('example/core/Version.java').asFile
+        file.parentFile.mkdirs()
+        file.text = 'package example.core;\n\npublic final class Version {\n    public static final String VALUE = "1";\n}\n'
+    }
+}
+sourceSets.main.java.srcDir('src/extra/java')
+sourceSets.main.java.srcDir(writeVersion)
+
+dependencies {
+    api 'org.apache.commons:commons-lang3:3.17.0'
+}

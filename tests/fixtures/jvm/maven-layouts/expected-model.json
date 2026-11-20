@@ -1,0 +1,109 @@
+{
+  "comment": "Wayfarer's model of this reactor as Maven 3.9.11 resolves it, with the text profile active (no -Dplain). Classpath entries are lib:group:artifact:version, or src:<source set id> for another source set's outputs. Paths are relative to this folder. Captured with mvnw dependency:build-classpath.",
+  "buildSystem": "maven",
+  "modules": [
+    {
+      "id": ".",
+      "name": "layouts-fixture",
+      "root": ".",
+      "activeProfiles": [],
+      "sourceSets": [],
+      "tasks": ["compile", "package", "test", "verify"],
+      "mains": []
+    },
+    {
+      "id": "core",
+      "name": "core",
+      "root": "core",
+      "compileJdk": 8,
+      "runtimeJdk": 8,
+      "activeProfiles": ["text"],
+      "sourceSets": [
+        {
+          "id": "core:main",
+          "name": "main",
+          "test": false,
+          "roots": [
+            { "path": "core/src/main/java", "kind": "java" },
+            { "path": "core/src/extra/java", "kind": "java" },
+            { "path": "core/src/main/resources", "kind": "resources" }
+          ],
+          "compileClasspath": ["lib:org.apache.commons:commons-lang3:3.17.0"],
+          "runtimeClasspath": ["src:core:main", "lib:org.apache.commons:commons-lang3:3.17.0"]
+        },
+        {
+          "id": "core:test",
+          "name": "test",
+          "test": true,
+          "roots": [
+            { "path": "core/src/test/java", "kind": "java" },
+            { "path": "core/src/test/resources", "kind": "resources" }
+          ],
+          "compileClasspath": ["src:core:main", "lib:org.apache.commons:commons-lang3:3.17.0"],
+          "runtimeClasspath": ["src:core:test", "src:core:main", "lib:org.apache.commons:commons-lang3:3.17.0"]
+        }
+      ],
+      "tasks": ["compile", "package", "test", "verify"],
+      "mains": []
+    },
+    {
+      "id": "app",
+      "name": "app",
+      "root": "app",
+      "compileJdk": 22,
+      "runtimeJdk": 22,
+      "activeProfiles": [],
+      "sourceSets": [
+        {
+          "id": "app:main",
+          "name": "main",
+          "test": false,
+          "roots": [
+            { "path": "app/src/main/java", "kind": "java" },
+            { "path": "app/src/main/resources", "kind": "resources" }
+          ],
+          "compileClasspath": ["src:core:main", "lib:org.apache.commons:commons-lang3:3.17.0"],
+          "runtimeClasspath": ["src:app:main", "src:core:main", "lib:org.apache.commons:commons-lang3:3.17.0"]
+        },
+        {
+          "id": "app:test",
+          "name": "test",
+          "test": true,
+          "roots": [
+            { "path": "app/src/test/java", "kind": "java" },
+            { "path": "app/src/test/resources", "kind": "resources" }
+          ],
+          "compileClasspath": [
+            "src:app:main",
+            "src:core:main",
+            "lib:org.apache.commons:commons-lang3:3.17.0",
+            "lib:org.junit.jupiter:junit-jupiter:5.13.4",
+            "lib:org.junit.jupiter:junit-jupiter-api:5.13.4",
+            "lib:org.opentest4j:opentest4j:1.3.0",
+            "lib:org.junit.platform:junit-platform-commons:1.13.4",
+            "lib:org.apiguardian:apiguardian-api:1.1.2",
+            "lib:org.junit.jupiter:junit-jupiter-params:5.13.4",
+            "lib:org.junit.jupiter:junit-jupiter-engine:5.13.4",
+            "lib:org.junit.platform:junit-platform-engine:1.13.4"
+          ],
+          "runtimeClasspath": [
+            "src:app:test",
+            "src:app:main",
+            "src:core:main",
+            "lib:org.apache.commons:commons-lang3:3.17.0",
+            "lib:org.junit.jupiter:junit-jupiter:5.13.4",
+            "lib:org.junit.jupiter:junit-jupiter-api:5.13.4",
+            "lib:org.opentest4j:opentest4j:1.3.0",
+            "lib:org.junit.platform:junit-platform-commons:1.13.4",
+            "lib:org.apiguardian:apiguardian-api:1.1.2",
+            "lib:org.junit.jupiter:junit-jupiter-params:5.13.4",
+            "lib:org.junit.jupiter:junit-jupiter-engine:5.13.4",
+            "lib:org.junit.platform:junit-platform-engine:1.13.4"
+          ]
+        }
+      ],
+      "tasks": ["compile", "package", "test", "verify"],
+      "mains": [{ "className": "example.app.App", "origin": "configured" }]
+    }
+  ]
+}

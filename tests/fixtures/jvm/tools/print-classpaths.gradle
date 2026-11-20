@@ -1,0 +1,24 @@
+// Authoring aid for the expected-model JSON, independent of Wayfarer's host:
+// prints each source set's roots and resolved classpaths as Gradle itself orders them.
+// ./gradlew -q -I ../tools/print-classpaths.gradle printClasspaths
+allprojects {
+    tasks.register('printClasspaths') {
+        doLast {
+            def ss = project.extensions.findByName('sourceSets')
+            if (ss == null) return
+            def tc = project.extensions.findByName('java')?.toolchain?.languageVersion?.getOrNull()
+            println "PROJECT ${project.path} jdk=${tc}"
+            ss.each { set ->
+                println "  SET ${set.name}"
+                set.java.srcDirs.each { println "    java ${project.rootDir.toPath().relativize(it.toPath())}" }
+                set.resources.srcDirs.each { println "    resources ${project.rootDir.toPath().relativize(it.toPath())}" }
+                ['compileClasspath': set.compileClasspathConfigurationName, 'runtimeClasspath': set.runtimeClasspathConfigurationName].each { label, name ->
+                    println "    $label"
+                    project.configurations.getByName(name).incoming.artifacts.each { a ->
+                        println "      ${a.id.componentIdentifier.displayName} ${a.file.name}"
+                    }
+                }
+            }
+        }
+    }
+}

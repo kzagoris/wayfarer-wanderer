@@ -1,0 +1,35 @@
+<?xml version="1.0" ?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>example</groupId>
+    <artifactId>layouts-fixture</artifactId>
+    <version>1</version>
+  </parent>
+  <artifactId>app</artifactId>
+  <properties>
+    <maven.compiler.release>22</maven.compiler.release>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>example</groupId>
+      <artifactId>core</artifactId>
+      <version>1</version>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.5.1</version>
+        <configuration><mainClass>example.app.App</mainClass></configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
