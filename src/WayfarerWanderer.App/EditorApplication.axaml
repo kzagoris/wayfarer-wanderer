@@ -11,6 +11,7 @@
         <!-- Fluent's own keys as the tokens of whichever theme is in force (Themes lays any other theme after these). -->
         <shell:FluentKeys />
         <ResourceInclude Source="/Shell/Theme/Icons.axaml" />
+        <ResourceInclude Source="/Shell/Theme/FileIconSet.axaml" />
         <ResourceInclude Source="/Shell/Theme/ControlThemes.axaml" />
       </ResourceDictionary.MergedDictionaries>
     </ResourceDictionary>

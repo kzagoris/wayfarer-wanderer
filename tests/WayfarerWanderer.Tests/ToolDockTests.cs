@@ -23,7 +23,7 @@ public class ToolDockTests
         window.Show();
         try
         {
-            Assert.Equal([ToolWindowIds.Build, ToolWindowIds.Tests, ToolWindowIds.Debug], window.ToolDock.Windows.Select(w => w.Id));
+            Assert.Equal([ToolWindowIds.Explorer, ToolWindowIds.Build, ToolWindowIds.Tests, ToolWindowIds.Debug], window.ToolDock.Windows.Select(w => w.Id));
             Assert.False(window.ToolDock.IsShown(ToolWindowIds.Build));
             Click(window, StripeButton(window, ToolWindowIds.Build));
             Assert.True(window.ToolDock.IsShown(ToolWindowIds.Build));
@@ -45,7 +45,7 @@ public class ToolDockTests
             Assert.False(window.ToolDock.IsShown(ToolWindowIds.Build));
 
             Click(window, StripeButton(window, ToolWindowIds.Tests));
-            Assert.DoesNotContain(window.ToolDock.Windows, w => w.IsShown);
+            Assert.DoesNotContain(window.ToolDock.Windows, w => w.IsShown && w.Anchor == ToolAnchor.BottomLeft);
         }
         finally
         {

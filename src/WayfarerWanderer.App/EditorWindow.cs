@@ -7,6 +7,7 @@ using Passenger.Text;
 using Passenger.Core;
 using WayfarerWanderer.App.Shell;
 using WayfarerWanderer.App.Shell.Docking;
+using WayfarerWanderer.App.Shell.Explorer;
 using WayfarerWanderer.Jvm;
 
 namespace WayfarerWanderer.App;
@@ -20,6 +21,8 @@ public sealed partial class EditorWindow : Window
     public BuildToolWindow BuildTool { get; } = new();
     public TestToolWindow TestsTool { get; } = new();
     public DebugToolWindow DebugTool { get; } = new();
+    /// <summary>The open folder's files, its modules and source roots marked: the Project tool window, at the left.</summary>
+    public ExplorerView Explorer { get; } = new();
     /// <summary>The tool windows' dock, around the editor: Build, Tests and Debug start at the bottom.</summary>
     public DockHost ToolDock { get; } = new();
     public ProjectSession? Session { get; private set; }
@@ -144,8 +147,10 @@ public sealed partial class EditorWindow : Window
             e.Handled = true;
         }, RoutingStrategies.Tunnel);
         AddToolWindows(new Grid { Children = { Editor, palette } });
+        AddExplorerActions();
         DockPanel.SetDock(TrustBanner, Dock.Top);
-        Content = new DockPanel { Children = { menu, TrustBanner, ToolDock } };
+        DockPanel.SetDock(asking, Dock.Top);
+        Content = new DockPanel { Children = { menu, TrustBanner, asking, ToolDock } };
         KeyDown += (_, e) => e.Handled = Actions.TryExecute(keys.ActionFor(new Shortcut(Keystroke.From(e))));
         Opened += (_, _) => Editor.Focus();
         Closing += CloseSession;
@@ -168,6 +173,7 @@ public sealed partial class EditorWindow : Window
         }
         DebugTool.Reset();
         Session = new ProjectSession(root, BuildTool, TestsTool, DebugTool);
+        Explorer.Load(root, Session.Snapshot);
         Session.PausedAt += OpenFrame;
         TrustBanner.IsVisible = !Session.IsTrusted;
         if (Session.IsTrusted)
@@ -176,20 +182,35 @@ public sealed partial class EditorWindow : Window
             catch (OperationCanceledException) when (request != workspaceRequest || closing) { return; }
         }
         if (request != workspaceRequest || closing) return;
-        // A first start shows Build as the folder opens; after that the layout kept says what is open.
-        if (EditorApplication.State?.Layout.IsKept != true && !ToolDock.Windows.Any(w => w.IsShown))
+        Explorer.Update(Session.Snapshot);
+        // A first start shows Build as the folder opens, unless a bottom window already is; after that the layout kept says
+        // what is open.
+        if (EditorApplication.State?.Layout.IsKept != true
+            && !ToolDock.Windows.Any(w => w.IsShown && w.Anchor is ToolAnchor.BottomLeft or ToolAnchor.BottomRight))
         {
             ToolDock.ShowBehind(ToolWindowIds.Build);
         }
         Title = $"Wayfarer Wanderer - {Path.GetFileName(Path.TrimEndingDirectorySeparator(root))}";
     }
 
-    /// <summary>Puts the editor in the dock's centre and Build, Tests and Debug at its bottom, each shown by its own action;
-    /// the person's window opens on the layout kept last and keeps each change.</summary>
+    /// <summary>Puts the editor in the dock's centre, Project at its left, and Build, Tests and Debug at its bottom, each
+    /// shown by its own action; the person's window opens on the layout kept last and keeps each change.</summary>
     private void AddToolWindows(Control center)
     {
         ToolDock.Center = center;
         ToolDock.Actions = Actions.Registry;
+        Explorer.FileOpened += (_, path) => OpenFromExplorer(path);
+        ToolDock.Add(new ToolWindow(ToolWindowIds.Explorer, "Project", IconKeys.Explorer, Explorer, ToolAnchor.LeftTop)
+        {
+            Action = AppActions.FocusExplorer,
+            // The keys go to the rows, not the filter, as Passenger's Explorer takes them.
+            Activate = () =>
+            {
+                ToolDock.Activate(ToolWindowIds.Explorer);
+                Explorer.FocusRows();
+            },
+            OpenAtFirst = true,
+        });
         ToolDock.Add(new ToolWindow(ToolWindowIds.Build, "Build", IconKeys.Build, BuildTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowBuild });
         ToolDock.Add(new ToolWindow(ToolWindowIds.Tests, "Tests", IconKeys.Tests, TestsTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowTests });
         ToolDock.Add(new ToolWindow(ToolWindowIds.Debug, "Debug", IconKeys.Debug, DebugTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowDebug });
@@ -200,6 +221,23 @@ public sealed partial class EditorWindow : Window
                 ToolDock.Apply(state.Layout.Value);
             }
             ToolDock.LayoutChanged += (_, _) => state.Layout.Set(ToolDock.Capture());
+        }
+    }
+
+    /// <summary>A file chosen in the Explorer, opened in the editor: a binary file has no text to show, so it stays as it was.</summary>
+    private void OpenFromExplorer(string path)
+    {
+        try
+        {
+            OpenSource(path);
+        }
+        catch (InvalidDataException)
+        {
+            // A binary file: the editor keeps what it showed.
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            IdeErrors.Report(error);
         }
     }
 
@@ -276,5 +314,6 @@ public sealed partial class EditorWindow : Window
         Session.Trust();
         await Session.ImportAsync();
         TrustBanner.IsVisible = false;
+        Explorer.Update(Session.Snapshot);
     }
 }

@@ -1,0 +1,17 @@
+<!-- From Passenger 2044e49b src/Passenger.App/Explorer/ExplorerView.axaml, MIT (notices/Passenger/LICENSE): its own title row
+     and view switch cut, as the dock's pane names it and Wayfarer shows the folder alone. -->
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:shell="using:WayfarerWanderer.App.Shell"
+             x:Class="WayfarerWanderer.App.Shell.Explorer.ExplorerView">
+    <DockPanel Background="{DynamicResource Passenger.Panel}">
+        <!-- The filter's bar goes in the first row; the last row says what it left out. -->
+        <Grid Name="Body" RowDefinitions="Auto,*,Auto">
+            <Panel Name="Surface" Grid.Row="1">
+                <TextBlock Name="Hint" Classes="muted" Text="No folder open"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                <shell:TreeList Name="Rows" Classes="tree" IsVisible="False" SelectionMode="Multiple" />
+            </Panel>
+        </Grid>
+    </DockPanel>
+</UserControl>

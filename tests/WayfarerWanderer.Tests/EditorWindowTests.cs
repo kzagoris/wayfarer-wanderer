@@ -29,6 +29,9 @@ public class EditorWindowTests
         window.Height = 180;
         window.RequestedThemeVariant = theme == "Dark" ? ThemeVariant.Dark : ThemeVariant.Light;
         window.Show();
+        // The pixels checked are the editor's: a window this narrow gives it room only with Project closed.
+        window.ToolDock.Hide(WayfarerWanderer.App.Shell.ToolWindowIds.Explorer);
+        window.UpdateLayout();
         try
         {
             var editor = window.Editor;
