@@ -22,7 +22,10 @@ public enum NewProjectLanguage
 public enum NewProjectBuild
 {
     Maven,
-    Gradle
+    Gradle,
+
+    /// <summary>A plain IntelliJ module: an <c>.iml</c> beside <c>src</c>, compiled with the JDK's own javac.</summary>
+    IntelliJ
 }
 
 public sealed record ProjectGenerationOptions
@@ -74,6 +77,11 @@ public static class ProjectGenerator
     /// <summary>The newest JDK a starter in this language accepts, or null for no limit.</summary>
     public static int? HighestJdk(NewProjectLanguage language) =>
         language == NewProjectLanguage.Kotlin ? KotlinHighestJdk : null;
+
+    /// <summary>Whether a starter exists for this kind, language and build. An IntelliJ module is compiled with javac
+    /// alone, so it makes a plain Java application only.</summary>
+    public static bool Supports(NewProjectKind kind, NewProjectLanguage language, NewProjectBuild build) =>
+        build != NewProjectBuild.IntelliJ || (kind == NewProjectKind.Application && language == NewProjectLanguage.Java);
 
     public static async Task<ProjectGenerationResult> GenerateAsync(
         ProjectGenerationOptions options,
@@ -169,6 +177,11 @@ public static class ProjectGenerator
         if (!Enum.IsDefined(options.Kind) || !Enum.IsDefined(options.Language) || !Enum.IsDefined(options.Build))
         {
             throw new ProjectGenerationException("The project kind, language and build system must each name a supported choice.");
+        }
+        if (!Supports(options.Kind, options.Language, options.Build))
+        {
+            throw new ProjectGenerationException(
+                "An IntelliJ module builds a plain Java application with javac. Choose Maven or Gradle for a Kotlin or Spring Boot project.");
         }
 
         string name = options.ProjectName.Trim();
@@ -293,7 +306,7 @@ public static class ProjectGenerator
     {
         string root = TemplateRoot();
         VerifyTemplateBundle(root);
-        CopyDirectory(Path.Combine(root, "common"), staging, values, cancellationToken);
+        // The template's own files first: a common file it has too (an IntelliJ module's README and .gitignore) is its own.
         CopyDirectory(
             Path.Combine(root, "templates",
                 TemplateName(values.Options.Kind),
@@ -302,15 +315,20 @@ public static class ProjectGenerator
             staging,
             values,
             cancellationToken);
-        CopyDirectory(Path.Combine(root, "wrappers", values.Options.Build.ToString().ToLowerInvariant()),
-            staging, values, cancellationToken);
+        if (values.Options.Build != NewProjectBuild.IntelliJ)
+        {
+            CopyDirectory(Path.Combine(root, "wrappers", values.Options.Build.ToString().ToLowerInvariant()),
+                staging, values, cancellationToken);
+        }
+        CopyDirectory(Path.Combine(root, "common"), staging, values, cancellationToken, keepExisting: true);
     }
 
     private static void CopyDirectory(
         string source,
         string destination,
         ProjectGenerationValues values,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool keepExisting = false)
     {
         if (!Directory.Exists(source))
         {
@@ -321,8 +339,13 @@ public static class ProjectGenerator
         {
             cancellationToken.ThrowIfCancellationRequested();
             string relative = Path.GetRelativePath(source, file)
-                .Replace("__PACKAGE_PATH__", values.Package.Replace('.', Path.DirectorySeparatorChar), StringComparison.Ordinal);
+                .Replace("__PACKAGE_PATH__", values.Package.Replace('.', Path.DirectorySeparatorChar), StringComparison.Ordinal)
+                .Replace("__MODULE__", values.Artifact, StringComparison.Ordinal);
             string target = Path.Combine(destination, relative);
+            if (keepExisting && File.Exists(target))
+            {
+                continue;
+            }
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             if (Path.GetExtension(file).Equals(".binary", StringComparison.OrdinalIgnoreCase))
             {
@@ -355,6 +378,7 @@ public static class ProjectGenerator
             .Replace("{{NAME_XML}}", System.Security.SecurityElement.Escape(values.Name), StringComparison.Ordinal)
             .Replace("{{GROUP}}", values.Group, StringComparison.Ordinal)
             .Replace("{{ARTIFACT}}", values.Artifact, StringComparison.Ordinal)
+            .Replace("{{MODULE}}", values.Artifact, StringComparison.Ordinal)
             .Replace("{{PACKAGE}}", values.Package, StringComparison.Ordinal)
             .Replace("{{PACKAGE_PATH}}", values.Package.Replace('.', Path.DirectorySeparatorChar), StringComparison.Ordinal)
             .Replace("{{JDK}}", values.Jdk.Replace('\\', '/'), StringComparison.Ordinal)
@@ -418,9 +442,14 @@ public static class ProjectGenerator
             WorkingDirectory = values.Destination,
             JavaHome = values.Jdk,
             Profile = string.Empty,
-            BuildTask = values.Options.Kind == NewProjectKind.SpringBoot
-                ? values.Options.Build == NewProjectBuild.Maven ? "spring-boot:run" : "bootRun"
-                : values.Options.Build == NewProjectBuild.Maven ? "exec:java" : "run",
+            BuildTask = (values.Options.Kind, values.Options.Build) switch
+            {
+                (_, NewProjectBuild.IntelliJ) => "classes",
+                (NewProjectKind.SpringBoot, NewProjectBuild.Maven) => "spring-boot:run",
+                (NewProjectKind.SpringBoot, _) => "bootRun",
+                (_, NewProjectBuild.Maven) => "exec:java",
+                _ => "run"
+            },
             Arguments = [],
             Environment = new Dictionary<string, string>(StringComparer.Ordinal)
         };
@@ -446,6 +475,7 @@ public static class ProjectGenerator
 
     private static Dictionary<string, string> Checksums(string folder, NewProjectBuild build) =>
         Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)
+            .Where(_ => build != NewProjectBuild.IntelliJ)
             .Where(file => build == NewProjectBuild.Maven
                 ? Path.GetFileName(file).StartsWith("mvnw", StringComparison.Ordinal) ||
                   Path.GetRelativePath(folder, file).StartsWith(".mvn" + Path.DirectorySeparatorChar, StringComparison.Ordinal)

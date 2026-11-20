@@ -15,7 +15,8 @@ public sealed class NewProjectTests
         {
             foreach (NewProjectLanguage language in Enum.GetValues<NewProjectLanguage>())
             {
-                foreach (NewProjectBuild build in Enum.GetValues<NewProjectBuild>())
+                foreach (NewProjectBuild build in Enum.GetValues<NewProjectBuild>().Where(build =>
+                             ProjectGenerator.Supports(kind, language, build)))
                 {
                     data.Add(kind, language, build);
                 }
@@ -40,6 +41,11 @@ public sealed class NewProjectTests
         string destination = result.Destination;
         string extension = language == NewProjectLanguage.Java ? "java" : "kt";
         string entry = kind == NewProjectKind.SpringBoot ? "Application" : "App";
+        if (build == NewProjectBuild.IntelliJ)
+        {
+            await AssertIntelliJModuleAsync(result, options);
+            return;
+        }
         string sourceRoot = language == NewProjectLanguage.Java ? "src/main/java" : "src/main/kotlin";
         string testRoot = language == NewProjectLanguage.Java ? "src/test/java" : "src/test/kotlin";
         Assert.True(File.Exists(Path.Combine(destination, sourceRoot, "com", "example", "wanderer", $"{entry}.{extension}")));
@@ -114,7 +120,8 @@ public sealed class NewProjectTests
                 1,
                 TestContext.Current.CancellationToken);
             JvmModule module = Assert.Single(snapshot.Modules);
-            JvmBuildRequest request = new(generated.Destination, module.Id, "test", []);
+            // An IntelliJ module has no JUnit build: javac compiling it is its whole build.
+            JvmBuildRequest request = new(generated.Destination, module.Id, build == NewProjectBuild.IntelliJ ? "classes" : "test", []);
             ProcessResult result = await new JvmBuild().RunAsync(
                 snapshot,
                 request,
@@ -122,6 +129,13 @@ public sealed class NewProjectTests
             Assert.True(
                 result.ExitCode == 0,
                 "The generated wrapper build failed:\n" + string.Join(Environment.NewLine, result.Output.Select(line => line.Line)));
+            if (build == NewProjectBuild.IntelliJ)
+            {
+                Assert.Equal(JvmBuildSystem.Idea, snapshot.BuildSystem);
+                Assert.True(File.Exists(Path.Combine(generated.Destination, "out", "production", "wanderer-starter",
+                    "com", "example", "wanderer", "App.class")));
+                return;
+            }
             Assert.Contains(result.Output, line => line.Line.Contains("BUILD SUCCESS", StringComparison.OrdinalIgnoreCase) ||
                                                  line.Line.Contains("BUILD SUCCESSFUL", StringComparison.OrdinalIgnoreCase));
         }
@@ -441,6 +455,52 @@ public sealed class NewProjectTests
 
         Assert.True(Directory.Exists(result.Destination));
         Assert.True(File.Exists(Path.Combine(result.Destination, "build.gradle.kts")));
+    }
+
+    /// <summary>An IntelliJ module starter: its .iml and .idea beside src, no wrapper or build file, its own README and
+    /// .gitignore in place of the common ones, and a launch of the module's App.</summary>
+    private static async Task AssertIntelliJModuleAsync(ProjectGenerationResult result, ProjectGenerationOptions options)
+    {
+        string destination = result.Destination;
+        Assert.True(File.Exists(Path.Combine(destination, "src", "com", "example", "wanderer", "App.java")));
+        Assert.Equal("wanderer-starter.iml", Path.GetFileName(IdeaProject.ModuleFile(destination)));
+        Assert.Contains("JAVA_MODULE", File.ReadAllText(Path.Combine(destination, "wanderer-starter.iml")));
+        Assert.Contains($"JDK_{JdkMajor(options.JdkHome)}", File.ReadAllText(Path.Combine(destination, ".idea", "misc.xml")));
+        Assert.Contains("$PROJECT_DIR$/wanderer-starter.iml", File.ReadAllText(Path.Combine(destination, ".idea", "modules.xml")));
+        foreach (string absent in (string[])["pom.xml", "build.gradle.kts", "mvnw", "mvnw.cmd", "gradlew", "gradlew.bat"])
+        {
+            Assert.False(File.Exists(Path.Combine(destination, absent)), absent);
+        }
+        string[] ignored = File.ReadAllLines(Path.Combine(destination, ".gitignore"));
+        Assert.Contains(".wayfarer/", ignored);
+        Assert.DoesNotContain(".idea/", ignored);
+        Assert.DoesNotContain("*.iml", ignored);
+        string readme = File.ReadAllText(Path.Combine(destination, "README.md"));
+        Assert.Contains("IntelliJ", readme);
+        Assert.DoesNotContain("mvnw", readme);
+        Assert.True(File.Exists(Path.Combine(destination, "THIRD_PARTY_NOTICES.md")));
+        Assert.Equal(Path.TrimEndingDirectorySeparator(Path.GetFullPath(options.JdkHome)), ProjectJdk.Recorded(destination));
+
+        using JsonDocument launch = JsonDocument.Parse(File.ReadAllText(result.LaunchConfigurationPath));
+        Assert.Equal("wanderer-starter", launch.RootElement.GetProperty("module").GetString());
+        Assert.Equal("com.example.wanderer.App", launch.RootElement.GetProperty("mainClass").GetString());
+        LaunchConfigurationStore store = new(Path.Combine(destination, ".wayfarer", "launches"));
+        Assert.Single(await store.ListAsync(TestContext.Current.CancellationToken));
+        using JsonDocument provenance = JsonDocument.Parse(File.ReadAllText(Path.Combine(destination, ".wayfarer", "template.json")));
+        Assert.Empty(provenance.RootElement.GetProperty("wrappers").EnumerateObject());
+    }
+
+    [Theory]
+    [InlineData(NewProjectKind.Application, NewProjectLanguage.Kotlin)]
+    [InlineData(NewProjectKind.SpringBoot, NewProjectLanguage.Java)]
+    [InlineData(NewProjectKind.SpringBoot, NewProjectLanguage.Kotlin)]
+    public void IntelliJModuleIsPlainJavaApplicationOnly(NewProjectKind kind, NewProjectLanguage language)
+    {
+        using TestFolder folder = new();
+        Assert.False(ProjectGenerator.Supports(kind, language, NewProjectBuild.IntelliJ));
+        ProjectGenerationException refused = Assert.Throws<ProjectGenerationException>(() =>
+            ProjectGenerator.Validate(Options(folder.Path, kind, language, NewProjectBuild.IntelliJ)));
+        Assert.Contains("Maven or Gradle", refused.Message);
     }
 
     private static ProjectGenerationOptions Options(

@@ -4,6 +4,7 @@
   "templates": [
     "application/java/maven",
     "application/java/gradle",
+    "application/java/intellij",
     "application/kotlin/maven",
     "application/kotlin/gradle",
     "boot/java/maven",

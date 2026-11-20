@@ -1,0 +1,7 @@
+# {{NAME}}
+
+This project is a Wayfarer Wanderer starter generated offline: a plain IntelliJ module that uses a local JDK {{JDK_VERSION}}.
+
+It has no build tool and downloads nothing. Wayfarer Wanderer compiles `src` with `javac` into `out/production/{{MODULE}}`
+and runs `{{PACKAGE}}.App`; IntelliJ IDEA opens the same folder as its own project. If a build fails, correct the source
+and retry; files already generated remain available. Wayfarer Wanderer does not initialize Git for a generated project.
