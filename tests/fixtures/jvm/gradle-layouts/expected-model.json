@@ -1,5 +1,5 @@
 {
-  "comment": "Wayfarer's model of this build as Gradle 9.7.1 resolves it. Classpath entries are lib:group:artifact:version, or src:<source set id> for another source set's outputs. Paths are relative to this folder. Roots are every root the build declares, present or not. Captured with ../tools/print-classpaths.gradle and gradlew :<project>:tasks.",
+  "comment": "Wayfarer's model of this build as Gradle 9.7.1 resolves it. Classpath entries are lib:group:artifact:version, or src:<source set id> for another source set's outputs. Paths are relative to this folder. Roots are every root the build declares, present or not. Captured with ../tools/print-classpaths.gradle (the source sets' own classpaths, which put a test suite's dependency on its own project where Gradle resolves it) and gradlew :<project>:tasks.",
   "buildSystem": "gradle",
   "modules": [
     {
@@ -96,8 +96,8 @@
             { "path": "core/src/test/java", "kind": "java" },
             { "path": "core/src/test/resources", "kind": "resources" }
           ],
-          "compileClasspath": ["src:core:main", "src:core:testFixtures", "lib:org.apache.commons:commons-lang3:3.17.0"],
-          "runtimeClasspath": ["src:core:test", "src:core:main", "src:core:testFixtures", "lib:org.apache.commons:commons-lang3:3.17.0"]
+          "compileClasspath": ["src:core:testFixtures", "src:core:main", "lib:org.apache.commons:commons-lang3:3.17.0"],
+          "runtimeClasspath": ["src:core:test", "src:core:testFixtures", "src:core:main", "lib:org.apache.commons:commons-lang3:3.17.0"]
         },
         {
           "id": "core:testFixtures",

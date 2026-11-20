@@ -478,8 +478,20 @@ internal static class ExpectedModel
         _ => "java",
     };
 
-    private static List<string> Entries(IReadOnlyList<JvmClasspathEntry> entries) =>
-        [.. entries.Select(entry => entry.ModuleRef is { } module ? "src:" + module : "lib:" + entry.Coordinates)];
+    /// <summary>The entries as the expected model writes them: a source set's several output folders count once.</summary>
+    private static List<string> Entries(IReadOnlyList<JvmClasspathEntry> entries)
+    {
+        List<string> said = [];
+        foreach (JvmClasspathEntry entry in entries)
+        {
+            string word = entry.ModuleRef is { } module ? "src:" + module : "lib:" + entry.Coordinates;
+            if (entry.ModuleRef is null || said.Count == 0 || said[^1] != word)
+            {
+                said.Add(word);
+            }
+        }
+        return said;
+    }
 
     private static List<string> Strings(JsonElement array) => [.. array.EnumerateArray().Select(item => item.GetString()!)];
 

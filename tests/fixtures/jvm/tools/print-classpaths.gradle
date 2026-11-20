@@ -12,10 +12,11 @@ allprojects {
                 println "  SET ${set.name}"
                 set.java.srcDirs.each { println "    java ${project.rootDir.toPath().relativize(it.toPath())}" }
                 set.resources.srcDirs.each { println "    resources ${project.rootDir.toPath().relativize(it.toPath())}" }
-                ['compileClasspath': set.compileClasspathConfigurationName, 'runtimeClasspath': set.runtimeClasspathConfigurationName].each { label, name ->
+                ['compileClasspath': set.compileClasspath, 'runtimeClasspath': set.runtimeClasspath].each { label, files ->
                     println "    $label"
-                    project.configurations.getByName(name).incoming.artifacts.each { a ->
-                        println "      ${a.id.componentIdentifier.displayName} ${a.file.name}"
+                    // The source set's own classpath, in its order: its outputs and its configuration's files.
+                    files.files.each { f ->
+                        println "      ${project.rootDir.toPath().relativize(f.toPath())}"
                     }
                 }
             }
