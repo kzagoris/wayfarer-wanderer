@@ -78,6 +78,10 @@ build, test and launch targets. Builds and tests use the workspace wrapper, and
 each test invocation owns a fresh report directory so a failed build cannot
 inherit older successful reports. Window close cancels the session's operations.
 
+A trusted folder whose only build file is an IntelliJ `.iml` is compiled with
+`javac` into `out/production/<module>` and launched with `java`. Maven and
+Gradle projects are unchanged. IntelliJ GUI Designer forms are not run.
+
 The `--acceptance <case-file> --results <directory>` application mode runs the
 normal host through Avalonia's headless Skia platform and writes a PNG plus
 structured observations. Trust remains disabled unless a case explicitly

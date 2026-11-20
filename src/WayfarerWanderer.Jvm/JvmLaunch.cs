@@ -196,6 +196,21 @@ public sealed class JvmLaunch
         CancellationToken cancellationToken = default)
     {
         WorkspaceTrust.Check(snapshot.Root);
+        if (snapshot.BuildSystem == JvmBuildSystem.Idea)
+        {
+            JvmModule module = snapshot.Module(configuration.Module)
+                ?? throw new InvalidDataException($"The launch module '{configuration.Module}' is not in snapshot {snapshot.Generation}.");
+            ProcessResult compiled = await new JvmBuild(runner).RunAsync(
+                snapshot,
+                new JvmBuildRequest(snapshot.Root, module.Id, "classes", []),
+                output,
+                cancellationToken).ConfigureAwait(false);
+            if (compiled.ExitCode != 0)
+            {
+                return compiled;
+            }
+            return await runner.RunAsync(new DirectJvmLaunchAdapter().Command(snapshot, configuration), output, cancellationToken).ConfigureAwait(false);
+        }
         ProcessStartInfo start = adapter is WrapperJvmLaunchAdapter && WrapperJvmLaunchAdapter.LaunchesDirectly(snapshot, configuration)
             ? await DirectJvmLaunchAdapter.ResolvedCommandAsync(snapshot, configuration, cancellationToken).ConfigureAwait(false)
             : adapter.Command(snapshot, configuration);

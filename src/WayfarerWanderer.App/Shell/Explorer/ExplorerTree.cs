@@ -110,10 +110,24 @@ public sealed class ExplorerTree
             string root = PathNames.Canonical(module.Root);
             string name = Path.GetFileName(Path.TrimEndingDirectorySeparator(root));
             marked[root] = (JvmFolder.Module, string.Equals(name, module.Name, StringComparison.Ordinal) ? "module" : module.Name);
-            output.Add(Path.Combine(root, snapshot.BuildSystem == JvmBuildSystem.Maven ? "target" : "build"));
-            if (snapshot.BuildSystem == JvmBuildSystem.Gradle)
+            if (snapshot.BuildSystem == JvmBuildSystem.Idea)
             {
-                output.Add(Path.Combine(root, ".gradle"));
+                if (!string.IsNullOrEmpty(snapshot.OutputRoot))
+                {
+                    output.Add(snapshot.OutputRoot);
+                }
+                if (module.Classpath.Runtime.FirstOrDefault() is { } classes)
+                {
+                    output.Add(classes);
+                }
+            }
+            else
+            {
+                output.Add(Path.Combine(root, snapshot.BuildSystem == JvmBuildSystem.Maven ? "target" : "build"));
+                if (snapshot.BuildSystem == JvmBuildSystem.Gradle)
+                {
+                    output.Add(Path.Combine(root, ".gradle"));
+                }
             }
             foreach (JvmSourceRoot source in module.SourceRoots)
             {

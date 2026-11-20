@@ -3,12 +3,26 @@ namespace WayfarerWanderer.Jvm;
 public static class JvmDebugClasspath
 {
     public static async Task<IReadOnlyList<string>> ResolveAsync(
-        WorkspaceSnapshot snapshot, JvmLaunchConfiguration configuration, CancellationToken cancellationToken = default)
+        WorkspaceSnapshot snapshot, JvmLaunchConfiguration configuration, CancellationToken cancellationToken = default, JvmBuild? build = null)
     {
         Passenger.Core.WorkspaceTrust.Check(snapshot.Root);
         JvmModule module = snapshot.Module(configuration.Module)
             ?? throw new InvalidDataException($"Unknown debug module '{configuration.Module}'.");
-        JvmBuild build = new();
+        JvmBuild compiler = build ?? new();
+        if (snapshot.BuildSystem == JvmBuildSystem.Idea)
+        {
+            ProcessResult compiled = await compiler.RunAsync(snapshot, new(snapshot.Root, module.Id, "classes", []), cancellationToken: cancellationToken).ConfigureAwait(false);
+            if (compiled.ExitCode != 0)
+            {
+                throw new InvalidOperationException(string.Join(Environment.NewLine, compiled.Output.TakeLast(16).Select(line => line.Line)));
+            }
+            IReadOnlyList<string> classes = module.Classpath.Runtime;
+            if (classes.Count == 0 || classes.Any(path => !Path.IsPathFullyQualified(path)))
+            {
+                throw new InvalidDataException($"Module '{module.Name}' has no output directory.");
+            }
+            return classes;
+        }
         IReadOnlyList<string> classpath;
         if (snapshot.BuildSystem == JvmBuildSystem.Gradle)
         {
@@ -46,7 +60,7 @@ public static class JvmDebugClasspath
 
         async Task<ProcessResult> Run(string task, IReadOnlyList<string> args, string? selected = null)
         {
-            ProcessResult result = await build.RunAsync(snapshot, new(snapshot.Root, selected ?? module.Id, task, args),
+            ProcessResult result = await compiler.RunAsync(snapshot, new(snapshot.Root, selected ?? module.Id, task, args),
                 cancellationToken: cancellationToken);
             if (result.ExitCode != 0)
                 throw new InvalidOperationException(string.Join(Environment.NewLine, result.Output.TakeLast(16).Select(line => line.Line)));

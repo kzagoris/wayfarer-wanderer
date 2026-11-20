@@ -87,7 +87,7 @@ public sealed partial class EditorWindow
                 await client.DisposeAsync();
                 foreach (string key in sentSources.Keys.Where(p => Language(p) == language).ToArray()) sentSources.Remove(key);
             }
-            client = await JvmLanguageClient.StartAsync(Session!.Root, language, token);
+            client = await JvmLanguageClient.StartAsync(Session!.Root, language, token, Session.Snapshot);
             if (token.IsCancellationRequested)
             {
                 await client.DisposeAsync();

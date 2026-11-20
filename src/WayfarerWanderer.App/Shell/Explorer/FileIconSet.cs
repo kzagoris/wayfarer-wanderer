@@ -336,6 +336,7 @@ public static class FileIconSet
         [".go"] = new("Go", Blue),
         [".rs"] = new("Rust", Maroon),
         [".java"] = new("Java", Purple),
+        [".iml"] = new("Java", Blue),
         [".class"] = new("Java", Maroon),
         [".jar"] = new("Java", Maroon),
         [".kt"] = new("Kotlin", Blue),

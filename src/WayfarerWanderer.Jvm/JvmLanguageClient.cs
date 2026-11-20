@@ -20,13 +20,15 @@ public sealed class JvmLanguageClient : IAsyncDisposable
     private readonly Task reader;
     private readonly Task errors;
     private readonly TaskCompletionSource ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly WorkspaceSnapshot? snapshot;
     private string lastError = "";
     private int nextId;
 
-    private JvmLanguageClient(Process process, string state, string root)
+    private JvmLanguageClient(Process process, string state, string root, WorkspaceSnapshot? snapshot)
     {
         this.process = process;
         this.state = state;
+        this.snapshot = snapshot;
         folders = [new { uri = new Uri(root).AbsoluteUri, name = Path.GetFileName(root) }];
         input = process.StandardInput.BaseStream;
         output = new BufferedStream(process.StandardOutput.BaseStream);
@@ -36,7 +38,7 @@ public sealed class JvmLanguageClient : IAsyncDisposable
         reader = ReadAsync();
     }
 
-    public static async Task<JvmLanguageClient> StartAsync(string root, string language, CancellationToken cancel)
+    public static async Task<JvmLanguageClient> StartAsync(string root, string language, CancellationToken cancel, WorkspaceSnapshot? snapshot = null)
     {
         WorkspaceTrust.Check(root);
         cancel.ThrowIfCancellationRequested();
@@ -59,12 +61,15 @@ public sealed class JvmLanguageClient : IAsyncDisposable
             start.RedirectStandardInput = start.RedirectStandardOutput = start.RedirectStandardError = true;
             Process process = await ChildProcesses.StartAsync(start).ConfigureAwait(false);
             ChildProcesses.HoldFamily(process);
-            client = new(process, state, root) { BundleProblem = bundleProblem };
+            client = new(process, state, root, snapshot) { BundleProblem = bundleProblem };
+            object initializationOptions = snapshot is { BuildSystem: JvmBuildSystem.Idea }
+                ? new { bundles, settings = IdeaLanguageSettings.Document(snapshot) }
+                : (object)new { bundles };
             await client.RequestAsync("initialize", new
             {
                 processId = Environment.ProcessId, rootUri = new Uri(root).AbsoluteUri, rootPath = root,
                 workspaceFolders = client.folders,
-                initializationOptions = new { bundles },
+                initializationOptions,
                 capabilities = new { workspace = new { configuration = true, workspaceFolders = true, workspaceEdit = new { documentChanges = true } },
                     textDocument = new { completion = new { completionItem = new { snippetSupport = false } } } }
             }, cancel).ConfigureAwait(false);
@@ -178,7 +183,15 @@ public sealed class JvmLanguageClient : IAsyncDisposable
         switch (method)
         {
             case "workspace/configuration":
-                result = message.GetProperty("params").GetProperty("items").EnumerateArray().Select(_ => (object?)null).ToArray(); break;
+                result = message.GetProperty("params").GetProperty("items").EnumerateArray().Select(item =>
+                {
+                    if (snapshot is not { BuildSystem: JvmBuildSystem.Idea })
+                    {
+                        return null;
+                    }
+                    string? section = item.TryGetProperty("section", out JsonElement name) ? name.GetString() : null;
+                    return IdeaLanguageSettings.Value(snapshot, section);
+                }).ToArray(); break;
             case "workspace/workspaceFolders": result = folders; break;
             case "workspace/applyEdit": result = new { applied = false, failureReason = "Edits require a reviewed preview." }; break;
             case "client/registerCapability": case "client/unregisterCapability": case "window/workDoneProgress/create":

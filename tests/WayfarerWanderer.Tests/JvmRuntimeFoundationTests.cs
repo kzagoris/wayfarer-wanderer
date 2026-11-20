@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Passenger.Core;
+using WayfarerWanderer.App.Shell.Explorer;
 using WayfarerWanderer.Jvm;
 
 namespace WayfarerWanderer.Tests;
@@ -300,6 +301,255 @@ public sealed class JvmRuntimeFoundationTests
         finally
         {
             ChildProcesses.Started -= started;
+        }
+    }
+
+    [Fact]
+    public async Task ImportsAnIdeaCourseModuleAndCompilesItWithJavac()
+    {
+        (string root, WorkspaceSnapshot snapshot) = await ImportFixture("jvm", "idea", "course");
+        try
+        {
+            JvmModule module = Assert.Single(snapshot.Modules);
+            string sources = Path.Combine(root, "src");
+            string output = Path.Combine(root, "out", "production", "Course");
+            Assert.Equal(JvmBuildSystem.Idea, snapshot.BuildSystem);
+            Assert.Equal(4, snapshot.Generation);
+            Assert.EndsWith("Course.iml", snapshot.BuildFile, StringComparison.Ordinal);
+            Assert.Equal(25, snapshot.ToolingToolchain.LanguageVersion);
+            Assert.Equal("openjdk-25", snapshot.ToolingToolchain.Vendor);
+            Assert.Equal(IdeaJdks.Home("openjdk-25"), snapshot.ToolingToolchain.Home);
+            Assert.Equal(sources, Assert.Single(module.SourceRoots).Path);
+            Assert.Equal(JvmSourceKind.MainJava, module.SourceRoots[0].Kind);
+            Assert.Equal("Main", Assert.Single(module.MainClasses).ClassName);
+            Assert.Equal(["classes"], module.Tasks);
+            Assert.Equal(output, module.Classpath.Runtime[0]);
+            Assert.Empty(module.Classpath.Compile);
+            Assert.Equal(Path.Combine(root, "out"), snapshot.OutputRoot);
+            Assert.Equal(["src"], IdeaLanguageSettings.SourcePaths(snapshot));
+            Assert.Equal("out/production/Course", IdeaLanguageSettings.OutputPath(snapshot));
+            Assert.Empty(IdeaLanguageSettings.Libraries(snapshot));
+            Assert.Null(IdeaLanguageSettings.Value(snapshot, "java.other"));
+
+            WorkspaceSnapshot ready = WithJdk(snapshot);
+            ProcessStartInfo compile = new IdeaJvmBuildAdapter().Command(ready, new JvmBuildRequest(root, "Course", "classes", []));
+            string javac = OperatingSystem.IsWindows() ? "javac.exe" : "javac";
+            Assert.Equal(Path.Combine(ready.ToolingToolchain.Home!, "bin", javac), compile.FileName);
+            Assert.Equal(
+                ["--release", "25", "-d", output, Path.Combine(sources, "Helper.java"), Path.Combine(sources, "Main.java")],
+                compile.ArgumentList);
+            string json = System.Text.Json.JsonSerializer.Serialize(IdeaLanguageSettings.Runtimes(ready));
+            Assert.Contains("JavaSE-25", json, StringComparison.Ordinal);
+            Assert.Contains(System.Text.Json.JsonSerializer.Serialize(ready.ToolingToolchain.Home), json, StringComparison.Ordinal);
+
+            InvalidDataException tests = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                new JvmBuild(new RecordingRunner()).RunAsync(ready, new JvmBuildRequest(root, "Course", "test", []), cancellationToken: TestContext.Current.CancellationToken));
+            Assert.Contains("no JUnit", tests.Message, StringComparison.Ordinal);
+
+            ExplorerTree tree = new();
+            tree.Load(root, snapshot);
+            ExplorerNode source = tree.Rows.Single(row => row.Name == "src");
+            Assert.Equal(JvmFolder.SourceRoot, source.JvmFolder);
+            Assert.Equal("sources", source.Detail);
+            Assert.True(tree.Rows.Single(row => row.Name == "out").IsDimmed);
+            Assert.Equal("Java", FileIconSet.ForFile("Course.iml").Shape);
+        }
+        finally
+        {
+            Close(root);
+        }
+    }
+
+    [Fact]
+    public async Task ImportsIdeaLibrariesAndKeepsAMissingJar()
+    {
+        (string root, WorkspaceSnapshot snapshot) = await ImportFixture("jvm", "idea", "library");
+        try
+        {
+            JvmModule module = Assert.Single(snapshot.Modules);
+            string jar = Path.Combine(root, "lib", "demo.jar");
+            string missing = Path.Combine(root, "lib", "missing.jar");
+            Assert.Equal([jar], module.Classpath.Compile);
+            Assert.Equal([Path.Combine(root, "out", "production", "Library"), jar], module.Classpath.Runtime);
+            Assert.Equal([missing], module.AbsentLibraries);
+        }
+        finally
+        {
+            Close(root);
+        }
+    }
+
+    [Fact]
+    public async Task IdeaLaunchCompilesThenStartsJavaWithoutAWrapper()
+    {
+        (string root, WorkspaceSnapshot snapshot) = await ImportFixture("jvm", "idea", "course");
+        try
+        {
+            snapshot = WithJdk(snapshot);
+            RecordingRunner runner = new();
+            JvmLaunchConfiguration configuration = new()
+            {
+                Module = "Course",
+                MainClass = "Main",
+                JavaHome = snapshot.ToolingToolchain.Home ?? string.Empty,
+            };
+            ProcessResult ran = await new JvmLaunch(runner).RunAsync(snapshot, configuration, cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(0, ran.ExitCode);
+            Assert.Equal(2, runner.Starts.Count);
+            Assert.EndsWith(OperatingSystem.IsWindows() ? "javac.exe" : "javac", runner.Starts[0].FileName, StringComparison.Ordinal);
+            Assert.Contains("--release", runner.Starts[0].ArgumentList);
+            Assert.EndsWith(OperatingSystem.IsWindows() ? "java.exe" : "java", runner.Starts[1].FileName, StringComparison.Ordinal);
+            string output = Path.Combine(root, "out", "production", "Course");
+            Assert.Contains(runner.Starts[1].ArgumentList, argument => argument.StartsWith(output, StringComparison.Ordinal));
+
+            RecordingRunner debug = new();
+            IReadOnlyList<string> classpath = await JvmDebugClasspath.ResolveAsync(
+                snapshot, configuration, TestContext.Current.CancellationToken, new JvmBuild(debug));
+            Assert.Equal(output, classpath[0]);
+            ProcessStartInfo debugCompile = Assert.Single(debug.Starts);
+            Assert.EndsWith(OperatingSystem.IsWindows() ? "javac.exe" : "javac", debugCompile.FileName, StringComparison.Ordinal);
+            Assert.DoesNotContain("gradle", debugCompile.FileName, StringComparison.Ordinal);
+            Assert.DoesNotContain("mvn", debugCompile.FileName, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Close(root);
+        }
+    }
+
+    [Fact]
+    public async Task MavenPomWinsOverAnIdeaModuleFile()
+    {
+        string root = TestDirectory();
+        CopyTree(Fixture("jvm", "idea", "course"), root);
+        File.WriteAllText(Path.Combine(root, "pom.xml"), "<project xmlns=\"http://maven.apache.org/POM/4.0.0\"><modelVersion>4.0.0</modelVersion><groupId>example</groupId><artifactId>app</artifactId><version>1</version></project>");
+        WorkspaceTrust.Trust(root);
+        try
+        {
+            WorkspaceSnapshot snapshot = await new WorkspaceImporter().ImportAsync(root, 1, TestContext.Current.CancellationToken);
+            Assert.Equal(JvmBuildSystem.Maven, snapshot.BuildSystem);
+        }
+        finally
+        {
+            Close(root);
+        }
+    }
+
+    [Fact]
+    public async Task UntrustedIdeaImportAndBuildStartNoChildren()
+    {
+        string root = TestDirectory();
+        CopyTree(Fixture("jvm", "idea", "course"), root);
+        WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root) ?? root);
+        int starts = 0;
+        EventHandler<ChildStart> started = (_, _) => Interlocked.Increment(ref starts);
+        ChildProcesses.Started += started;
+        try
+        {
+            await Assert.ThrowsAsync<UntrustedFolderException>(() =>
+                new WorkspaceImporter().ImportAsync(root, 1, TestContext.Current.CancellationToken));
+            WorkspaceSnapshot snapshot = Snapshot(root) with { BuildSystem = JvmBuildSystem.Idea };
+            await Assert.ThrowsAsync<UntrustedFolderException>(() =>
+                new JvmBuild().RunAsync(snapshot, new JvmBuildRequest(root, "Course", "classes", []), cancellationToken: TestContext.Current.CancellationToken));
+            Assert.Equal(0, starts);
+        }
+        finally
+        {
+            ChildProcesses.Started -= started;
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task AFolderOfIdeaProjectsNamesTheModuleFolder()
+    {
+        string root = TestDirectory();
+        Directory.CreateDirectory(Path.Combine(root, "Course"));
+        File.WriteAllText(Path.Combine(root, "Course", "Course.iml"), "<module type=\"JAVA_MODULE\" version=\"4\"></module>");
+        WorkspaceTrust.Trust(root);
+        try
+        {
+            InvalidDataException error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                new WorkspaceImporter().ImportAsync(root, 1, TestContext.Current.CancellationToken));
+            Assert.Contains(".iml", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Close(root);
+        }
+    }
+
+    [Fact]
+    public void IdeaJdkTableResolvesTheNamedHome()
+    {
+        string root = TestDirectory();
+        try
+        {
+            string jdk = Directory.CreateDirectory(Path.Combine(root, "fake-jdk")).FullName;
+            string options = Path.Combine(root, "config", "IntelliJIdeaTest", "options");
+            Directory.CreateDirectory(options);
+            File.WriteAllText(Path.Combine(options, "jdk.table.xml"), "<application><component name=\"ProjectJdkTable\"><jdk version=\"2\"><name value=\"openjdk-25\" /><homePath value=\"" + jdk + "\" /></jdk></component></application>");
+            Assert.Equal(jdk, IdeaJdks.Home("openjdk-25", Path.Combine(root, "config")));
+            string missing = IdeaJdks.Missing("openjdk-25");
+            Assert.Contains("openjdk-25", missing, StringComparison.Ordinal);
+            Assert.Contains("JAVA_HOME", missing, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static async Task<(string Root, WorkspaceSnapshot Snapshot)> ImportFixture(params string[] path)
+    {
+        string root = TestDirectory();
+        CopyTree(Fixture(path), root);
+        WorkspaceTrust.Trust(root);
+        try
+        {
+            return (root, await new WorkspaceImporter().ImportAsync(root, 4, TestContext.Current.CancellationToken));
+        }
+        catch
+        {
+            Close(root);
+            throw;
+        }
+    }
+
+    private static WorkspaceSnapshot WithJdk(WorkspaceSnapshot snapshot)
+    {
+        if (snapshot.ToolingToolchain.Home is { } home && Directory.Exists(home))
+        {
+            return snapshot;
+        }
+        string jdk = Directory.CreateDirectory(Path.Combine(snapshot.Root, "jdk")).FullName;
+        JvmToolchain toolchain = snapshot.ToolingToolchain with { Home = jdk };
+        JvmModule module = snapshot.Modules[0] with
+        {
+            ImportToolchain = toolchain,
+            CompileToolchain = toolchain,
+            RuntimeToolchain = toolchain,
+        };
+        return snapshot with { ToolingToolchain = toolchain, Modules = [module] };
+    }
+
+    private static void Close(string root)
+    {
+        WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root) ?? root);
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private sealed class RecordingRunner : IChildProcessRunner
+    {
+        public List<ProcessStartInfo> Starts { get; } = [];
+
+        public Task<ProcessResult> RunAsync(ProcessStartInfo start, Action<ProcessOutput>? output = null, CancellationToken cancellationToken = default)
+        {
+            Starts.Add(start);
+            return Task.FromResult(new ProcessResult(0, [], TimeSpan.Zero));
         }
     }
 

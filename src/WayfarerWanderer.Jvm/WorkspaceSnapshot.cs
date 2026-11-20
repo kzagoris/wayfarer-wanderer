@@ -4,6 +4,7 @@ public enum JvmBuildSystem
 {
     Maven,
     Gradle,
+    Idea,
 }
 
 public enum JvmSourceKind
@@ -66,7 +67,11 @@ public sealed record JvmModule(
     JvmToolchain CompileToolchain,
     JvmToolchain RuntimeToolchain,
     IReadOnlyList<string> Tasks,
-    IReadOnlyList<JvmMainClass> MainClasses);
+    IReadOnlyList<JvmMainClass> MainClasses)
+{
+    /// <summary>Library jars named by an IntelliJ module whose files are not on disk.</summary>
+    public IReadOnlyList<string> AbsentLibraries { get; init; } = [];
+}
 
 public sealed record WorkspaceSnapshot(
     long Generation,
@@ -76,6 +81,9 @@ public sealed record WorkspaceSnapshot(
     JvmToolchain ToolingToolchain,
     IReadOnlyList<JvmModule> Modules)
 {
+    /// <summary>The folder an IntelliJ project compiles into (<c>out</c>), when this snapshot is one.</summary>
+    public string? OutputRoot { get; init; }
+
     public IReadOnlyList<JvmMainClass> MainClasses { get; } = [.. Modules.SelectMany(module => module.MainClasses)];
 
     public IReadOnlyList<string> Tasks { get; } = [.. Modules.SelectMany(module => module.Tasks).Distinct(StringComparer.Ordinal)];

@@ -1,0 +1,16 @@
+<component name="libraryTable">
+  <library name="demo">
+    <CLASSES>
+      <root url="jar://$MODULE_DIR$/lib/demo.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+  <library name="missing">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/lib/missing.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

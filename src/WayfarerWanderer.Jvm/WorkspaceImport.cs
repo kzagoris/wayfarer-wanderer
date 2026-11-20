@@ -21,7 +21,7 @@ public sealed class WorkspaceImporter : IWorkspaceImporter
     private readonly IReadOnlyList<IWorkspaceImportAdapter> adapters;
 
     public WorkspaceImporter()
-        : this([new MavenWorkspaceImportAdapter(), new GradleWorkspaceImportAdapter()])
+        : this([new MavenWorkspaceImportAdapter(), new GradleWorkspaceImportAdapter(), new IdeaWorkspaceImportAdapter()])
     {
     }
 
@@ -35,7 +35,8 @@ public sealed class WorkspaceImporter : IWorkspaceImporter
         string root = Path.GetFullPath(workspaceRoot);
         WorkspaceTrust.Check(root);
         IWorkspaceImportAdapter adapter = adapters.FirstOrDefault(candidate => candidate.CanImport(root))
-            ?? throw new InvalidDataException($"No supported Maven pom or Gradle settings exists in '{root}'.");
+            ?? throw new InvalidDataException(
+                $"No supported Maven pom or Gradle settings exists in '{root}'. An IntelliJ module is a folder that contains its .iml file.");
         return await adapter.ImportAsync(root, generation, cancellationToken).ConfigureAwait(false);
     }
 }
@@ -198,6 +199,30 @@ public sealed class GradleWorkspaceImportAdapter : IWorkspaceImportAdapter
         names.Select(name => Path.Combine(root, name)).FirstOrDefault(File.Exists);
 }
 
+public sealed class IdeaWorkspaceImportAdapter : IWorkspaceImportAdapter
+{
+    public bool CanImport(string workspaceRoot)
+    {
+        if (!Directory.Exists(workspaceRoot) || HasMavenOrGradle(workspaceRoot))
+        {
+            return false;
+        }
+        return IdeaProject.ModuleFile(workspaceRoot) is not null;
+    }
+
+    public Task<WorkspaceSnapshot> ImportAsync(string workspaceRoot, long generation, CancellationToken cancellationToken)
+    {
+        WorkspaceTrust.Check(workspaceRoot);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(IdeaProject.Read(workspaceRoot, generation));
+    }
+
+    private static bool HasMavenOrGradle(string workspaceRoot) =>
+        File.Exists(Path.Combine(workspaceRoot, "pom.xml")) ||
+        File.Exists(Path.Combine(workspaceRoot, "settings.gradle")) ||
+        File.Exists(Path.Combine(workspaceRoot, "settings.gradle.kts"));
+}
+
 internal static class WorkspaceLayouts
 {
     private static readonly (string Relative, JvmSourceKind Kind)[] Roots =
@@ -217,12 +242,18 @@ internal static class WorkspaceLayouts
             .Where(item => Directory.Exists(item.Path))
             .Select(item => new JvmSourceRoot(item.Path, item.Kind))];
 
-    public static IReadOnlyList<JvmMainClass> MainClasses(string root)
+    public static IReadOnlyList<JvmMainClass> MainClasses(string root) =>
+        MainClasses(SourceRoots(root));
+
+    public static IReadOnlyList<JvmMainClass> MainClasses(IEnumerable<JvmSourceRoot> sourceRoots)
     {
         List<JvmMainClass> mains = [];
-        IEnumerable<JvmSourceRoot> sourceRoots = SourceRoots(root).Where(item => item.Kind is JvmSourceKind.MainJava or JvmSourceKind.MainKotlin);
-        foreach (JvmSourceRoot sourceRoot in sourceRoots)
+        foreach (JvmSourceRoot sourceRoot in sourceRoots.Where(item => item.Kind is JvmSourceKind.MainJava or JvmSourceKind.MainKotlin))
         {
+            if (!Directory.Exists(sourceRoot.Path))
+            {
+                continue;
+            }
             foreach (string file in Directory.EnumerateFiles(sourceRoot.Path, "*.*", SearchOption.AllDirectories)
                          .Where(path => path.EndsWith(".java", StringComparison.OrdinalIgnoreCase) ||
                                         path.EndsWith(".kt", StringComparison.OrdinalIgnoreCase)))

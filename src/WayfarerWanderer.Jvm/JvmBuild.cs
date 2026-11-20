@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Passenger.Core;
 
 namespace WayfarerWanderer.Jvm;
@@ -98,13 +99,83 @@ public sealed class GradleJvmBuildAdapter : JvmBuildAdapter
     }
 }
 
+public sealed class IdeaJvmBuildAdapter : IJvmBuildAdapter
+{
+    public JvmBuildSystem BuildSystem => JvmBuildSystem.Idea;
+
+    public bool CanBuild(string workspaceRoot) => true;
+
+    public ProcessStartInfo Command(JvmBuildRequest request) =>
+        Command(IdeaProject.Read(request.WorkspaceRoot, 0), request);
+
+    public ProcessStartInfo Command(WorkspaceSnapshot snapshot, JvmBuildRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Task == "test")
+        {
+            throw new InvalidDataException("IntelliJ course projects have no JUnit build.");
+        }
+        if (request.Task is not ("classes" or "compile"))
+        {
+            throw new InvalidDataException($"IntelliJ course projects have no '{request.Task}' task.");
+        }
+        JvmModule module = snapshot.Module(request.Module)
+            ?? throw new InvalidDataException($"The module '{request.Module}' is not in snapshot {snapshot.Generation}.");
+        JvmToolchain toolchain = module.CompileToolchain;
+        if (string.IsNullOrWhiteSpace(toolchain.Home) || !Directory.Exists(toolchain.Home))
+        {
+            throw new InvalidDataException(IdeaJdks.Missing(toolchain.Vendor));
+        }
+        string output = module.Classpath.Runtime.FirstOrDefault()
+            ?? throw new InvalidDataException($"Module '{module.Name}' has no output directory.");
+        List<string> sources = JavaSources(module);
+        if (sources.Count == 0)
+        {
+            throw new InvalidDataException($"Module '{module.Name}' has no Java sources to compile.");
+        }
+        Directory.CreateDirectory(output);
+        List<string> arguments = [];
+        if (toolchain.LanguageVersion is int level)
+        {
+            arguments.Add("--release");
+            arguments.Add(level.ToString(CultureInfo.InvariantCulture));
+        }
+        arguments.Add("-d");
+        arguments.Add(output);
+        if (module.Classpath.Compile.Count > 0)
+        {
+            arguments.Add("-cp");
+            arguments.Add(string.Join(Path.PathSeparator, module.Classpath.Compile));
+        }
+        arguments.AddRange(sources);
+        string javac = Path.Combine(toolchain.Home, "bin", OperatingSystem.IsWindows() ? "javac.exe" : "javac");
+        return ChildProcesses.Command(javac, arguments, module.Root);
+    }
+
+    private static List<string> JavaSources(JvmModule module)
+    {
+        List<string> files = [];
+        foreach (JvmSourceRoot root in module.SourceRoots)
+        {
+            if (root.Kind is not (JvmSourceKind.MainJava or JvmSourceKind.MainKotlin) || !Directory.Exists(root.Path))
+            {
+                continue;
+            }
+            files.AddRange(Directory.EnumerateFiles(root.Path, "*.java", SearchOption.AllDirectories));
+        }
+        files.Sort(StringComparer.Ordinal);
+        return files;
+    }
+}
+
 public sealed class JvmBuild
 {
     private readonly IChildProcessRunner runner;
     private readonly IReadOnlyList<IJvmBuildAdapter> adapters;
 
     public JvmBuild(IChildProcessRunner? runner = null)
-        : this(runner ?? new ChildProcessRunner(), [new MavenJvmBuildAdapter(), new GradleJvmBuildAdapter()])
+        : this(runner ?? new ChildProcessRunner(), [new MavenJvmBuildAdapter(), new GradleJvmBuildAdapter(), new IdeaJvmBuildAdapter()])
     {
     }
 
@@ -129,7 +200,9 @@ public sealed class JvmBuild
         }
         IJvmBuildAdapter adapter = adapters.FirstOrDefault(candidate => candidate.BuildSystem == snapshot.BuildSystem && candidate.CanBuild(request.WorkspaceRoot))
             ?? throw new FileNotFoundException($"No {snapshot.BuildSystem} wrapper was found in '{request.WorkspaceRoot}'.");
-        ProcessStartInfo start = adapter.Command(request);
+        ProcessStartInfo start = adapter is IdeaJvmBuildAdapter idea
+            ? idea.Command(snapshot, request)
+            : adapter.Command(request);
         ProjectJdk.Apply(start, snapshot.ToolingToolchain.Home);
         return await runner.RunAsync(start, output, cancellationToken).ConfigureAwait(false);
     }
