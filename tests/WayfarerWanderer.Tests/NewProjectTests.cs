@@ -55,8 +55,11 @@ public sealed class NewProjectTests
         Assert.True(File.Exists(Path.Combine(destination, "README.md")));
         Assert.True(File.Exists(Path.Combine(destination, "THIRD_PARTY_NOTICES.md")));
         Assert.False(Directory.Exists(Path.Combine(destination, ".git")));
-        Assert.Equal(Path.TrimEndingDirectorySeparator(Path.GetFullPath(options.JdkHome)), ProjectJdk.Recorded(destination));
-        Assert.Contains(".wayfarer/", File.ReadAllLines(Path.Combine(destination, ".gitignore")));
+        Assert.Equal(JdkRegistry.Current.Add(options.JdkHome).Home, ProjectJdk.Recorded(destination));
+        AssertAsksForTheChosenJdk(destination, options);
+        string[] gitignore = File.ReadAllLines(Path.Combine(destination, ".gitignore"));
+        Assert.Contains(".wayfarer/*", gitignore);
+        Assert.Contains("!.wayfarer/project.json", gitignore);
 
         string descriptor = File.ReadAllText(Path.Combine(destination,
             build == NewProjectBuild.Maven ? "pom.xml" : "build.gradle.kts"));
@@ -472,14 +475,18 @@ public sealed class NewProjectTests
             Assert.False(File.Exists(Path.Combine(destination, absent)), absent);
         }
         string[] ignored = File.ReadAllLines(Path.Combine(destination, ".gitignore"));
-        Assert.Contains(".wayfarer/", ignored);
+        Assert.Contains(".wayfarer/*", ignored);
+        Assert.Contains("!.wayfarer/project.json", ignored);
         Assert.DoesNotContain(".idea/", ignored);
         Assert.DoesNotContain("*.iml", ignored);
         string readme = File.ReadAllText(Path.Combine(destination, "README.md"));
         Assert.Contains("IntelliJ", readme);
         Assert.DoesNotContain("mvnw", readme);
         Assert.True(File.Exists(Path.Combine(destination, "THIRD_PARTY_NOTICES.md")));
-        Assert.Equal(Path.TrimEndingDirectorySeparator(Path.GetFullPath(options.JdkHome)), ProjectJdk.Recorded(destination));
+        Assert.Equal(JdkRegistry.Current.Add(options.JdkHome).Home, ProjectJdk.Recorded(destination));
+        AssertAsksForTheChosenJdk(destination, options);
+        Jdk chosen = JdkRegistry.Current.Add(options.JdkHome);
+        Assert.Contains($"project-jdk-name=\"{chosen.Name}\"", File.ReadAllText(Path.Combine(destination, ".idea", "misc.xml")));
 
         using JsonDocument launch = JsonDocument.Parse(File.ReadAllText(result.LaunchConfigurationPath));
         Assert.Equal("wanderer-starter", launch.RootElement.GetProperty("module").GetString());
@@ -488,6 +495,16 @@ public sealed class NewProjectTests
         Assert.Single(await store.ListAsync(TestContext.Current.CancellationToken));
         using JsonDocument provenance = JsonDocument.Parse(File.ReadAllText(Path.Combine(destination, ".wayfarer", "template.json")));
         Assert.Empty(provenance.RootElement.GetProperty("wrappers").EnumerateObject());
+    }
+
+    /// <summary>The project file asks for the chosen JDK by requirement (schema 2), under its name in the JDK table.</summary>
+    private static void AssertAsksForTheChosenJdk(string destination, ProjectGenerationOptions options)
+    {
+        Jdk chosen = JdkRegistry.Current.Add(options.JdkHome);
+        using JsonDocument project = JsonDocument.Parse(File.ReadAllText(ProjectJdk.FileOf(destination)));
+        Assert.Equal(2, project.RootElement.GetProperty("schema").GetInt32());
+        Assert.Equal(new JdkRequirement(chosen.Name, chosen.Feature, JdkRegistry.Distribution(chosen.Vendor), JdkRequirement.Project), ProjectJdk.Requirement(destination));
+        Assert.Equal(JsonValueKind.Object, project.RootElement.GetProperty("jdk").ValueKind);
     }
 
     [Theory]

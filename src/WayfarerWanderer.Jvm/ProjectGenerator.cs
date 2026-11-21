@@ -108,9 +108,12 @@ public static class ProjectGenerator
             Directory.CreateDirectory(staging);
             ownsStaging = true;
 
+            // The project asks for the chosen JDK by its name in the person's table, so a clone resolves it from its own.
+            Jdk registered = JdkRegistry.Current.Add(values.Jdk);
+            values = values with { JdkName = registered.Name };
             WriteTemplateAsync(staging, values, cancellationToken);
             WriteTemplateProvenance(staging, values, cancellationToken);
-            WriteNew(ProjectJdk.FileOf(staging), ProjectJdk.Serialize(values.Jdk), cancellationToken);
+            WriteNew(ProjectJdk.FileOf(staging), ProjectJdk.Serialize(new JdkRequirement(registered.Name, registered.Feature, JdkRegistry.Distribution(registered.Vendor))), cancellationToken);
             WriteLaunchConfiguration(staging, values, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             options.BeforePublish?.Invoke(staging);
@@ -382,6 +385,7 @@ public static class ProjectGenerator
             .Replace("{{PACKAGE}}", values.Package, StringComparison.Ordinal)
             .Replace("{{PACKAGE_PATH}}", values.Package.Replace('.', Path.DirectorySeparatorChar), StringComparison.Ordinal)
             .Replace("{{JDK}}", values.Jdk.Replace('\\', '/'), StringComparison.Ordinal)
+            .Replace("{{JDK_NAME_XML}}", System.Security.SecurityElement.Escape(values.JdkName), StringComparison.Ordinal)
             .Replace("{{JDK_VERSION}}", values.JdkVersion.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
             .Replace("{{KOTLIN_VERSION}}", KotlinVersion, StringComparison.Ordinal)
             .Replace("{{SPRING_BOOT_VERSION}}", SpringBootVersion, StringComparison.Ordinal)
@@ -731,5 +735,9 @@ public static class ProjectGenerator
         string Package,
         string Jdk,
         int JdkVersion,
-        ProjectGenerationOptions Options);
+        ProjectGenerationOptions Options)
+    {
+        /// <summary>The chosen JDK's name in the <see cref="JdkRegistry"/>, once it is registered.</summary>
+        public string JdkName { get; init; } = "";
+    }
 }

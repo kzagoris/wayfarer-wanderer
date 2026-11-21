@@ -1,0 +1,42 @@
+{
+  "about": "How a JDK requirement (name, feature, vendor) picks a JDK from the IDE's table: the exact name (any case), else the same feature and distribution, else the same feature from any vendor; newest update first, table order on a tie. Read by the tests of the app (JdkResolutionTests) and of the host (JdkResolutionTest).",
+  "jdks": [
+    { "name": "work-17", "home": "/jdks/corretto-17.0.12", "version": "17.0.12", "feature": 17, "vendor": "Amazon.com Inc." },
+    { "name": "temurin-21", "home": "/jdks/temurin-21.0.5", "version": "21.0.5", "feature": 21, "vendor": "Eclipse Adoptium" },
+    { "name": "corretto-21", "home": "/jdks/corretto-21.0.4", "version": "21.0.4", "feature": 21, "vendor": "Amazon.com Inc." },
+    { "name": "temurin-21.0.13", "home": "/jdks/temurin-21.0.13", "version": "21.0.13", "feature": 21, "vendor": "Eclipse Adoptium" },
+    { "name": "zulu-11", "home": "/jdks/zulu-11", "version": "11", "feature": 11, "vendor": "Azul Systems, Inc." },
+    { "name": "zulu-11.0.25", "home": "/jdks/zulu-11.0.25", "version": "11.0.25", "feature": 11, "vendor": "Azul Systems, Inc." }
+  ],
+  "cases": [
+    { "why": "the exact name wins over the feature", "requirement": { "name": "work-17", "feature": 21, "vendor": "temurin" }, "chosen": "work-17" },
+    { "why": "names match in any case", "requirement": { "name": "TEMURIN-21", "feature": null, "vendor": null }, "chosen": "temurin-21" },
+    { "why": "an unknown name falls back to feature and distribution", "requirement": { "name": "gone", "feature": 21, "vendor": "corretto" }, "chosen": "corretto-21" },
+    { "why": "feature and distribution take the newest update", "requirement": { "name": null, "feature": 21, "vendor": "temurin" }, "chosen": "temurin-21.0.13" },
+    { "why": "a vendor written as the release file's implementor is its distribution", "requirement": { "name": null, "feature": 17, "vendor": "Amazon.com Inc." }, "chosen": "work-17" },
+    { "why": "a distribution not installed takes any vendor's newest", "requirement": { "name": null, "feature": 21, "vendor": "zulu" }, "chosen": "temurin-21.0.13" },
+    { "why": "no vendor takes any vendor's newest", "requirement": { "name": null, "feature": 21, "vendor": null }, "chosen": "temurin-21.0.13" },
+    { "why": "versions compare by number, a bare feature oldest", "requirement": { "name": null, "feature": 11, "vendor": null }, "chosen": "zulu-11.0.25" },
+    { "why": "a feature not installed is missing", "requirement": { "name": null, "feature": 25, "vendor": "temurin" }, "chosen": null },
+    { "why": "a name alone that is not in the table is missing", "requirement": { "name": "gone", "feature": null, "vendor": null }, "chosen": null },
+    { "why": "an empty requirement chooses nothing", "requirement": { "name": null, "feature": null, "vendor": null }, "chosen": null }
+  ],
+  "distributions": [
+    { "vendor": "Eclipse Adoptium", "distribution": "temurin" },
+    { "vendor": "temurin", "distribution": "temurin" },
+    { "vendor": "AdoptOpenJDK", "distribution": "adopt" },
+    { "vendor": "Amazon.com Inc.", "distribution": "corretto" },
+    { "vendor": "corretto", "distribution": "corretto" },
+    { "vendor": "Azul Systems, Inc.", "distribution": "zulu" },
+    { "vendor": "BellSoft", "distribution": "liberica" },
+    { "vendor": "Microsoft", "distribution": "ms" },
+    { "vendor": "JetBrains s.r.o.", "distribution": "jbr" },
+    { "vendor": "GraalVM Community", "distribution": "graalvm" },
+    { "vendor": "International Business Machines Corporation", "distribution": "semeru" },
+    { "vendor": "SAP SE", "distribution": "sapmachine" },
+    { "vendor": "Alibaba", "distribution": "dragonwell" },
+    { "vendor": "Tencent", "distribution": "kona" },
+    { "vendor": "Oracle Corporation", "distribution": "openjdk" },
+    { "vendor": null, "distribution": "jdk" }
+  ]
+}

@@ -1,2 +1,3 @@
 out/
-.wayfarer/
+.wayfarer/*
+!.wayfarer/project.json

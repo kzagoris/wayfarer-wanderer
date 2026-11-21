@@ -7,4 +7,5 @@ out/
 .classpath
 .project
 .settings/
-.wayfarer/
+.wayfarer/*
+!.wayfarer/project.json

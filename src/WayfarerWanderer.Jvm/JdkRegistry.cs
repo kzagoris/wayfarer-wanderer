@@ -160,10 +160,15 @@ public sealed class JdkRegistry
     /// <c>temurin-21</c> or <c>corretto-17</c>.</summary>
     public static string SuggestName(string? vendor, int feature) => $"{Distribution(vendor)}-{feature}";
 
-    /// <summary>The short name of a distribution, from the <c>IMPLEMENTOR</c> its <c>release</c> file names.</summary>
+    /// <summary>The short name of a distribution, from the <c>IMPLEMENTOR</c> its <c>release</c> file names; a short
+    /// name (as a project's requirement writes it) is itself.</summary>
     public static string Distribution(string? vendor)
     {
-        string v = vendor?.ToLowerInvariant() ?? string.Empty;
+        string v = vendor?.Trim().ToLowerInvariant() ?? string.Empty;
+        if (Distributions.Contains(v))
+        {
+            return v;
+        }
         return v switch
         {
             _ when v.Contains("adoptium", StringComparison.Ordinal) || v.Contains("temurin", StringComparison.Ordinal) => "temurin",
@@ -182,6 +187,9 @@ public sealed class JdkRegistry
             _ => "jdk",
         };
     }
+
+    private static readonly HashSet<string> Distributions =
+        ["temurin", "adopt", "corretto", "zulu", "liberica", "ms", "jbr", "graalvm", "semeru", "sapmachine", "dragonwell", "kona", "openjdk", "jdk"];
 
     /// <summary>The Java SDKs JetBrains products' <c>jdk.table.xml</c> files name, newest product first, each name
     /// once, with <c>$USER_HOME$</c> expanded. Non-Java SDKs (Python, Android, …) are left out.</summary>

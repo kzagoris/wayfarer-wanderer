@@ -156,7 +156,7 @@ public sealed class JvmRuntimeFoundationTests
         string jdk = Directory.CreateDirectory(Path.Combine(root, "chosen-jdk")).FullName;
         File.WriteAllText(Path.Combine(root, "pom.xml"), "<project xmlns=\"http://maven.apache.org/POM/4.0.0\"><modelVersion>4.0.0</modelVersion><groupId>example</groupId><artifactId>app</artifactId><version>1</version></project>");
         Directory.CreateDirectory(Path.Combine(root, ".wayfarer"));
-        File.WriteAllText(ProjectJdk.FileOf(root), ProjectJdk.Serialize(jdk));
+        File.WriteAllText(ProjectJdk.FileOf(root), ProjectJdk.Serialize(new JdkRequirement("chosen", 21, null)));
         if (OperatingSystem.IsWindows())
         {
             File.WriteAllText(Path.Combine(root, "mvnw.cmd"), "@echo off\r\necho JAVA_HOME=%JAVA_HOME%\r\n");
