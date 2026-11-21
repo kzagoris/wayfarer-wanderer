@@ -115,14 +115,19 @@ final class IdeaEvaluator {
             jdkName = project.getAttribute("project-jdk-name");
         }
         Integer level = languageLevel(project == null ? null : project.getAttribute("languageLevel"));
-        // A JDK recorded for the project in Wayfarer wins; otherwise the one of that name in the IDE's table (which holds
-        // IntelliJ's JDK table under IntelliJ's names), then JAVA_HOME.
-        String home = ImportJvms.usable(params.jdk()) != null ? params.jdk() : ImportJvms.named(jdkName, params.jdks());
+        // The module's own JDK name is its requirement, with its language level as the feature: the JDK of that name in
+        // the IDE's table (which holds IntelliJ's JDK table under IntelliJ's names), else one of that feature. The host
+        // settles it against the table; none meeting it leaves the module without a JDK. A module that names none takes
+        // the JDK the workspace resolved to in Wayfarer, then JAVA_HOME; the import JVM falls back the same way.
+        Protocol.Requirement required = jdkName == null ? null : new Protocol.Requirement(jdkName, level, null, "idea");
+        Protocol.Jdk named = ImportJvms.choose(required, ImportJvms.usableJdks(params));
+        String home = named != null ? ImportJvms.usable(named.home()).home()
+                : ImportJvms.usable(params.jdk()) != null ? params.jdk() : null;
         if (home == null) {
             String javaHome = System.getenv("JAVA_HOME");
             home = javaHome == null || javaHome.isBlank() ? null : Path.of(javaHome).toAbsolutePath().normalize().toString();
         }
-        Protocol.JvmEnvironment jvm = new Protocol.JvmEnvironment(home, level, jdkName);
+        Protocol.JvmEnvironment jvm = new Protocol.JvmEnvironment(required == null ? home : null, level, jdkName, required);
 
         String id = name;
         List<Protocol.SourceSet> sets = new ArrayList<>();

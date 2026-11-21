@@ -12,8 +12,8 @@
         "displayName": "core",
         "baseDirectory": "/work/layouts/core",
         "languageIds": ["java"],
-        "jvmBuildTarget": { "javaHome": "/jdks/corretto-8", "javaVersion": 8, "vendor": "Amazon.com Inc." },
-        "runEnvironment": { "javaHome": "/jdks/corretto-8", "javaVersion": 8, "vendor": "Amazon.com Inc." },
+        "jvmBuildTarget": { "javaHome": "/jdks/corretto-8", "javaVersion": 8, "vendor": "Amazon.com Inc.", "required": { "name": null, "feature": 8, "vendor": null, "source": "gradle-toolchain" } },
+        "runEnvironment": { "javaHome": null, "javaVersion": 11, "vendor": null, "required": { "name": null, "feature": 11, "vendor": "temurin", "source": "gradle-toolchain" } },
         "sourceSets": [
           {
             "id": "core:main",

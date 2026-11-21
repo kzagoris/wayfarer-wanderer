@@ -129,12 +129,23 @@ public final class WayfarerModelBuilder implements ToolingModelBuilder {
                 version = target == null ? null : Integer.valueOf(target.getMajorVersion());
             }
         }
+        Map<String, Object> required = null;
+        if (spec.getLanguageVersion().isPresent()) {
+            // What the toolchain asks for, met or not: the host looks for an unmet one in the IDE's table.
+            required = new LinkedHashMap<>();
+            required.put("name", null);
+            required.put("feature", version);
+            required.put("vendor", null);
+            required.put("source", "gradle-toolchain");
+        }
         compile.put("javaHome", compileHome);
         compile.put("javaVersion", version);
         compile.put("vendor", null);
+        compile.put("required", required);
         run.put("javaHome", runHome != null ? runHome : compileHome);
         run.put("javaVersion", version);
         run.put("vendor", null);
+        run.put("required", required);
     }
 
     private static Set<File> testClasses(Project project) {

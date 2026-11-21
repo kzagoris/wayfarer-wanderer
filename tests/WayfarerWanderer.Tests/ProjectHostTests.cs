@@ -166,6 +166,12 @@ public sealed class ProjectHostTests
         Assert.Equal(24, snapshot.Modules[0].ImportToolchain.LanguageVersion);
         Assert.Equal(8, snapshot.Modules[0].CompileToolchain.LanguageVersion);
         Assert.Equal("Could not resolve org.example:missing:1.0", snapshot.Modules[0].Problem);
+        Assert.Equal(new JdkRequirement(null, 8, null, JdkRequirement.GradleToolchain), snapshot.Modules[0].CompileToolchain.Requirement);
+        Assert.False(snapshot.Modules[0].CompileToolchain.Missing);
+        Assert.True(snapshot.Modules[0].RuntimeToolchain.Missing);
+        Assert.Equal(new JdkRequirement(null, 11, "temurin", JdkRequirement.GradleToolchain), snapshot.Modules[0].RuntimeToolchain.Requirement);
+        Assert.Null(app.CompileToolchain.Requirement);
+        Assert.False(snapshot.Modules[0].ImportToolchain.Missing);
         Assert.Contains(snapshot.Modules[0].SourceRoots, root => root.Kind == JvmSourceKind.Generated);
         Assert.Equal(3, snapshot.BuildInputs.Count);
         Assert.Equal(-1, snapshot.BuildInputs[2].Length);
@@ -177,7 +183,8 @@ public sealed class ProjectHostTests
     [Fact]
     public void RequestsAreWrittenAsTheExamplesSay()
     {
-        HostRequest request = new(7, HostProtocol.Import, new HostImportParams("/work/layouts", 12, null, ["-slow"], null,
+        HostRequest request = new(7, HostProtocol.Import, new HostImportParams("/work/layouts", 12, null,
+            new HostRequirement("temurin-24", 24, "temurin", JdkRequirement.Project), ["-slow"], null,
             [new HostJdk("temurin-24", "/jdks/temurin-24.0.2", "24.0.2", 24, "Eclipse Adoptium")]));
         JsonElement written = JsonSerializer.SerializeToElement(request, HostProtocol.Json);
         using JsonDocument expected = JsonDocument.Parse(File.ReadAllText(Example("request-import.json")));
@@ -185,6 +192,28 @@ public sealed class ProjectHostTests
         JsonElement cancel = JsonSerializer.SerializeToElement(new HostRequest(8, HostProtocol.Cancel, new HostCancelParams(7)), HostProtocol.Json);
         using JsonDocument expectedCancel = JsonDocument.Parse(File.ReadAllText(Example("request-cancel.json")));
         Assert.True(JsonElement.DeepEquals(expectedCancel.RootElement, cancel), cancel.GetRawText());
+    }
+
+    [Fact]
+    public void AMissingJdkRequirementSurvivesAWarmReopen()
+    {
+        string root = Directory.CreateTempSubdirectory("wayfarer-cache-jdk-").FullName;
+        WorkspaceTrust.Trust(root);
+        try
+        {
+            HostWorkspaceResult result = Value("result-import.json", "result").Deserialize<HostWorkspaceResult>(HostProtocol.Json)! with { Root = root };
+            string cache = Path.Combine(root, ".state", WorkspaceModelCache.FileName);
+            WorkspaceModelCache.Write(cache, result, new HostJvm(root, "21", 21, null));
+
+            JvmModule module = Assert.Single(WorkspaceModelCache.Read(cache, root)!.Snapshot.Modules);
+            Assert.True(module.RuntimeToolchain.Missing);
+            Assert.Equal(new JdkRequirement(null, 11, "temurin", JdkRequirement.GradleToolchain), module.RuntimeToolchain.Requirement);
+        }
+        finally
+        {
+            WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root) ?? root);
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     private static Task<JvmProjectHost> StartAsync() =>

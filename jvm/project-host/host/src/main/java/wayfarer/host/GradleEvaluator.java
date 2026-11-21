@@ -121,9 +121,14 @@ final class GradleEvaluator {
         if (environment == null) {
             return null;
         }
-        String home = environment.javaHome() != null ? environment.javaHome() : importJvm.home();
         Integer version = environment.javaVersion() != null ? environment.javaVersion() : importJvm.feature();
-        return new Protocol.JvmEnvironment(home, version, environment.vendor() != null ? environment.vendor() : Jvms.at(Path.of(home)).vendor());
+        if (environment.javaHome() == null && environment.required() != null) {
+            // A toolchain Gradle did not find stays without a home: the host looks for it in the IDE's table next.
+            return new Protocol.JvmEnvironment(null, version, environment.vendor(), environment.required());
+        }
+        String home = environment.javaHome() != null ? environment.javaHome() : importJvm.home();
+        return new Protocol.JvmEnvironment(home, version, environment.vendor() != null ? environment.vendor() : Jvms.at(Path.of(home)).vendor(),
+                environment.required());
     }
 
     private static List<String> rootInputs(Path root) {

@@ -36,12 +36,13 @@ public final class Protocol {
     }
 
     /**
-     * Import the workspace at {@code folder}. {@code jdk} is the JDK the workspace records for itself, if any,
-     * {@code mavenProfiles} the profiles it asks for beyond Maven's own activation (a leading '-' turns one off), and
+     * Import the workspace at {@code folder}. {@code jdk} is the home of the JDK the workspace resolved to on this
+     * machine, if any, and {@code jdkRequired} what the workspace asks for (its {@code .wayfarer/project.json}), met or
+     * not; {@code mavenProfiles} the profiles it asks for beyond Maven's own activation (a leading '-' turns one off), and
      * {@code buildTool} an installation to use where the workspace has no wrapper. {@code jdks} are the JDKs the IDE's
      * table holds, by name: the host chooses among these and never searches the disk for JDKs itself.
      */
-    public record ImportParams(String folder, long generation, String jdk, List<String> mavenProfiles, String buildTool, List<Jdk> jdks) {
+    public record ImportParams(String folder, long generation, String jdk, Requirement jdkRequired, List<String> mavenProfiles, String buildTool, List<Jdk> jdks) {
     }
 
     /** A JDK of the IDE's table: the name projects refer to it by, its home, version string, feature release and vendor. */
@@ -87,7 +88,18 @@ public final class Protocol {
             String problem) {
     }
 
-    public record JvmEnvironment(String javaHome, Integer javaVersion, String vendor) {
+    /**
+     * A JDK a module compiles or runs with. {@code required} is what the module asks for, from its build's own
+     * declaration or the project's; a {@code javaHome} of null with a requirement means no JDK in the table meets it.
+     */
+    public record JvmEnvironment(String javaHome, Integer javaVersion, String vendor, Requirement required) {
+    }
+
+    /**
+     * A JDK asked for: a name in the IDE's table, a feature release and a distribution (temurin, corretto, …), any of
+     * them null, and where the request came from: gradle-toolchain, maven-release, idea, project or gradle-daemon.
+     */
+    public record Requirement(String name, Integer feature, String vendor, String source) {
     }
 
     public record SourceSet(

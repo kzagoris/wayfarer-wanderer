@@ -32,6 +32,7 @@ final class Targets {
     private static final String BUILD_HELPER = "org.codehaus.mojo:build-helper-maven-plugin";
     private static final String KOTLIN = "org.jetbrains.kotlin:kotlin-maven-plugin";
     private static final String COMPILER = "org.apache.maven.plugins:maven-compiler-plugin";
+    private static final String TOOLCHAINS = "org.apache.maven.plugins:maven-toolchains-plugin";
     private static final String BOOT = "org.springframework.boot:spring-boot-maven-plugin";
     private static final String EXEC = "org.codehaus.mojo:exec-maven-plugin";
 
@@ -54,7 +55,11 @@ final class Targets {
         boolean kotlin = plugin(project, KOTLIN) != null;
         target.languageIds = kotlin ? List.of("java", "kotlin") : List.of("java");
         Integer release = release(project);
-        Environment jvm = new Environment(request.javaHome, release != null ? release : feature(request.javaVersion), null);
+        Requirement required = toolchain(project);
+        // A release is a language level the import JDK compiles for; only a toolchains requirement asks for another JDK,
+        // which the host then looks for in the IDE's table.
+        Environment jvm = new Environment(required == null ? request.javaHome : null,
+                release != null ? release : required != null ? required.feature() : feature(request.javaVersion), null, required);
         target.jvmBuildTarget = jvm;
         target.runEnvironment = jvm;
         target.problem = problem;
@@ -256,6 +261,29 @@ final class Targets {
         return null;
     }
 
+    /** The JDK maven-toolchains-plugin asks for (its jdk version and vendor), in its own or an execution's configuration. */
+    private static Requirement toolchain(MavenProject project) {
+        Plugin toolchains = plugin(project, TOOLCHAINS);
+        if (toolchains == null) {
+            return null;
+        }
+        List<Object> configurations = new ArrayList<>();
+        configurations.add(toolchains.getConfiguration());
+        toolchains.getExecutions().forEach(execution -> configurations.add(execution.getConfiguration()));
+        for (Object configuration : configurations) {
+            if (configuration instanceof Xpp3Dom dom && dom.getChild("toolchains") != null && dom.getChild("toolchains").getChild("jdk") != null) {
+                Xpp3Dom jdk = dom.getChild("toolchains").getChild("jdk");
+                String version = text(jdk.getChild("version"));
+                Integer feature = feature(version == null ? null : version.strip().replaceFirst("^[\\[(]", ""));
+                if (feature != null) {
+                    String vendor = text(jdk.getChild("vendor"));
+                    return new Requirement(null, feature, vendor == null || vendor.isBlank() || vendor.contains("${") ? null : vendor.strip(), "maven-release");
+                }
+            }
+        }
+        return null;
+    }
+
     static Integer feature(String version) {
         if (version == null || version.isBlank() || version.contains("${")) {
             return null;
@@ -327,7 +355,10 @@ final class Targets {
         String problem;
     }
 
-    record Environment(String javaHome, Integer javaVersion, String vendor) {
+    record Environment(String javaHome, Integer javaVersion, String vendor, Requirement required) {
+    }
+
+    record Requirement(String name, Integer feature, String vendor, String source) {
     }
 
     static final class SourceSet {

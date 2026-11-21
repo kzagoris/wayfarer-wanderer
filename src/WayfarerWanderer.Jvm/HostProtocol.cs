@@ -34,10 +34,13 @@ public sealed record HostReady(int Protocol, HostJvm Java, long Pid);
 /// than searching the disk itself.</summary>
 public sealed record HostJdk(string Name, string Home, string? Version, int? Feature, string? Vendor);
 
+/// <summary>An import: <see cref="Jdk"/> is the home the workspace's JDK resolved to on this machine, if any, and
+/// <see cref="JdkRequired"/> what the workspace asks for (<see cref="ProjectJdk.Requirement"/>), met or not.</summary>
 public sealed record HostImportParams(
     string Folder,
     long Generation,
     string? Jdk,
+    HostRequirement? JdkRequired,
     IReadOnlyList<string> MavenProfiles,
     string? BuildTool,
     IReadOnlyList<HostJdk> Jdks);
@@ -72,7 +75,18 @@ public sealed record HostBuildTarget(
     IReadOnlyList<string>? AbsentLibraries,
     string? Problem);
 
-public sealed record HostJvmEnvironment(string? JavaHome, int? JavaVersion, string? Vendor);
+/// <summary>A JDK a module compiles or runs with; <see cref="Required"/> is what it asks for, and a null
+/// <see cref="JavaHome"/> with one means no JDK in the table meets it.</summary>
+public sealed record HostJvmEnvironment(string? JavaHome, int? JavaVersion, string? Vendor, HostRequirement? Required = null);
+
+/// <summary>A JDK asked for, as <see cref="JdkRequirement"/> carries it on the wire.</summary>
+public sealed record HostRequirement(string? Name, int? Feature, string? Vendor, string? Source)
+{
+    public static HostRequirement? From(JdkRequirement? requirement) =>
+        requirement is null ? null : new(requirement.Name, requirement.Feature, requirement.Vendor, requirement.Source);
+
+    public JdkRequirement ToRequirement() => new(Name, Feature, Vendor, Source);
+}
 
 public sealed record HostSourceSet(
     string Id,
@@ -179,7 +193,9 @@ public static class HostModel
         };
 
     private static JvmToolchain Toolchain(HostJvmEnvironment? environment) =>
-        environment is null ? new JvmToolchain(null, null, null) : new JvmToolchain(environment.JavaHome, environment.JavaVersion, environment.Vendor);
+        environment is null
+            ? new JvmToolchain(null, null, null)
+            : new JvmToolchain(environment.JavaHome, environment.JavaVersion, environment.Vendor) { Requirement = environment.Required?.ToRequirement() };
 
     private static IReadOnlyList<string> Paths(IReadOnlyList<JvmClasspathEntry>? entries) =>
         entries is null ? [] : [.. entries.Select(entry => entry.Path)];

@@ -6,7 +6,8 @@ import java.util.List;
 
 /**
  * Finds which build tool owns a workspace and asks its evaluator for the model: Maven where there is a pom.xml, else
- * Gradle where there is a settings or build script, else an IntelliJ module where the folder holds its .iml.
+ * Gradle where there is a settings or build script, else an IntelliJ module where the folder holds its .iml. Each
+ * module's JDK requirement is then settled against the IDE's table ({@link ImportJvms#settle}).
  */
 public final class Workspaces {
     private final MavenEvaluator maven = new MavenEvaluator();
@@ -22,15 +23,15 @@ public final class Workspaces {
             throw new Problems.Problem(folder + " is not a folder");
         }
         if (Files.isRegularFile(folder.resolve("pom.xml"))) {
-            return maven.evaluate(folder, params, context);
+            return ImportJvms.settle(maven.evaluate(folder, params, context), params);
         }
         for (String name : new String[] {"settings.gradle.kts", "settings.gradle", "build.gradle.kts", "build.gradle"}) {
             if (Files.isRegularFile(folder.resolve(name))) {
-                return gradle.evaluate(folder, params, context);
+                return ImportJvms.settle(gradle.evaluate(folder, params, context), params);
             }
         }
         if (IdeaEvaluator.owns(folder)) {
-            return idea.evaluate(folder, params);
+            return ImportJvms.settle(idea.evaluate(folder, params), params);
         }
         List<String> modules = IdeaEvaluator.moduleFolders(folder);
         if (!modules.isEmpty()) {

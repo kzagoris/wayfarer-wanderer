@@ -205,6 +205,70 @@ public sealed class WorkspaceImportTests
     }
 
     [Fact]
+    public async Task AToolchainNoJdkMeetsIsAMissingRequirementWhileTheRestStands()
+    {
+        // Above any JDK on this machine, so the test cannot pass by accident where every JDK is installed.
+        int absent = Math.Max(Environment.Version.Major, JdkRegistry.Current.All().Select(jdk => jdk.Feature).DefaultIfEmpty(0).Max()) + 40;
+        string root = Copy("gradle-layouts");
+        WorkspaceTrust.Trust(root);
+        try
+        {
+            string build = Path.Combine(root, "app", "build.gradle.kts");
+            await File.WriteAllTextAsync(build, (await File.ReadAllTextAsync(build, TestContext.Current.CancellationToken))
+                .Replace("JavaLanguageVersion.of(22)", $"JavaLanguageVersion.of({absent})", StringComparison.Ordinal), TestContext.Current.CancellationToken);
+            // The fixture turns off toolchain download (gradle.properties), so nothing is fetched.
+
+            WorkspaceSnapshot snapshot = await new ProjectHostImporter().ImportAsync(root, 1, TestContext.Current.CancellationToken);
+            JvmModule app = snapshot.Module("app")!;
+            Assert.True(app.CompileToolchain.Missing);
+            Assert.True(app.RuntimeToolchain.Missing);
+            Assert.Equal(new JdkRequirement(null, absent, null, JdkRequirement.GradleToolchain), app.RuntimeToolchain.Requirement);
+            Assert.Contains($"no JDK {absent}", app.Problem, StringComparison.Ordinal);
+            JvmModule core = snapshot.Module("core")!;
+            Assert.False(core.CompileToolchain.Missing);
+            Assert.Null(core.Problem);
+            Assert.NotNull(app.ImportToolchain.Home);
+            Assert.NotEmpty(app.SourceSets);
+        }
+        finally
+        {
+            await ProjectHosts.ReleaseAsync(root);
+            WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root));
+            Delete(root);
+        }
+    }
+
+    [Fact]
+    public async Task AnIntelliJModuleNamingAnAbsentJdkIsAMissingRequirement()
+    {
+        string root = Copy("idea/course");
+        WorkspaceTrust.Trust(root);
+        try
+        {
+            string iml = Path.Combine(root, "Course.iml");
+            await File.WriteAllTextAsync(iml, (await File.ReadAllTextAsync(iml, TestContext.Current.CancellationToken))
+                .Replace("<orderEntry type=\"inheritedJdk\" />", "<orderEntry type=\"jdk\" jdkName=\"nowhere-jdk-77\" jdkType=\"JavaSDK\" />", StringComparison.Ordinal),
+                TestContext.Current.CancellationToken);
+            // The language level is the feature asked for when the name is not in the table: one above any JDK here.
+            int absent = Math.Max(Environment.Version.Major, JdkRegistry.Current.All().Select(jdk => jdk.Feature).DefaultIfEmpty(0).Max()) + 40;
+            string misc = Path.Combine(root, ".idea", "misc.xml");
+            await File.WriteAllTextAsync(misc, (await File.ReadAllTextAsync(misc, TestContext.Current.CancellationToken))
+                .Replace("languageLevel=\"JDK_25\"", $"languageLevel=\"JDK_{absent}\"", StringComparison.Ordinal), TestContext.Current.CancellationToken);
+
+            WorkspaceSnapshot snapshot = await new ProjectHostImporter().ImportAsync(root, 1, TestContext.Current.CancellationToken);
+            JvmModule module = Assert.Single(snapshot.Modules);
+            Assert.True(module.CompileToolchain.Missing);
+            Assert.Equal(new JdkRequirement("nowhere-jdk-77", absent, null, JdkRequirement.Idea), module.CompileToolchain.Requirement);
+        }
+        finally
+        {
+            await ProjectHosts.ReleaseAsync(root);
+            WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root));
+            Delete(root);
+        }
+    }
+
+    [Fact]
     public async Task OneHostServesTwoWorkspacesAndEndsWithTheLast()
     {
         string first = Copy("maven-layouts");

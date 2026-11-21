@@ -53,7 +53,14 @@ public sealed record JvmClasspath
     }
 }
 
-public sealed record JvmToolchain(string? Home, int? LanguageVersion, string? Vendor);
+public sealed record JvmToolchain(string? Home, int? LanguageVersion, string? Vendor)
+{
+    /// <summary>What the module asked for (its build's declaration or the project's), met or not; null for nothing.</summary>
+    public JdkRequirement? Requirement { get; init; }
+
+    /// <summary>The module asked for a JDK and no JDK on this machine meets it.</summary>
+    public bool Missing => Home is null && Requirement is not null;
+}
 
 public sealed record JvmMainClass(string ClassName, string SourcePath)
 {

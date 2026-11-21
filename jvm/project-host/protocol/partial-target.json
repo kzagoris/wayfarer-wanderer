@@ -6,8 +6,8 @@
       "displayName": "app",
       "baseDirectory": "/work/layouts/app",
       "languageIds": ["java"],
-      "jvmBuildTarget": { "javaHome": "/jdks/openjdk-22.0.1", "javaVersion": 22, "vendor": "Oracle Corporation" },
-      "runEnvironment": { "javaHome": "/jdks/openjdk-22.0.1", "javaVersion": 22, "vendor": "Oracle Corporation" },
+      "jvmBuildTarget": { "javaHome": "/jdks/openjdk-22.0.1", "javaVersion": 22, "vendor": "Oracle Corporation", "required": null },
+      "runEnvironment": { "javaHome": "/jdks/openjdk-22.0.1", "javaVersion": 22, "vendor": "Oracle Corporation", "required": null },
       "sourceSets": [
         {
           "id": "app:main",

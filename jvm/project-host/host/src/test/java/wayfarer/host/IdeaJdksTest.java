@@ -34,9 +34,9 @@ class IdeaJdksTest {
         Path jdk = fakeJdk(root.resolve("jdks").resolve("wanted"), wanted + ".0.1");
         Path project = Files.createDirectories(root.resolve("project").resolve("gradle"));
         Files.writeString(project.resolve("gradle-daemon-jvm.properties"), "toolchainVersion=" + wanted + System.lineSeparator());
-        Protocol.ImportParams without = new Protocol.ImportParams(project.getParent().toString(), 1, null, List.of(), null, List.of());
+        Protocol.ImportParams without = new Protocol.ImportParams(project.getParent().toString(), 1, null, null, List.of(), null, List.of());
         assertThrows(Problems.Problem.class, () -> ImportJvms.forGradle(project.getParent(), without));
-        Protocol.ImportParams with = new Protocol.ImportParams(project.getParent().toString(), 1, null, List.of(), null,
+        Protocol.ImportParams with = new Protocol.ImportParams(project.getParent().toString(), 1, null, null, List.of(), null,
                 List.of(new Protocol.Jdk("temurin-" + wanted, jdk.toString(), wanted + ".0.1", wanted, "Eclipse Adoptium")));
         assertEquals(jdk.toAbsolutePath().normalize().toString(), ImportJvms.forGradle(project.getParent(), with).home());
     }
