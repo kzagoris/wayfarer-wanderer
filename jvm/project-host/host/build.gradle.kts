@@ -12,6 +12,8 @@ dependencies {
     implementation(project(":gradle-model"))
     implementation("com.google.code.gson:gson:2.13.1")
     implementation("org.gradle:gradle-tooling-api:9.7.1")
+    // Resolves IntelliJ repository libraries (a maven-id whose jars are not on disk) without a project's own Maven.
+    implementation("org.apache.maven.resolver:maven-resolver-supplier:1.9.27")
     // The Tooling API logs through SLF4J; the simple binding writes to standard error, never to the protocol.
     runtimeOnly("org.slf4j:slf4j-simple:2.0.17")
     testImplementation("org.junit.jupiter:junit-jupiter:5.13.4")

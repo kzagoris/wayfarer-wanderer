@@ -627,7 +627,8 @@ public sealed class ProjectHostImporter : IWorkspaceImporter
         JvmProjectHost host = await ProjectHosts.ForAsync(root, cancellationToken).ConfigureAwait(false);
         int evaluated = 0;
         HostImportParams parameters = new(root, generation, ProjectJdk.Resolve(root)?.Home, HostRequirement.From(ProjectJdk.Requirement(root)), ProjectJdk.MavenProfiles(root), BuildTool,
-            [.. JdkRegistry.Current.All().Select(jdk => new HostJdk(jdk.Name, jdk.Home, jdk.Version, jdk.Feature, jdk.Vendor))]);
+            [.. JdkRegistry.Current.All().Select(jdk => new HostJdk(jdk.Name, jdk.Home, jdk.Version, jdk.Feature, jdk.Vendor))],
+            IdeaPlatform.Current.PathVariables(), [.. IdeaPlatform.Current.GlobalLibraries().Select(HostLibrary.From)]);
         JsonElement answer = await host.RequestAsync(HostProtocol.Import, parameters, partial =>
         {
             string? module = partial.Deserialize<HostTargetEvaluated>(HostProtocol.Json)?.Target.Id;

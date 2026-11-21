@@ -3,7 +3,7 @@
 Draft for review, 2026-11-21. It compares IntelliJ IDEA's Project Structure, SDK table and JDK download with what
 Wayfarer has, and proposes a design to bring Wayfarer close to it.
 
-**Status:** steps 1 to 4 of §4 are built. Where the build settled something differently from the first draft, the
+**Status:** steps 1 to 5 of §4 are built. Where the build settled something differently from the first draft, the
 sections below now describe what was built.
 
 ## 1. How IntelliJ IDEA does it
@@ -92,7 +92,7 @@ from `gradle-daemon-jvm.properties`. Maven picks toolchains from `~/.m2/toolchai
 | JDKs for Gradle and Maven | Step 3: `BuildJdks` passes the table to the wrappers (`-Porg.gradle.java.installations.paths`, `--global-toolchains`) and the host passes it to the Tooling API (`GradleJdks.java`). | None. |
 | JDKs for language servers | `java.configuration.runtimes` lists module homes, plus the table's JDK for a feature a module asks for. `java.import.gradle.arguments` carries the same installation paths. | m2e in JDT LS reads no toolchains file (§3.3). |
 | Download | Step 4: `JdkCatalogue` (foojay) and `JdkDownloader` in `JdkDownloads.cs`, the Download JDK dialog, tooling-JVM recovery. The fixtures still turn Gradle's own foojay download off. | No vendor signature checks yet; no proxy or catalogue setting in Settings (§3.4). |
-| IntelliJ modules | `IdeaEvaluator` reads one `.iml`: source folders, `library` entries, the JDK by name (its release read from the name when the table lacks it) and the module's own language level. | No `scope`, no `module` dependencies, no `module-library`, no `$MAVEN_REPOSITORY$`. Repository libraries with missing jars show as `AbsentLibraries` instead of being downloaded. Nothing writes `.iml` or library files. |
+| IntelliJ modules | Step 5: `IdeaEvaluator` reads every module `.idea/modules.xml` lists (or the folder's one `.iml`): scopes, `module` dependencies with exports, project, global and module libraries, jar directories, macros and path variables, repository libraries (downloaded with Maven Resolver) and Kotlin's bundled runtime. IntelliJ modules compile in dependency order. | Nothing writes `.iml` or library files (step 6). |
 | UI | New Project registers the chosen JDK and writes schema 2. The IntelliJ template writes the registry name as `project-jdk-name`. Settings has no JDK page. | No Project Structure dialog, no JDK list, no library editor. |
 
 ## 3. Proposed design
@@ -279,6 +279,8 @@ Where the build differs from the bullets below, the *as built* notes say so.
 For projects without a build tool, Wayfarer reads and writes IntelliJ's own files. A project edited in one IDE then
 opens the same in the other.
 
+*Step 5 built the reader, the platform files, Kotlin and repository libraries; the writer is step 6.*
+
 - **Reader (host, `IdeaEvaluator`):** honour `scope` (compile/test/runtime/provided into the right classpath), `module`
   entries (another module's output as a `moduleRef`, `exported` passed on), `module-library`, `.idea/modules.xml`
   with several modules, and the `$MAVEN_REPOSITORY$`, `$USER_HOME$` and path-variable macros.
@@ -294,6 +296,15 @@ opens the same in the other.
 - **Repository libraries:** when a `type="repository"` library's jars are missing, resolve its `maven-id` with Maven
   Resolver in the host and download into `~/.m2`. This needs a resolver that doesn't depend on a project wrapper, so
   the host carries Maven Resolver as its own dependency. Only libraries without a `maven-id` stay `AbsentLibraries`.
+  *As built:* `maven-resolver-supplier` 1.9 (`RepositoryLibraries.java`). The local repository is
+  `$MAVEN_REPOSITORY$` (a path variable, else `~/.m2/settings.xml`'s `localRepository`, else `~/.m2/repository`).
+  Remotes are Maven Central, or `WAYFARER_MAVEN_REPOSITORIES` (comma separated). Mirrors and credentials in
+  `settings.xml` aren't read yet.
+- **As built, scopes:** COMPILE goes everywhere; TEST to the test classpaths; RUNTIME to both runtime classpaths;
+  PROVIDED to both compile classpaths and the test runtime. A dependency module gives compile its classes and its
+  exported entries (theirs in turn), and runtime everything it runs with. An unresolved macro is a module `Problem`
+  naming the variable and the library; Wayfarer's own path variables live in `path-variables.json` (`IdeaPlatform`).
+  "Set path variable…" in the window comes with Project Structure's Problems page (step 6).
 - **Writer (client):** "Add library → From Maven…" (coordinates, transitive yes or no, scope) writes
   `.idea/libraries/<name>.xml` and the `orderEntry`. "Add jars or folder" writes a plain library. Writes are
   atomic, keep unknown elements and attributes, and trigger the normal reimport through `buildInputs`.
@@ -346,7 +357,7 @@ Each step stands alone and comes with tests, following the plan's rule.
 4. **Done.** `JdkDownloader` against foojay, with a fake catalogue server in tests (checksum mismatch, Cancel, cut-off
    download, macOS layout, a zip without exec bits, an entry escaping staging, two concurrent requests); the
    Download JDK dialog; tooling-JVM recovery. The tooling-JVM setting is a registry name (left from step 2).
-5. `IdeaEvaluator`: scopes, module dependencies, several modules, macros and `path.macros.xml`, global libraries,
+5. **Done.** `IdeaEvaluator`: scopes, module dependencies, several modules, macros and `path.macros.xml`, global libraries,
    repository-library resolution, Kotlin runtime library.
 6. Project Structure dialog; library writer for IntelliJ projects; JDK list with rename, remove and missing homes
    (§3.1); JDK sources roots.

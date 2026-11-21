@@ -41,8 +41,21 @@ public final class Protocol {
      * not; {@code mavenProfiles} the profiles it asks for beyond Maven's own activation (a leading '-' turns one off), and
      * {@code buildTool} an installation to use where the workspace has no wrapper. {@code jdks} are the JDKs the IDE's
      * table holds, by name: the host chooses among these and never searches the disk for JDKs itself.
+     * {@code pathVariables} are the IntelliJ path variables ({@code $NAME$} in project files) and {@code globalLibraries}
+     * the IDE's application-level libraries, Wayfarer's own first and then IntelliJ's, which IntelliJ projects refer to.
      */
-    public record ImportParams(String folder, long generation, String jdk, Requirement jdkRequired, List<String> mavenProfiles, String buildTool, List<Jdk> jdks) {
+    public record ImportParams(String folder, long generation, String jdk, Requirement jdkRequired, List<String> mavenProfiles, String buildTool, List<Jdk> jdks,
+            Map<String, String> pathVariables, List<Library> globalLibraries) {
+        public ImportParams(String folder, long generation, String jdk, Requirement jdkRequired, List<String> mavenProfiles, String buildTool, List<Jdk> jdks) {
+            this(folder, generation, jdk, jdkRequired, mavenProfiles, buildTool, jdks, null, null);
+        }
+    }
+
+    /**
+     * A library as IntelliJ keeps one: its name, its class roots as IntelliJ writes them (jar:// or file:// URLs with
+     * macros), and for a repository library its Maven coordinates and whether its dependencies come with it.
+     */
+    public record Library(String name, List<String> classes, String mavenId, Boolean transitive) {
     }
 
     /** A JDK of the IDE's table: the name projects refer to it by, its home, version string, feature release and vendor. */

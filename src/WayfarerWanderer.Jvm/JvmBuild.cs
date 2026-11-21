@@ -167,6 +167,37 @@ public sealed class IdeaJvmBuildAdapter : IJvmBuildAdapter
         return ChildProcesses.Command(javac, arguments, module.Root);
     }
 
+    /// <summary>The modules a module's classes need compiled first, the deepest first: those whose classes its main
+    /// compile classpath names (another module's <c>name:main</c>), theirs in turn.</summary>
+    public static IReadOnlyList<JvmModule> CompileOrder(WorkspaceSnapshot snapshot, JvmModule module)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(module);
+        List<JvmModule> order = [];
+        HashSet<string> seen = new(StringComparer.Ordinal);
+        void Visit(JvmModule current)
+        {
+            if (!seen.Add(current.Id))
+            {
+                return;
+            }
+            foreach (JvmClasspathEntry entry in current.SourceSet("main")?.CompileClasspath ?? [])
+            {
+                if (entry.ModuleRef is { } reference && reference.EndsWith(":main", StringComparison.Ordinal)
+                    && snapshot.Module(reference[..^":main".Length]) is { } dependency && dependency.Id != current.Id)
+                {
+                    Visit(dependency);
+                }
+            }
+            order.Add(current);
+        }
+        Visit(module);
+        return order;
+    }
+
+    /// <summary>Whether a module has Java sources to compile.</summary>
+    public static bool HasSources(JvmModule module) => JavaSources(module).Count > 0;
+
     /// <summary>Why an IntelliJ module has no JDK to compile with: the JDK it names, and JAVA_HOME.</summary>
     public static string MissingJdk(string? jdkName)
     {
@@ -223,6 +254,18 @@ public sealed class JvmBuild
         }
         IJvmBuildAdapter adapter = adapters.FirstOrDefault(candidate => candidate.BuildSystem == snapshot.BuildSystem && candidate.CanBuild(request.WorkspaceRoot))
             ?? throw new FileNotFoundException($"No {snapshot.BuildSystem} wrapper was found in '{request.WorkspaceRoot}'.");
+        if (adapter is IdeaJvmBuildAdapter && snapshot.Module(request.Module) is { } target)
+        {
+            // An IntelliJ module's dependency modules compile first, each with javac, as IntelliJ's build does.
+            foreach (JvmModule dependency in IdeaJvmBuildAdapter.CompileOrder(snapshot, target).Where(m => m.Id != target.Id && IdeaJvmBuildAdapter.HasSources(m)))
+            {
+                ProcessResult compiled = await runner.RunAsync(adapter.Command(snapshot, request with { Module = dependency.Id }), output, cancellationToken).ConfigureAwait(false);
+                if (compiled.ExitCode != 0)
+                {
+                    return compiled;
+                }
+            }
+        }
         ProcessStartInfo start = adapter.Command(snapshot, request);
         // The wrapper runs on the JDK the import ran it on, never on the tooling JVM that runs the host.
         JvmModule? module = snapshot.Module(request.Module) ?? snapshot.Modules.FirstOrDefault();

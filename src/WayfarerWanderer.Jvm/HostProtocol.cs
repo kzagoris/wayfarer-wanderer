@@ -35,7 +35,9 @@ public sealed record HostReady(int Protocol, HostJvm Java, long Pid);
 public sealed record HostJdk(string Name, string Home, string? Version, int? Feature, string? Vendor);
 
 /// <summary>An import: <see cref="Jdk"/> is the home the workspace's JDK resolved to on this machine, if any, and
-/// <see cref="JdkRequired"/> what the workspace asks for (<see cref="ProjectJdk.Requirement"/>), met or not.</summary>
+/// <see cref="JdkRequired"/> what the workspace asks for (<see cref="ProjectJdk.Requirement"/>), met or not.
+/// <see cref="PathVariables"/> and <see cref="GlobalLibraries"/> are the IntelliJ platform settings an IntelliJ project
+/// refers to (<see cref="IdeaPlatform"/>).</summary>
 public sealed record HostImportParams(
     string Folder,
     long Generation,
@@ -43,7 +45,15 @@ public sealed record HostImportParams(
     HostRequirement? JdkRequired,
     IReadOnlyList<string> MavenProfiles,
     string? BuildTool,
-    IReadOnlyList<HostJdk> Jdks);
+    IReadOnlyList<HostJdk> Jdks,
+    IReadOnlyDictionary<string, string>? PathVariables = null,
+    IReadOnlyList<HostLibrary>? GlobalLibraries = null);
+
+/// <summary>A library as IntelliJ keeps one (<see cref="IdeaLibrary"/>), on the wire.</summary>
+public sealed record HostLibrary(string Name, IReadOnlyList<string> Classes, string? MavenId, bool? Transitive)
+{
+    public static HostLibrary From(IdeaLibrary library) => new(library.Name, library.Classes, library.MavenId, library.Transitive);
+}
 
 public sealed record HostCancelParams(int Request);
 

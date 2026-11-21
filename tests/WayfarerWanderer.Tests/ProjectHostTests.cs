@@ -185,7 +185,8 @@ public sealed class ProjectHostTests
     {
         HostRequest request = new(7, HostProtocol.Import, new HostImportParams("/work/layouts", 12, null,
             new HostRequirement("temurin-24", 24, "temurin", JdkRequirement.Project), ["-slow"], null,
-            [new HostJdk("temurin-24", "/jdks/temurin-24.0.2", "24.0.2", 24, "Eclipse Adoptium")]));
+            [new HostJdk("temurin-24", "/jdks/temurin-24.0.2", "24.0.2", 24, "Eclipse Adoptium")],
+            new Dictionary<string, string> { ["SHARED_LIBS"] = "/libs" }, [new HostLibrary("Shared", ["jar://$SHARED_LIBS$/shared.jar!/"], null, null)]));
         JsonElement written = JsonSerializer.SerializeToElement(request, HostProtocol.Json);
         using JsonDocument expected = JsonDocument.Parse(File.ReadAllText(Example("request-import.json")));
         Assert.True(JsonElement.DeepEquals(expected.RootElement, written), written.GetRawText());

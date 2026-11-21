@@ -2,7 +2,8 @@ using System.Globalization;
 
 namespace WayfarerWanderer.Jvm;
 
-/// <summary>JDT LS settings for an IntelliJ module that has no Maven or Gradle build.</summary>
+/// <summary>JDT LS settings for an IntelliJ project that has no Maven or Gradle build: every module's sources and
+/// libraries in one project, as JDT LS's invisible project takes them.</summary>
 public static class IdeaLanguageSettings
 {
     public static object Document(WorkspaceSnapshot snapshot) => new
@@ -39,8 +40,13 @@ public static class IdeaLanguageSettings
         return classes is null ? "bin" : Relative(snapshot, classes);
     }
 
+    /// <summary>Every module's libraries; another module's classes are left out, since its sources are among the
+    /// source paths.</summary>
     public static string[] Libraries(WorkspaceSnapshot snapshot) =>
-        [.. snapshot.Modules.SelectMany(module => module.Classpath.Compile).Distinct(StringComparer.Ordinal)];
+        [.. snapshot.Modules.SelectMany(module => module.SourceSets.Count > 0
+                ? module.SourceSets.SelectMany(set => set.CompileClasspath).Where(entry => entry.ModuleRef is null).Select(entry => entry.Path)
+                : module.Classpath.Compile)
+            .Distinct(StringComparer.Ordinal)];
 
     public static object[] Runtimes(WorkspaceSnapshot snapshot)
     {

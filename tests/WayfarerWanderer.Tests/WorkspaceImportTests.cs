@@ -11,7 +11,7 @@ namespace WayfarerWanderer.Tests;
 [Collection(JvmTrustCollection.Name)]
 public sealed class WorkspaceImportTests
 {
-    public static TheoryData<string> Fixtures => ["maven", "gradle", "maven-layouts", "gradle-layouts", "idea/course"];
+    public static TheoryData<string> Fixtures => ["maven", "gradle", "maven-layouts", "gradle-layouts", "idea/course", "idea/multi"];
 
     [Theory]
     [MemberData(nameof(Fixtures))]
@@ -260,6 +260,43 @@ public sealed class WorkspaceImportTests
             Assert.Null(app.Problem);
             Assert.False(app.CompileToolchain.Missing);
             Assert.Equal(only.Feature, ToolingJvms.At(app.CompileToolchain.Home!)!.Feature);
+        }
+        finally
+        {
+            await ProjectHosts.ReleaseAsync(root);
+            WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root));
+            Delete(root);
+        }
+    }
+
+    [Fact]
+    public async Task AnIntelliJProjectOfSeveralModulesImportsAndCompilesInDependencyOrder()
+    {
+        string root = Copy("idea/multi");
+        WorkspaceTrust.Trust(root);
+        try
+        {
+            // The project names a JDK of this machine that compiles release 17.
+            Jdk? jdk = JdkRegistry.Current.All().Where(candidate => candidate.Feature >= 17).OrderBy(candidate => candidate.Feature).FirstOrDefault();
+            Assert.SkipWhen(jdk is null, "No JDK 17 or later here to compile with.");
+            string misc = Path.Combine(root, ".idea", "misc.xml");
+            await File.WriteAllTextAsync(misc, (await File.ReadAllTextAsync(misc, TestContext.Current.CancellationToken))
+                .Replace("project-jdk-name=\"17\"", $"project-jdk-name=\"{jdk!.Name}\"", StringComparison.Ordinal), TestContext.Current.CancellationToken);
+            WorkspaceSnapshot snapshot = await new ProjectHostImporter().ImportAsync(root, 1, TestContext.Current.CancellationToken);
+            Assert.Equal(["app", "core"], snapshot.Modules.Select(module => module.Id));
+            JvmModule app = snapshot.Module("app")!;
+            string coreClasses = Path.Combine(root, "out", "production", "core");
+            Assert.Equal([coreClasses], app.Classpath.Compile);
+            Assert.Contains(coreClasses, app.Classpath.Runtime);
+            Assert.Equal(["core", "app"], IdeaJvmBuildAdapter.CompileOrder(snapshot, app).Select(module => module.Id));
+            Assert.Empty(IdeaLanguageSettings.Libraries(snapshot));
+            Assert.Equal(["app/src", "core/src"], IdeaLanguageSettings.SourcePaths(snapshot));
+            Assert.NotNull(app.CompileToolchain.Home);
+
+            ProcessResult built = await new JvmBuild().RunAsync(snapshot, new JvmBuildRequest(root, "app", "classes", []), cancellationToken: TestContext.Current.CancellationToken);
+            Assert.True(built.ExitCode == 0, string.Join(Environment.NewLine, built.Output.Select(line => line.Line)));
+            Assert.True(File.Exists(Path.Combine(coreClasses, "example", "core", "Greeting.class")));
+            Assert.True(File.Exists(Path.Combine(root, "out", "production", "app", "example", "app", "Main.class")));
         }
         finally
         {
