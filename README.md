@@ -112,8 +112,11 @@ exercises and accepts the prompt. Run the complete selector matrix with:
 python3 tools/acceptance.py --results artifacts/test-results/acceptance
 ```
 
-New Project generates application or Spring Boot starters for Java or Kotlin on
-Maven or Gradle. Projects are staged beside the destination and published only
+New Project generates application starters for Java (IntelliJ, Maven or Gradle)
+or Kotlin (Maven or Gradle). Its JDK drop-down lists the JDKs Wayfarer keeps and
+detects, with Download JDK… and Add JDK from Disk…; the module name or
+coordinates and the package sit under Advanced Settings. Spring Boot is not
+offered for now; see [docs/todo.md](docs/todo.md). Projects are staged beside the destination and published only
 after every file has landed. The generated wrapper, source, test, launch
 configuration and notices form one complete project.
 

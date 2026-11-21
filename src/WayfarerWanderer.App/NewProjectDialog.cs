@@ -7,6 +7,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Passenger.Core;
 using WayfarerWanderer.App.Shell;
 using WayfarerWanderer.Jvm;
 
@@ -27,8 +28,7 @@ public sealed record StarterFamily(
             [NewProjectLanguage.Java], [NewProjectBuild.IntelliJ, NewProjectBuild.Maven, NewProjectBuild.Gradle]),
         new("Kotlin", "A Kotlin application with a main function and a JUnit test.", NewProjectKind.Application,
             [NewProjectLanguage.Kotlin], [NewProjectBuild.Gradle, NewProjectBuild.Maven]),
-        new("Spring Boot", $"A Spring Boot {ProjectGenerator.SpringBootVersion} web service that answers on its root path, with a test.",
-            NewProjectKind.SpringBoot, [NewProjectLanguage.Java, NewProjectLanguage.Kotlin], [NewProjectBuild.Maven, NewProjectBuild.Gradle]),
+        // Spring Boot is not offered for now (docs/todo.md); ProjectGenerator still makes it (NewProjectKind.SpringBoot).
     ];
 
     public bool Matches(string[] words) =>
@@ -44,8 +44,25 @@ public sealed record StarterFamily(
     };
 }
 
-/// <summary>The New Project dialog: the starter families down the left under a search; on the right the project's name,
-/// where it goes, the family's language and build system, the JDK, and the coordinates its build needs. Create refuses
+/// <summary>What a row of the New Project dialog's JDK drop-down is: a JDK, an action that finds one, or a heading.</summary>
+public enum JdkEntryKind
+{
+    Jdk,
+    Download,
+    AddFromDisk,
+    Header,
+    Separator,
+}
+
+/// <summary>A row of the JDK drop-down: a JDK's home with its name, version and home, or an action, a heading or a rule.</summary>
+public sealed record JdkEntry(JdkEntryKind Kind, string Text, string? Home = null, string? Detail = null)
+{
+    public bool IsJdk => Kind == JdkEntryKind.Jdk;
+}
+
+/// <summary>The New Project dialog, as IntelliJ's: the starter families down the left under a search; on the right the
+/// project's name, where it goes, the family's language and build system, the JDK (a drop-down of the JDKs kept and
+/// detected, with Download JDK… and Add JDK from Disk…), and under Advanced Settings the coordinates its build needs. Create refuses
 /// what the generator would, saying why; else it writes the starter and closes with it (<see cref="Created"/>).</summary>
 public sealed class NewProjectDialog : IdeWindow
 {
@@ -65,8 +82,21 @@ public sealed class NewProjectDialog : IdeWindow
     private readonly Control languageRow;
     private readonly ComboBox build = new() { Classes = { StyleClasses.Form }, HorizontalAlignment = HorizontalAlignment.Left };
     private readonly TextBlock buildNote = new() { Classes = { StyleClasses.Muted }, FontSize = 12, TextWrapping = TextWrapping.Wrap };
-    private readonly TextBox jdk = new() { Classes = { StyleClasses.Search } };
-    private readonly Button browseJdk = new() { Content = "Browse…", Margin = new Thickness(8, 0, 0, 0) };
+    private readonly ComboBox jdk = new() { Classes = { StyleClasses.Form }, HorizontalAlignment = HorizontalAlignment.Stretch, MaxDropDownHeight = 420 };
+    private readonly Button advancedToggle = new()
+    {
+        Background = Brushes.Transparent,
+        BorderThickness = new Thickness(0),
+        Padding = new Thickness(0, 2),
+    };
+    private readonly RowIcon advancedChevron = RowIcon.Chevron();
+    private readonly StackPanel advanced = new() { Spacing = 10, IsVisible = false };
+    private readonly JdkRegistry registry;
+    private List<JdkEntry> jdkEntries = [];
+    private JdkEntry? jdkChosen;
+
+    /// <summary>A home given the table lacks (JAVA_HOME's, or one set), listed at the top of the table's JDKs.</summary>
+    private string? jdkOther;
     private readonly TextBox group = new() { Classes = { StyleClasses.Search } };
     private readonly Control groupRow;
     private readonly TextBox artifact = new() { Classes = { StyleClasses.Search } };
@@ -95,9 +125,11 @@ public sealed class NewProjectDialog : IdeWindow
     private bool setting;
 
     /// <param name="folder">The directory the project's folder is made in.</param>
-    /// <param name="jdkHome">The JDK offered; JAVA_HOME's when null.</param>
-    public NewProjectDialog(string folder, string? jdkHome = null)
+    /// <param name="jdkHome">The JDK chosen at first; JAVA_HOME's when null, else the table's first JDK new enough.</param>
+    /// <param name="jdks">The JDK table the drop-down lists; <see cref="JdkRegistry.Current"/> when null.</param>
+    public NewProjectDialog(string folder, string? jdkHome = null, JdkRegistry? jdks = null)
     {
+        registry = jdks ?? JdkRegistry.Current;
         FormRows.Scope(this);
         Title = "New Project";
         Width = 860;
@@ -130,10 +162,21 @@ public sealed class NewProjectDialog : IdeWindow
         left.Bind(Border.BorderBrushProperty, left.GetResourceObservable(TokenKeys.Divider));
 
         directory.Text = folder;
-        jdk.Text = jdkHome ?? Environment.GetEnvironmentVariable("JAVA_HOME") ?? string.Empty;
+        ReusedRows.Use(jdk, JdkRow);
+        // Headings and the rule are shown, never chosen.
+        jdk.ContainerPrepared += (_, e) =>
+            e.Container.IsEnabled = e.Index >= jdkEntries.Count || jdkEntries[e.Index].Kind is not (JdkEntryKind.Header or JdkEntryKind.Separator);
+        jdk.SelectionChanged += (_, _) => JdkSelected();
+        FillJdks(jdkHome ?? Environment.GetEnvironmentVariable("JAVA_HOME"));
         group.Text = DefaultGroup;
         browse.Click += (_, _) => IdeErrors.Observe(BrowseAsync());
-        browseJdk.Click += (_, _) => IdeErrors.Observe(BrowseJdkAsync());
+        advancedToggle.Content = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Children = { advancedChevron, new TextBlock { Text = "Advanced Settings", VerticalAlignment = VerticalAlignment.Center } },
+        };
+        advancedToggle.Click += (_, _) => AdvancedShown = !AdvancedShown;
         projectName.TextChanged += (_, _) => NameChanged();
         directory.TextChanged += (_, _) => ShowWhere();
         group.TextChanged += (_, _) => Derive();
@@ -158,6 +201,16 @@ public sealed class NewProjectDialog : IdeWindow
         languageRow = Row("Language:", language);
         groupRow = Row("Group:", group);
         Grid artifactRow = FormRows.Of("Artifact:", artifact, out artifactLabel);
+        advanced.Children.Add(groupRow);
+        advanced.Children.Add(artifactRow);
+        advanced.Children.Add(Row("Package:", package));
+        Control advancedRule = Rule();
+        advancedRule.VerticalAlignment = VerticalAlignment.Center;
+        advancedRule.Margin = new Thickness(10, 0, 0, 0);
+        Grid advancedHeader = new() { ColumnDefinitions = { new ColumnDefinition(GridLength.Auto), new ColumnDefinition(GridLength.Star) } };
+        advancedHeader.Children.Add(advancedToggle);
+        Grid.SetColumn(advancedRule, 1);
+        advancedHeader.Children.Add(advancedRule);
         StackPanel right = new()
         {
             Margin = new Thickness(24, 18, 24, 18),
@@ -172,12 +225,10 @@ public sealed class NewProjectDialog : IdeWindow
                 languageRow,
                 Row("Build system:", build),
                 Row(null, buildNote),
-                Row("JDK:", BrowseRow.Of(jdk, browseJdk)),
-                Rule(),
-                groupRow,
-                artifactRow,
-                Row("Package:", package),
+                Row("JDK:", jdk),
                 Row(null, writes),
+                advancedHeader,
+                advanced,
             },
         };
         working = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, IsVisible = false, Children = { bar, progress } };
@@ -243,10 +294,26 @@ public sealed class NewProjectDialog : IdeWindow
         }
     }
 
+    /// <summary>The home of the JDK chosen in the drop-down; empty while none is. A home set that the table lacks is
+    /// listed at the top of its JDKs.</summary>
     public string JdkHome
     {
-        get => jdk.Text?.Trim() ?? string.Empty;
-        set => jdk.Text = value;
+        get => jdkChosen?.Home ?? string.Empty;
+        set => FillJdks(value);
+    }
+
+    /// <summary>The JDK drop-down's rows, as listed.</summary>
+    public IReadOnlyList<JdkEntry> JdkEntries => jdkEntries;
+
+    /// <summary>Whether Advanced Settings (the module name or group and artifact, and the package) is open.</summary>
+    public bool AdvancedShown
+    {
+        get => advanced.IsVisible;
+        set
+        {
+            advanced.IsVisible = value;
+            advancedChevron.Turned = value;
+        }
     }
 
     public string Group
@@ -643,7 +710,7 @@ public sealed class NewProjectDialog : IdeWindow
         problem.IsVisible = !busy && problem.Text is not null;
         create.IsEnabled = !busy && family is not null;
         list.IsEnabled = !busy;
-        foreach (Control field in (Control[])[search, projectName, directory, browse, language, build, jdk, browseJdk, group, artifact, package])
+        foreach (Control field in (Control[])[search, projectName, directory, browse, language, build, jdk, advancedToggle, group, artifact, package])
         {
             field.IsEnabled = !busy;
         }
@@ -678,12 +745,153 @@ public sealed class NewProjectDialog : IdeWindow
         }
     }
 
-    private async Task BrowseJdkAsync()
+    /// <summary>Lists the JDK drop-down as IntelliJ's: Download JDK… and Add JDK from Disk…, then the JDKs the table
+    /// keeps (with a home given that it lacks), then those it detected. Chooses the one at <paramref name="home"/>, else
+    /// the first of JDK <see cref="ProjectGenerator.MinimumJdk"/> or newer, else the first.</summary>
+    private void FillJdks(string? home)
     {
-        if (await PickAsync("Select JDK", JdkHome) is { } path)
+        IReadOnlyList<Jdk> all;
+        try
         {
-            JdkHome = path;
+            all = registry.All();
         }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        {
+            all = [];
+        }
+        home = home is { Length: > 0 } ? home.Trim() : null;
+        // A home through a link (scoop's current) is the JDK the table lists at the link's target.
+        if (home is not null && all.FirstOrDefault(j => PathNames.Same(j.Home, JdkRegistry.Resolved(home))) is { } linked)
+        {
+            home = linked.Home;
+        }
+        if (home is not null && !all.Any(j => PathNames.Same(j.Home, home)))
+        {
+            jdkOther = home;
+        }
+        List<JdkEntry> entries =
+        [
+            new(JdkEntryKind.Download, "Download JDK…"),
+            new(JdkEntryKind.AddFromDisk, "Add JDK from Disk…"),
+            new(JdkEntryKind.Separator, string.Empty),
+        ];
+        List<JdkEntry> kept = [.. all.Where(j => j.Origin != JdkOrigin.Detected).Select(Entry)];
+        if (jdkOther is not null && !all.Any(j => PathNames.Same(j.Home, jdkOther)))
+        {
+            kept.Insert(0, new JdkEntry(JdkEntryKind.Jdk, jdkOther, jdkOther));
+        }
+        if (kept.Count > 0)
+        {
+            entries.Add(new(JdkEntryKind.Header, "JDKs"));
+            entries.AddRange(kept);
+        }
+        List<JdkEntry> detected = [.. all.Where(j => j.Origin == JdkOrigin.Detected).Select(Entry)];
+        if (detected.Count > 0)
+        {
+            entries.Add(new(JdkEntryKind.Header, "Detected JDKs"));
+            entries.AddRange(detected);
+        }
+        JdkEntry? chosen = home is not null ? entries.FirstOrDefault(e => e.IsJdk && PathNames.Same(e.Home!, home)) : null;
+        if (chosen is null && all.FirstOrDefault(j => j.Feature >= ProjectGenerator.MinimumJdk) is { } fit)
+        {
+            chosen = entries.First(e => e.IsJdk && PathNames.Same(e.Home!, fit.Home));
+        }
+        chosen ??= entries.FirstOrDefault(e => e.IsJdk);
+        setting = true;
+        jdkEntries = entries;
+        jdk.ItemsSource = entries;
+        jdk.SelectedItem = chosen;
+        jdkChosen = chosen;
+        setting = false;
+
+        static JdkEntry Entry(Jdk j) => new(JdkEntryKind.Jdk, j.Name, j.Home, $"{j.Version}  {j.Home}");
+    }
+
+    /// <summary>A row chosen: a JDK is kept; an action puts the JDK chosen back and runs, choosing the JDK it finds.</summary>
+    private void JdkSelected()
+    {
+        if (setting)
+        {
+            return;
+        }
+        JdkEntry? picked = jdk.SelectedItem as JdkEntry;
+        if (picked is { IsJdk: true })
+        {
+            jdkChosen = picked;
+            return;
+        }
+        setting = true;
+        jdk.SelectedItem = jdkChosen;
+        setting = false;
+        if (picked?.Kind == JdkEntryKind.Download)
+        {
+            Dispatcher.UIThread.Post(() => IdeErrors.Observe(DownloadJdkAsync()));
+        }
+        else if (picked?.Kind == JdkEntryKind.AddFromDisk)
+        {
+            Dispatcher.UIThread.Post(() => IdeErrors.Observe(AddJdkFromDiskAsync()));
+        }
+    }
+
+    /// <summary>Download JDK…: the Download JDK dialog (for the highest JDK the language takes, where it has one); the
+    /// JDK it downloads is chosen.</summary>
+    private async Task DownloadJdkAsync()
+    {
+        JdkRequirement? wanted = Language is { } chosen && ProjectGenerator.HighestJdk(chosen) is int highest
+            ? new JdkRequirement(null, highest, null, JdkRequirement.Project)
+            : null;
+        if (await new JdkDownloadDialog(wanted).ShowDialog<Jdk?>(this) is { } downloaded)
+        {
+            FillJdks(downloaded.Home);
+        }
+    }
+
+    /// <summary>Add JDK from Disk…: a folder kept in the JDK table, and chosen.</summary>
+    private async Task AddJdkFromDiskAsync()
+    {
+        if (await PickAsync("Add JDK from Disk", JdkHome) is not { } home)
+        {
+            return;
+        }
+        try
+        {
+            FillJdks(registry.Add(home).Home);
+            Fail(null);
+        }
+        catch (ArgumentException refused)
+        {
+            Fail(refused.Message);
+        }
+    }
+
+    /// <summary>A row of the JDK drop-down, and the box's choice shown closed: a JDK's name with its version and home
+    /// muted after it, an action, a muted heading, or a rule.</summary>
+    private static Control JdkRow()
+    {
+        TextBlock name = new() { VerticalAlignment = VerticalAlignment.Center };
+        TextBlock detail = new()
+        {
+            Classes = { StyleClasses.Muted },
+            Margin = new Thickness(8, 0, 0, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Border rule = new() { Height = 1, VerticalAlignment = VerticalAlignment.Center, IsVisible = false };
+        rule.Bind(Border.BackgroundProperty, rule.GetResourceObservable(TokenKeys.Separator));
+        DockPanel row = new();
+        DockPanel.SetDock(name, Dock.Left);
+        row.Children.Add(name);
+        row.Children.Add(detail);
+        Panel panel = new() { Children = { row, rule } };
+        return panel.Showing<JdkEntry>(entry =>
+        {
+            rule.IsVisible = entry.Kind == JdkEntryKind.Separator;
+            row.IsVisible = !rule.IsVisible;
+            name.Text = entry.Text;
+            name.Classes.Set(StyleClasses.Muted, entry.Kind == JdkEntryKind.Header);
+            detail.Text = entry.Detail ?? string.Empty;
+            detail.IsVisible = entry.Detail is not null;
+        });
     }
 
     private async Task<string?> PickAsync(string title, string from)

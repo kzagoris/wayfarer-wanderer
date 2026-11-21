@@ -413,7 +413,9 @@ public sealed class JdkRegistry
     private static string? Value(XmlElement parent, string child) =>
         parent.ChildNodes.OfType<XmlElement>().FirstOrDefault(e => e.Name == child)?.GetAttribute("value") is { Length: > 0 } value ? value : null;
 
-    private static string Resolved(string home)
+    /// <summary>A home as the table holds it: a link (a version manager's <c>current</c>, a junction) followed to its
+    /// final target; the home as given when it is no link or cannot be read.</summary>
+    public static string Resolved(string home)
     {
         try
         {

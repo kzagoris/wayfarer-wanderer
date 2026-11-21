@@ -27,7 +27,7 @@ public sealed class NewProjectDialogTests : IDisposable
     public void ListsJvmFamiliesWithIntelliJFirstForJava()
     {
         NewProjectDialog dialog = new(folder, jdkHome: folder);
-        Assert.Equal(["Java", "Kotlin", "Spring Boot"], dialog.Listed.Select(f => f.Name));
+        Assert.Equal(["Java", "Kotlin"], dialog.Listed.Select(f => f.Name));
         Assert.Equal("Java", dialog.Family?.Name);
         Assert.Equal([NewProjectBuild.IntelliJ, NewProjectBuild.Maven, NewProjectBuild.Gradle], dialog.Builds);
         Assert.Equal(NewProjectBuild.IntelliJ, dialog.Build);
@@ -49,9 +49,13 @@ public sealed class NewProjectDialogTests : IDisposable
     [AvaloniaFact]
     public void SearchFindsFamiliesByNameAndBuild()
     {
-        NewProjectDialog dialog = new(folder, jdkHome: folder) { Query = "spring" };
-        Assert.Equal(["Spring Boot"], dialog.Listed.Select(f => f.Name));
-        Assert.Equal([NewProjectLanguage.Java, NewProjectLanguage.Kotlin], dialog.Languages);
+        NewProjectDialog dialog = new(folder, jdkHome: folder) { Query = "kotlin" };
+        Assert.Equal(["Kotlin"], dialog.Listed.Select(f => f.Name));
+        Assert.Equal([NewProjectLanguage.Kotlin], dialog.Languages);
+
+        // Spring Boot is not offered (docs/todo.md).
+        dialog.Query = "spring";
+        Assert.Empty(dialog.Listed);
 
         dialog.Query = "intellij";
         Assert.Equal(["Java"], dialog.Listed.Select(f => f.Name));
@@ -115,6 +119,35 @@ public sealed class NewProjectDialogTests : IDisposable
         Assert.Equal(Path.Combine(made.Destination, "course.iml"), Directory.GetFiles(made.Destination, "*.iml").SingleOrDefault());
         Assert.True(File.Exists(Path.Combine(made.Destination, "src", "com", "example", "course", "App.java")));
         Assert.False(dialog.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void JdkDropDownListsActionsKeptAndDetectedJdks()
+    {
+        string kept = NewProjectTests.JdkHome(NewProjectLanguage.Java);
+        string registryFile = Path.Combine(folder, "jdks.json");
+        JdkRegistry jdks = new(registryFile, candidates: () => [kept], intelliJConfig: Path.Combine(folder, "no-intellij"));
+
+        NewProjectDialog dialog = new(folder, jdkHome: kept, jdks);
+        Assert.Equal([JdkEntryKind.Download, JdkEntryKind.AddFromDisk, JdkEntryKind.Separator, JdkEntryKind.Header, JdkEntryKind.Jdk],
+            dialog.JdkEntries.Take(5).Select(e => e.Kind));
+        Assert.Equal("Detected JDKs", dialog.JdkEntries[3].Text);
+        Assert.Equal(Path.GetFullPath(JdkRegistry.Resolved(kept)), Path.GetFullPath(dialog.JdkHome));
+
+        // A home the table lacks is listed at the top of the table's JDKs and chosen.
+        dialog.JdkHome = folder;
+        Assert.Equal(folder, dialog.JdkHome);
+        JdkEntry other = Assert.Single(dialog.JdkEntries, e => e.IsJdk && e.Home == folder);
+        Assert.True(dialog.JdkEntries.ToList().IndexOf(other) < dialog.JdkEntries.ToList().FindIndex(e => e.Text == "Detected JDKs"));
+    }
+
+    [AvaloniaFact]
+    public void CoordinatesWaitUnderAdvancedSettings()
+    {
+        NewProjectDialog dialog = new(folder, jdkHome: folder);
+        Assert.False(dialog.AdvancedShown);
+        dialog.AdvancedShown = true;
+        Assert.True(dialog.AdvancedShown);
     }
 
     [Fact]
