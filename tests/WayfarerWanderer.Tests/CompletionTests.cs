@@ -34,6 +34,34 @@ public sealed class CompletionTests
     }
 
     [Fact]
+    public void SplitsALabelIntoNameQualifierAndType()
+    {
+        var choices = CompletionModel.Parse(Json("""
+            [ { "label": "System - java.lang", "kind": 7, "detail": "java.lang.System" },
+              { "label": "println(String x) : void", "kind": 2, "detail": "PrintStream.println(String x) : void" },
+              { "label": "SynchronousQueue<E> - java.util.concurrent", "kind": 7, "detail": "java.util.concurrent.SynchronousQueue" },
+              { "label": "size", "kind": 2, "labelDetails": { "detail": "()", "description": "Int" } },
+              { "label": "old", "kind": 5, "tags": [1] } ]
+            """), out _);
+
+        Assert.Equal(("System", "java.lang", ""), choices[0].Parts);
+        Assert.Equal(("println(String x)", "", "void"), choices[1].Parts);
+        Assert.Equal(("SynchronousQueue<E>", "java.util.concurrent", ""), choices[2].Parts);
+        Assert.Equal(("size()", "", "Int"), choices[3].Parts);
+        Assert.Equal([false, false, false, false, true], choices.Select(c => c.Deprecated));
+    }
+
+    [Fact]
+    public void MarksTheLettersTypedWhereTheyMatched()
+    {
+        Assert.Equal([0, 1, 2], CompletionModel.MatchedAt("SystemTray", "sys"));
+        Assert.Equal([0, 6], CompletionModel.MatchedAt("SystemTray", "ST"));
+        Assert.Equal([2, 3], CompletionModel.MatchedAt("toString", "St"));
+        Assert.Empty(CompletionModel.MatchedAt("toString", "xyz"));
+        Assert.Empty(CompletionModel.MatchedAt("toString", ""));
+    }
+
+    [Fact]
     public void NarrowsByPrefixThenCaseThenHumpsThenAnywhere()
     {
         var choices = CompletionModel.Parse(Json("""
@@ -118,10 +146,10 @@ public sealed class CompletionTests
             window.KeyTextInput("Sys");
             await UntilAsync(() => window.Completion.Shown.Any(c => c.Label.StartsWith("System ", StringComparison.Ordinal)), "System was never suggested.");
             Assert.StartsWith("System", window.Completion.Selected!.Label, StringComparison.Ordinal);
-            // The list opens under the word, left edge at the word's start.
+            // The list opens under the word, its names starting where the word starts.
             Avalonia.Point word = window.Editor.PointOf(window.Editor.Selections.Primary.Caret - 3);
             Avalonia.Rect place = window.Completion.Place!.Value;
-            Assert.Equal(word.X, place.X, 1);
+            Assert.Equal(word.X, place.X + window.Completion.TextInset, 1);
             Assert.Equal(word.Y + window.Editor.LineHeight, place.Y, 1);
             window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
             await UntilAsync(() => !window.Completion.IsOpen && LineAtCaret(window).TrimStart() == "System", "System was never inserted.");

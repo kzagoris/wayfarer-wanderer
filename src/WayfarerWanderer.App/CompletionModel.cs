@@ -27,6 +27,45 @@ public sealed record CompletionChoice(JsonElement Item, string Label, string Det
         25 => "T",              // type parameter
         _ => "·",
     };
+
+    /// <summary>The label as the list lays it out: the name (with its parameters), what qualifies it (a type's package,
+    /// a member's owner) shown faint beside it, and its type or detail shown at the right. JDT LS puts all three in the
+    /// label (<c>System - java.lang</c>, <c>println(String x) : void</c>); other servers send the type as the detail.</summary>
+    public (string Name, string Qualifier, string Trailing) Parts
+    {
+        get
+        {
+            string name = Label, qualifier = "", type = "";
+            int dash = name.LastIndexOf(" - ", StringComparison.Ordinal);
+            if (dash > 0)
+            {
+                qualifier = name[(dash + 3)..];
+                name = name[..dash];
+            }
+            int colon = name.LastIndexOf(" : ", StringComparison.Ordinal);
+            if (colon > 0 && name.IndexOf(')', colon) < 0)
+            {
+                type = name[(colon + 3)..];
+                name = name[..colon];
+            }
+            if (type.Length == 0 && !Redundant(Detail, name, qualifier))
+            {
+                type = Detail;
+            }
+            return (name, qualifier, type);
+        }
+    }
+
+    /// <summary>Whether the server marked the suggestion deprecated (the <c>Deprecated</c> tag, or the older flag).</summary>
+    public bool Deprecated =>
+        Item.ValueKind == JsonValueKind.Object &&
+        (Item.TryGetProperty("deprecated", out JsonElement flag) && flag.ValueKind == JsonValueKind.True ||
+         Item.TryGetProperty("tags", out JsonElement tags) && tags.ValueKind == JsonValueKind.Array &&
+         tags.EnumerateArray().Any(tag => tag.ValueKind == JsonValueKind.Number && tag.GetInt32() == 1));
+
+    /// <summary>A detail that only repeats the qualifier and name (<c>java.lang.System</c> beside <c>System - java.lang</c>).</summary>
+    private static bool Redundant(string detail, string name, string qualifier) =>
+        detail.Length == 0 || qualifier.Length > 0 && (detail == qualifier || detail.EndsWith("." + CompletionModel.Bare(name), StringComparison.Ordinal));
 }
 
 /// <summary>The language-neutral part of completion: reading a server's answer, narrowing it as the word grows, and
@@ -113,6 +152,26 @@ public static class CompletionModel
             .Select(pair => pair.choice)];
     }
 
+    /// <summary>Where in <paramref name="candidate"/> the letters typed matched, by the same rule <see cref="Narrow"/>
+    /// keeps it by, for the list to mark them; empty where nothing was typed or it does not match.</summary>
+    public static IReadOnlyList<int> MatchedAt(string candidate, string typed)
+    {
+        if (typed.Length == 0 || candidate.Length == 0)
+        {
+            return [];
+        }
+        if (candidate.StartsWith(typed, StringComparison.OrdinalIgnoreCase))
+        {
+            return [.. Enumerable.Range(0, typed.Length)];
+        }
+        if (HumpsAt(candidate, typed) is { } humps)
+        {
+            return humps;
+        }
+        int at = candidate.IndexOf(typed, StringComparison.OrdinalIgnoreCase);
+        return at < 0 ? [] : [.. Enumerable.Range(at, typed.Length)];
+    }
+
     private static int Rank(string candidate, string typed)
     {
         if (candidate.StartsWith(typed, StringComparison.Ordinal))
@@ -132,19 +191,23 @@ public static class CompletionModel
 
     /// <summary>Whether the typed letters follow the candidate's start and word starts in order: each letter continues the
     /// part being matched or begins a later part (an upper-case letter, or one after <c>_</c> or a digit).</summary>
-    private static bool Humps(string candidate, string typed)
+    private static bool Humps(string candidate, string typed) => HumpsAt(candidate, typed) is not null;
+
+    /// <summary>The letters <see cref="Humps"/> matched, or null where it does not match.</summary>
+    private static List<int>? HumpsAt(string candidate, string typed)
     {
         if (char.ToLowerInvariant(candidate[0]) != char.ToLowerInvariant(typed[0]))
         {
-            return false;
+            return null;
         }
+        List<int> matched = [0];
         int at = 1;
         for (int i = 1; i < typed.Length; i++)
         {
             char wanted = typed[i];
             if (at < candidate.Length && char.ToLowerInvariant(candidate[at]) == char.ToLowerInvariant(wanted))
             {
-                at++;
+                matched.Add(at++);
                 continue;
             }
             int next = at;
@@ -154,11 +217,12 @@ public static class CompletionModel
             }
             if (next >= candidate.Length)
             {
-                return false;
+                return null;
             }
+            matched.Add(next);
             at = next + 1;
         }
-        return true;
+        return matched;
     }
 
     private static bool IsPartStart(string text, int index) =>
@@ -205,7 +269,7 @@ public static class CompletionModel
     }
 
     /// <summary>A label without what JDT LS appends for the list: <c>System - java.lang</c>, <c>size() : int</c>.</summary>
-    private static string Bare(string label)
+    internal static string Bare(string label)
     {
         int end = 0;
         while (end < label.Length && IsWordCharacter(label[end]))
