@@ -3,8 +3,8 @@
 Draft for review, 2026-11-21. It compares IntelliJ IDEA's Project Structure, SDK table and JDK download with what
 Wayfarer has, and proposes a design to bring Wayfarer close to it.
 
-**Status:** steps 1 and 2 of §4 are built (`23e4df9` to `e20d27b`). Where the build settled something differently from
-the first draft, the sections below now describe what was built. Steps 3 to 7 are not started.
+**Status:** steps 1 to 3 of §4 are built. Where the build settled something differently from the first draft, the
+sections below now describe what was built.
 
 ## 1. How IntelliJ IDEA does it
 
@@ -89,8 +89,8 @@ from `gradle-daemon-jvm.properties`. Maven picks toolchains from `~/.m2/toolchai
 | Tooling JVM | A setting, then `JAVA_HOME`, `PATH`, then the newest Java 21 or later in the registry (`ToolingJvm.cs`). | The setting is still a **path**, not a registry name. When none is found, the user must install one themselves. |
 | Per-module JDKs | `JvmEnvironment` carries `required {name, feature, vendor, source}`. The host settles each module against the table in the shared order (`protocol/jdk-resolution.json`). An unmet requirement leaves `Home` null (`JvmToolchain.Missing`). | No download (step 4). |
 | Missing-JDK banner | Names the first missing requirement and how many more. **Choose…** picks from the table or adds from disk, then reimports. **Download…** is disabled. | Done, except Download. |
-| JDKs for Gradle and Maven | Wayfarer sets `JAVA_HOME` for the wrapper. It doesn't tell Gradle or Maven about the other JDKs it knows. The banner says so when a build toolchain is chosen. | Gradle and Maven toolchains can't see JDKs Wayfarer found or downloaded (step 3). |
-| JDKs for language servers | `java.configuration.runtimes` is built from module homes in the snapshot (`BuildLanguageSettings.cs`). | A module with a missing JDK gives JDT LS nothing. JDT LS's own Gradle and Maven import doesn't see registry JDKs either (see §3.3). |
+| JDKs for Gradle and Maven | Step 3: `BuildJdks` passes the table to the wrappers (`-Porg.gradle.java.installations.paths`, `--global-toolchains`) and the host passes it to the Tooling API (`GradleJdks.java`). | None. |
+| JDKs for language servers | `java.configuration.runtimes` lists module homes, plus the table's JDK for a feature a module asks for. `java.import.gradle.arguments` carries the same installation paths. | m2e in JDT LS reads no toolchains file (§3.3). |
 | Download | None. The fixtures turn foojay auto-download off on purpose. | Missing entirely. |
 | IntelliJ modules | `IdeaEvaluator` reads one `.iml`: source folders, `library` entries, the JDK by name (its release read from the name when the table lacks it) and the module's own language level. | No `scope`, no `module` dependencies, no `module-library`, no `$MAVEN_REPOSITORY$`. Repository libraries with missing jars show as `AbsentLibraries` instead of being downloaded. Nothing writes `.iml` or library files. |
 | UI | New Project registers the chosen JDK and writes schema 2. The IntelliJ template writes the registry name as `project-jdk-name`. Settings has no JDK page. | No Project Structure dialog, no JDK list, no library editor. |
@@ -190,7 +190,8 @@ the requirement and match the feature exactly when it is set.
 
 ### 3.3 Hand Wayfarer's JDKs to Gradle and Maven
 
-Gradle and Maven should see the same JDKs the IDE shows, so a toolchain request doesn't fail with a JDK on disk:
+Gradle and Maven should see the same JDKs the IDE shows, so a toolchain request doesn't fail with a JDK on disk.
+Built in step 3 (`BuildJdks.cs` in the app, `GradleJdks.java` in the host):
 
 - **Gradle:** pass `-Porg.gradle.java.installations.paths=<registry homes>` (Tooling API arguments and the wrapper
   command line) and keep `org.gradle.java.installations.auto-download` as the project sets it. Gradle-run toolchains
@@ -203,13 +204,18 @@ Gradle and Maven should see the same JDKs the IDE shows, so a toolchain request 
   first. The user's `~/.m2/toolchains.xml` still applies on top. `maven-toolchains-plugin` 3.2 can also discover
   JDKs itself (`select-jdk-toolchain`). Projects using it need nothing from Wayfarer, but the requirement reader must
   understand that goal as well as `toolchain`.
+  *As built:* Maven matches a plain `<version>17</version>` exactly, so besides one toolchain per JDK (full version,
+  `id` the registry name) the file holds one per feature (`17`, `1.8` for Java 8) pointing at that feature's newest
+  JDK. The installation's file is found through the wrapper's `~/.m2/wrapper/dists` folder, else `MAVEN_HOME`. The
+  file is `toolchains.xml` beside `jdks.json`.
 - **Language servers:** JDT LS runs its own Gradle (Buildship) and Maven (m2e) import, apart from the host. Give it
   the same view, or the two imports disagree:
   - `java.import.gradle.arguments` gets the same `installations.paths`, and `java.import.gradle.java.home` stays the
     import toolchain, as it is today.
-  - `java.configuration.maven.globalSettings` doesn't cover toolchains. Check whether m2e honours a toolchains file
-    there. If not, the generated file goes to `~/.m2/toolchains.xml` only with the person's consent, or Maven
-    toolchain modules show as unresolved in JDT LS.
+  - `java.configuration.maven.globalSettings` doesn't cover toolchains, and JDT LS has no toolchains setting. m2e
+    sets each module's JRE from its execution environment (`JavaSE-17`), which `java.configuration.runtimes` answers,
+    so Maven toolchain modules resolve in the editor without a toolchains file. Wayfarer doesn't write
+    `~/.m2/toolchains.xml`.
   - `java.configuration.runtimes` today lists only module homes in the snapshot. Add one runtime per registry JDK of
     a feature some module asks for, so a module whose JDK was just chosen compiles in the editor before reimport
     finishes. A missing module gives no runtime, and its files show the banner's message instead of a wall of
@@ -327,10 +333,10 @@ Each step stands alone and comes with tests, following the plan's rule.
    `required` on the wire and `JvmToolchain.Requirement`; the shared resolution cases; the missing-JDK banner with
    Choose… and retry; New Project writes the requirement and the registry name.
    *Left from this step:* the tooling-JVM setting as a registry name (§3.1).
-3. Registry JDKs passed to Gradle (`installations.paths`, merged with the person's own value) and Maven (generated
+3. **Done.** Registry JDKs passed to Gradle (`installations.paths`, merged with the person's own value) and Maven (generated
    `toolchains.xml`, merged with the install's), and the same to JDT LS (§3.3). Test: the per-module JDK fixtures
-   resolve with toolchains only in the registry, and a `gradle.properties` path is kept. After this, drop the
-   banner's "the build sees it once Wayfarer passes its JDKs" note.
+   resolve with toolchains only in the registry, and a `gradle.properties` path is kept. The banner's "the build sees
+   it once Wayfarer passes its JDKs" note is gone.
 4. `JdkDownloader` against foojay, with a fake catalogue server in tests (checksum mismatch, Cancel, cut-off
    download, macOS layout, a zip without exec bits, an entry escaping staging, two concurrent requests); the
    Download JDK dialog; tooling-JVM recovery.

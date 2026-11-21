@@ -28,6 +28,9 @@ public abstract class JvmBuildAdapter : IJvmBuildAdapter
 
     public ProcessStartInfo Command(WorkspaceSnapshot snapshot, JvmBuildRequest request) => Command(request);
 
+    /// <summary>The JDK table the build is told about (<see cref="BuildJdks"/>); the app's by default.</summary>
+    public JdkRegistry Registry { get; init; } = JdkRegistry.Current;
+
     public ProcessStartInfo Command(JvmBuildRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -36,12 +39,15 @@ public abstract class JvmBuildAdapter : IJvmBuildAdapter
         {
             throw new FileNotFoundException($"The {BuildSystem} wrapper is missing. Configure an explicit build tool before running.", wrapper);
         }
-        ProcessStartInfo start = ChildProcesses.Command(wrapper, Arguments(request), request.WorkspaceRoot);
+        ProcessStartInfo start = ChildProcesses.Command(wrapper, [.. JdkArguments(request.WorkspaceRoot, Registry), .. Arguments(request)], request.WorkspaceRoot);
         Configure(start);
         return start;
     }
 
     protected abstract IReadOnlyList<string> Arguments(JvmBuildRequest request);
+
+    /// <summary>The arguments that tell the build about the JDK table, ahead of the request's own.</summary>
+    protected abstract IReadOnlyList<string> JdkArguments(string workspaceRoot, JdkRegistry registry);
 
     protected virtual void Configure(ProcessStartInfo start)
     {
@@ -65,6 +71,11 @@ public sealed class MavenJvmBuildAdapter : JvmBuildAdapter
     protected override string WrapperName => "mvnw";
 
     protected override string WindowsWrapperName => "mvnw.cmd";
+
+    protected override IReadOnlyList<string> JdkArguments(string workspaceRoot, JdkRegistry registry) =>
+        BuildJdks.MavenToolchainsFile(workspaceRoot, registry.All(), BuildJdks.StateFolder(registry)) is { } toolchains
+            ? ["--global-toolchains", toolchains]
+            : [];
 
     protected override void Configure(ProcessStartInfo start)
     {
@@ -92,6 +103,9 @@ public sealed class GradleJvmBuildAdapter : JvmBuildAdapter
     protected override string WrapperName => "gradlew";
 
     protected override string WindowsWrapperName => "gradlew.bat";
+
+    protected override IReadOnlyList<string> JdkArguments(string workspaceRoot, JdkRegistry registry) =>
+        BuildJdks.GradleArgument(workspaceRoot, registry.All()) is { } paths ? [paths] : [];
 
     protected override IReadOnlyList<string> Arguments(JvmBuildRequest request)
     {

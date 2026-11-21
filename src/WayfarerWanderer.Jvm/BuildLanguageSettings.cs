@@ -2,33 +2,48 @@ using System.Globalization;
 
 namespace WayfarerWanderer.Jvm;
 
-/// <summary>JDT LS settings for a Maven or Gradle workspace: the JDKs the snapshot resolved. JDT LS imports these builds
-/// itself (m2e, Buildship), but on its own it runs Gradle on its bundled JRE and so picks a different language level
-/// than the build does; naming the import JDK and the module JDKs keeps the two the same.</summary>
+/// <summary>JDT LS settings for a Maven or Gradle workspace: the JDKs the snapshot resolved and the JDK table. JDT LS
+/// imports these builds itself (m2e, Buildship), but on its own it runs Gradle on its bundled JRE and so picks a
+/// different language level than the build does; naming the import JDK and the module JDKs keeps the two the same, and
+/// Buildship is told about the table's JDKs as the build is (<see cref="BuildJdks"/>), so the two imports agree.</summary>
 public static class BuildLanguageSettings
 {
-    public static object Document(WorkspaceSnapshot snapshot) => new
+    public static object Document(WorkspaceSnapshot snapshot, IReadOnlyList<Jdk>? jdks = null)
     {
-        java = new
+        jdks ??= JdkRegistry.Current.All();
+        return new
         {
-            import = new { gradle = new { java = new { home = GradleJavaHome(snapshot) } } },
-            configuration = new { runtimes = Runtimes(snapshot) },
-        },
-    };
+            java = new
+            {
+                import = new { gradle = new { java = new { home = GradleJavaHome(snapshot) }, arguments = GradleArguments(snapshot, jdks) } },
+                configuration = new { runtimes = Runtimes(snapshot, jdks) },
+            },
+        };
+    }
 
-    public static object? Value(WorkspaceSnapshot snapshot, string? section) => section switch
+    public static object? Value(WorkspaceSnapshot snapshot, string? section, IReadOnlyList<Jdk>? jdks = null) => section switch
     {
         "java.import.gradle.java.home" => GradleJavaHome(snapshot),
-        "java.configuration.runtimes" => Runtimes(snapshot),
+        "java.import.gradle.arguments" => GradleArguments(snapshot, jdks ?? JdkRegistry.Current.All()),
+        "java.configuration.runtimes" => Runtimes(snapshot, jdks ?? JdkRegistry.Current.All()),
         _ => null,
     };
+
+    /// <summary>Buildship's Gradle arguments: the table's JDKs as installation paths, quoted where a path has a space;
+    /// null for a Maven workspace or an empty table.</summary>
+    public static string? GradleArguments(WorkspaceSnapshot snapshot, IReadOnlyList<Jdk> jdks) =>
+        snapshot.BuildSystem == JvmBuildSystem.Gradle && BuildJdks.GradleArgument(snapshot.Root, jdks) is { } argument
+            ? argument.Contains(' ', StringComparison.Ordinal) ? $"\"{argument}\"" : argument
+            : null;
 
     /// <summary>The JDK the import ran Gradle on, so Buildship evaluates the build on the same one.</summary>
     public static string? GradleJavaHome(WorkspaceSnapshot snapshot) =>
         snapshot.BuildSystem == JvmBuildSystem.Gradle ? ImportToolchain(snapshot).Home : null;
 
-    /// <summary>One runtime per Java version the modules compile or run with, the import JDK the default.</summary>
-    public static object[] Runtimes(WorkspaceSnapshot snapshot)
+    /// <summary>One runtime per Java version the modules compile or run with, the import JDK the default. A version a
+    /// module asks for that has no home in the snapshot takes the table's JDK for it, so a JDK just chosen compiles in
+    /// the editor before the reimport ends; a version no JDK meets gets no runtime.</summary>
+    public static object[] Runtimes(WorkspaceSnapshot snapshot, IReadOnlyList<Jdk>? jdks = null)
     {
         JvmToolchain import = ImportToolchain(snapshot);
         Dictionary<int, string> homes = [];
@@ -40,6 +55,15 @@ public static class BuildLanguageSettings
                 && Release(home) is int release && release == level)
             {
                 homes.TryAdd(level, home);
+            }
+        }
+        foreach (JvmToolchain toolchain in snapshot.Modules.SelectMany(module => new[] { module.CompileToolchain, module.RuntimeToolchain }))
+        {
+            int? wanted = toolchain.Requirement?.Feature ?? (toolchain.Missing ? toolchain.LanguageVersion : null);
+            if (wanted is int feature && !homes.ContainsKey(feature)
+                && JdkResolution.Choose(new JdkRequirement(null, feature, toolchain.Requirement?.Vendor), jdks ?? []) is { } chosen)
+            {
+                homes[feature] = chosen.Home;
             }
         }
         return [.. homes.Select(pair => new

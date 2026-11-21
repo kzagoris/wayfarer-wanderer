@@ -54,7 +54,6 @@ public sealed class MissingJdksTests : IDisposable
         Assert.Equal(kept.Name, choices.Chosen(project));
         Assert.Equal(kept.Home, registry.Named(kept.Name)?.Home);
         Assert.False(File.Exists(ProjectJdk.FileOf(project)), "the shared project file is not written");
-        Assert.Null(MissingJdks.Note(new JdkRequirement(null, 21, null, JdkRequirement.Project)));
     }
 
     [Fact]
@@ -73,7 +72,6 @@ public sealed class MissingJdksTests : IDisposable
         Jdk gradle = new JdkRegistry(null, () => [other], Path.Combine(root, "no-intellij")).All()[0];
         Jdk registered = MissingJdks.Choose(root, new MissingJdk("api", new JdkRequirement(null, 17, null, JdkRequirement.GradleToolchain)), gradle, registry, choices);
         Assert.Equal(JdkOrigin.Added, registered.Origin);
-        Assert.NotNull(MissingJdks.Note(new JdkRequirement(null, 17, null, JdkRequirement.GradleToolchain)));
     }
 
     private static JvmToolchain Missing(JdkRequirement requirement) => new(null, requirement.Feature, null) { Requirement = requirement };

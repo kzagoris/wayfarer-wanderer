@@ -239,6 +239,37 @@ public sealed class WorkspaceImportTests
     }
 
     [Fact]
+    public async Task AToolchainOnlyTheJdkTableKnowsResolvesInGradle()
+    {
+        // Gradle's own detection is off, so only the paths Wayfarer passes can find the toolchain; it must not be the JDK
+        // the daemon runs on, which Gradle always knows.
+        int?[] daemon = [ToolingJvms.At(Environment.GetEnvironmentVariable("JAVA_HOME") ?? string.Empty)?.Feature, ToolingJvms.Find().Feature];
+        Jdk? only = JdkRegistry.Current.All().Where(jdk => jdk.Feature >= 8 && !daemon.Contains(jdk.Feature)).OrderByDescending(jdk => jdk.Feature).FirstOrDefault();
+        Assert.SkipWhen(only is null, "No JDK here other than the one Gradle runs on.");
+        string root = Copy("gradle-layouts");
+        WorkspaceTrust.Trust(root);
+        try
+        {
+            await File.AppendAllTextAsync(Path.Combine(root, "gradle.properties"), "\norg.gradle.java.installations.auto-detect=false\n", TestContext.Current.CancellationToken);
+            string build = Path.Combine(root, "app", "build.gradle.kts");
+            await File.WriteAllTextAsync(build, (await File.ReadAllTextAsync(build, TestContext.Current.CancellationToken))
+                .Replace("JavaLanguageVersion.of(22)", $"JavaLanguageVersion.of({only!.Feature})", StringComparison.Ordinal), TestContext.Current.CancellationToken);
+
+            WorkspaceSnapshot snapshot = await new ProjectHostImporter().ImportAsync(root, 1, TestContext.Current.CancellationToken);
+            JvmModule app = snapshot.Module("app")!;
+            Assert.Null(app.Problem);
+            Assert.False(app.CompileToolchain.Missing);
+            Assert.Equal(only.Feature, ToolingJvms.At(app.CompileToolchain.Home!)!.Feature);
+        }
+        finally
+        {
+            await ProjectHosts.ReleaseAsync(root);
+            WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root));
+            Delete(root);
+        }
+    }
+
+    [Fact]
     public async Task AnIntelliJModuleNamingAnAbsentJdkIsAMissingRequirement()
     {
         string root = Copy("idea/course");

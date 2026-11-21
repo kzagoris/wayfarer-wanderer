@@ -112,10 +112,6 @@ public sealed class JdkPickerDialog : IdeWindow
         Button add = new() { Content = "Add JDK from Disk…" };
         add.Click += (_, _) => UnawaitedWork.Observe(AddFromDiskAsync());
         List<Control> paragraphs = [DialogFooter.Paragraph(MissingJdks.Say([missing]).Replace(" No installed JDK matches.", string.Empty, StringComparison.Ordinal)), list, problem];
-        if (MissingJdks.Note(missing.Requirement) is { } note)
-        {
-            paragraphs.Insert(1, DialogFooter.Paragraph(note));
-        }
         DialogFooter.Question(this, "Choose JDK", paragraphs, DialogFooter.Of(choose, DialogFooter.Cancel(() => Close(null))), add);
         Fill(null);
     }

@@ -8,7 +8,7 @@ public sealed record MissingJdk(string? Module, JdkRequirement Requirement);
 /// What the window's missing-JDK banner shows of a snapshot, as IntelliJ shows a missing SDK, and where a JDK chosen for
 /// one goes: a project's requirement into this machine's <see cref="ProjectJdkChoices"/> (never the shared project file),
 /// an IntelliJ JDK name into the <see cref="JdkRegistry"/> under that name, a build's (a Gradle toolchain, a Maven
-/// toolchains requirement) into the table, where the build sees it once Wayfarer passes its JDKs to the build.
+/// toolchains requirement) into the table, which Wayfarer passes to Gradle and Maven (<see cref="BuildJdks"/>).
 /// </summary>
 public static class MissingJdks
 {
@@ -55,14 +55,6 @@ public static class MissingJdks
         ArgumentNullException.ThrowIfNull(requirement);
         return [.. jdks.Where(jdk => requirement.Feature is not int feature || jdk.Feature == feature)];
     }
-
-    /// <summary>What Choose… says beside the list, where a chosen JDK may not be seen at once; null where it is.</summary>
-    public static string? Note(JdkRequirement requirement) => requirement.Source switch
-    {
-        JdkRequirement.GradleToolchain => "Gradle looks for toolchains among the JDKs it finds itself; it may not use a JDK chosen here until Wayfarer passes its JDKs to Gradle.",
-        JdkRequirement.MavenRelease => "Maven looks for toolchains in its toolchains.xml; it may not use a JDK chosen here until Wayfarer passes its JDKs to Maven.",
-        _ => null,
-    };
 
     /// <summary>Puts <paramref name="chosen"/> where <paramref name="missing"/>'s requirement looks, keeping it in the
     /// table; returns it as the table now names it.</summary>

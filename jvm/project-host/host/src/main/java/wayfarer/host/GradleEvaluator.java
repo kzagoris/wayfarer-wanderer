@@ -54,8 +54,14 @@ final class GradleEvaluator {
                         + ", which Wayfarer imports. Update the wrapper with 'gradle wrapper --gradle-version " + MINIMUM.getVersion() + "' or later.");
             }
             Protocol.Jvm importJvm = Jvms.at(environment.getJava().getJavaHome().toPath());
+            List<String> arguments = new ArrayList<>(List.of("--init-script", initScript().toString()));
+            // The IDE's JDKs, so a toolchain resolves to one Gradle's own detection would miss.
+            String jdkPaths = GradleJdks.argument(root, params.jdks());
+            if (jdkPaths != null) {
+                arguments.add(jdkPaths);
+            }
             BuildActionExecuter<List<String>> action = connection.action(new WorkspaceAction())
-                    .withArguments("--init-script", initScript().toString())
+                    .withArguments(arguments)
                     .withCancellationToken(cancel.token())
                     .setStandardOutput(System.err)
                     .setStandardError(System.err);
