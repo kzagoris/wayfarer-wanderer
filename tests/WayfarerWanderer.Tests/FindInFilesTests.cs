@@ -156,6 +156,39 @@ public sealed class FindInFilesTests : IDisposable
     }
 
     [AvaloniaFact]
+    public async Task ReplaceInFilesNeverWritesThroughALink()
+    {
+        string outside = Directory.CreateTempSubdirectory("wayfarer-find-outside-").FullName;
+        string target = Path.Combine(outside, "Shared.java");
+        File.WriteAllText(target, "class Shared { String s = \"hello\"; }\n");
+        string link = Path.Combine(root, "docs", "Shared.java");
+        try
+        {
+            File.CreateSymbolicLink(link, target);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // This system lets no one without the right make a link: nothing to check.
+            Directory.Delete(outside, recursive: true);
+            return;
+        }
+        EditorWindow window = await OpenAsync();
+        try
+        {
+            SearchMatch match = new(link, 0, 27, 5, "class Shared { String s = \"hello\"; }");
+            string said = await window.ReplaceInFilesAsync(new SearchQuery("hello"), "bye", [match]);
+            Assert.Equal("Nothing replaced; not replaced: Shared.java (a link, or outside the folder where a link leads)", said);
+            Assert.Contains("hello", File.ReadAllText(target));
+        }
+        finally
+        {
+            window.Close();
+            File.Delete(link);
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [AvaloniaFact]
     public async Task ShortcutOpensFindInFilesWithTheSelectedWord()
     {
         EditorWindow window = await OpenAsync();

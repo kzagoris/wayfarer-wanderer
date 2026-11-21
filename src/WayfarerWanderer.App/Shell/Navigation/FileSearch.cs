@@ -178,6 +178,9 @@ public static class FileSearch
     /// <summary>Why a file a regex ran too long in is left as it was.</summary>
     public const string StoppedWhy = "the regex took too long there";
 
+    /// <summary>Why a link, or a file a link in the folder leads out of it to, is left as it was.</summary>
+    public const string OutsideWhy = "a link, or outside the folder where a link leads";
+
     /// <summary>What is wrong with a query (a regex that does not read), or null.</summary>
     public static string? Problem(SearchQuery query)
     {

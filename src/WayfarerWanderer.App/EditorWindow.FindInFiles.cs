@@ -146,7 +146,8 @@ public sealed partial class EditorWindow
                 SearchScopeKind.Project => Walked(root),
                 SearchScopeKind.Module when scope.Module is { } module => Walked(module),
                 SearchScopeKind.Directory when scope.Directory is { Length: > 0 } directory && Directory.Exists(directory) =>
-                    scope.Recursive ? Walked(directory) : Directory.EnumerateFiles(directory).Order(StringComparer.OrdinalIgnoreCase),
+                    scope.Recursive ? Walked(directory) : new DirectoryInfo(directory).EnumerateFiles()
+                        .Where(f => !f.Attributes.HasFlag(FileAttributes.ReparsePoint)).Select(f => f.FullName).Order(StringComparer.OrdinalIgnoreCase),
                 SearchScopeKind.Scope => named,
                 _ => [],
             };
@@ -210,6 +211,21 @@ public sealed partial class EditorWindow
         }
     }
 
+    /// <summary>Whether a closed file is a link, or lies in the folder but is reached through a link that leads out of it:
+    /// Replace All writes neither, so no search can write a file the folder only points to.</summary>
+    private static bool LeadsOut(string path, string? root)
+    {
+        try
+        {
+            return new FileInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint)
+                || root is not null && PathNames.IsUnder(path, root) && !PathNames.IsUnder(PathNames.Canonical(path), PathNames.Canonical(root));
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
+    }
+
     /// <summary>Replaces a query's matches in the files they were found in: what the status line says of it.</summary>
     public async Task<string> ReplaceInFilesAsync(SearchQuery query, string replacement, IReadOnlyList<SearchMatch> matches)
     {
@@ -217,12 +233,18 @@ public sealed partial class EditorWindow
         List<(string Path, string Why)> refused = [];
         List<string> converted = [];
         List<(string Path, TextSnapshot? Open)> files = [];
+        string? root = Session?.Root;
         foreach (string path in matches.Select(m => m.Path).Distinct(PathNames.Comparer))
         {
             TextDocument? open = FindOpenDocument(path);
             if (open is { IsReadOnly: true })
             {
                 refused.Add((path, FileSearch.ReadOnlyWhy));
+                continue;
+            }
+            if (open is null && LeadsOut(path, root))
+            {
+                refused.Add((path, FileSearch.OutsideWhy));
                 continue;
             }
             files.Add((path, open?.Snapshot));
