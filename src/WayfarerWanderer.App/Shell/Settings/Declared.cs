@@ -35,6 +35,10 @@ public static class Declared
             "How large the window draws everything: menus, tool windows, tabs, dialogs, popups, editors and icons, on top of the "
             + "system's own display scaling. 100% is Wayfarer's own size; 125% or 150% suits a dense screen."));
 
+    public static readonly ToggleSetting MainMenuBar = new(s => s.MainMenuBar, (s, v) => s with { MainMenuBar = v },
+        new(D.Appearance, "Show main menu as a menu bar", "main menu bar hamburger file edit view toolbar ribbon menus",
+            "File, Edit, View and the rest side by side on the toolbar rather than behind its button. Those the toolbar has no room for go behind the button after them."));
+
     public static readonly ToggleSetting ReopenProjectsOnStartup = new(s => s.ReopenProjectsOnStartup, (s, v) => s with { ReopenProjectsOnStartup = v },
         new(D.SystemPage, "Reopen projects on startup", "reopen last project folder startup start launch welcome screen recent"));
 

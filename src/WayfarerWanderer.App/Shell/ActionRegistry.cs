@@ -14,9 +14,17 @@ public sealed class ActionRegistry(Func<ActionContext> context, Func<Keymap> key
     private readonly Dictionary<string, IdeAction> byId = new(StringComparer.Ordinal);
     private IReadOnlyList<IdeAction>? sorted;
 
+    /// <summary>Where the main menu lists an action besides the places it names itself, given to it as it is added: the
+    /// window's one table of places, so the menus and Settings' Keymap page read them from the action alike.</summary>
+    public Func<string, IReadOnlyList<MenuPlace>>? Places { get; init; }
+
     /// <summary>Adds an action; an id added twice is a mistake in the code, never a choice between two.</summary>
     public void Add(IdeAction action)
     {
+        if (Places?.Invoke(action.Id) is { Count: > 0 } places)
+        {
+            action = action with { Menus = [.. action.Menus, .. places] };
+        }
         if (!byId.TryAdd(action.Id, action))
         {
             throw new InvalidOperationException($"The action {action.Id} is added twice");

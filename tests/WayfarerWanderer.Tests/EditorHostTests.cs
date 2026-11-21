@@ -16,7 +16,12 @@ public class TestApp
     /// <summary>As the app's Main does first, before any test reads the program's path, so what the windows say and the
     /// shared libraries' messages are Wayfarer's.</summary>
     [System.Runtime.CompilerServices.ModuleInitializer]
-    internal static void Identify() => EditorApplication.Identify();
+    internal static void Identify()
+    {
+        EditorApplication.Identify();
+        // Opening a fixture folder starts no language server; a test that wants one asks for it.
+        EditorWindow.StartsLanguageServersOnOpen = false;
+    }
 
     public static AppBuilder BuildAvaloniaApp()
     {

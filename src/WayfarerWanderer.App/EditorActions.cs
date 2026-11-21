@@ -45,7 +45,7 @@ public sealed class EditorActions
 
     public EditorActions(Func<bool> hasDocument, Action toggle, Func<ActionContext> context, Func<Keymap> keymap)
     {
-        Registry = new ActionRegistry(context, keymap, new ActionWork());
+        Registry = new ActionRegistry(context, keymap, new ActionWork()) { Places = MainMenuPlaces.Of };
         Add(new EditorAction(ToggleBreakpoint, "Toggle Breakpoint", hasDocument, toggle));
     }
 

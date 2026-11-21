@@ -11,7 +11,7 @@ namespace WayfarerWanderer.App;
 
 public sealed partial class EditorWindow
 {
-    private const string CompleteAction = "app.jvm.complete", RenameAction = "app.jvm.rename", UndoRenameAction = "app.jvm.undoRename";
+    internal const string CompleteAction = "app.jvm.complete", RenameAction = "app.jvm.rename", UndoRenameAction = "app.jvm.undoRename";
     private readonly Dictionary<string, JvmLanguageClient> languageClients = [];
     private readonly Dictionary<string, (int Version, TextSnapshot Text)> sentSources = new(PathNames.Comparer);
     private CancellationTokenSource semanticLifetime = new();
@@ -69,13 +69,6 @@ public sealed partial class EditorWindow
         Deactivated += (_, _) => CloseCompletion();
     }
 
-    private MenuItem SemanticMenu()
-    {
-        MenuItem menu = new() { Header = "Code", Items = { MenuAction(CompleteAction), MenuAction(RenameAction), MenuAction(UndoRenameAction) } };
-        menu.SubmenuOpened += (_, _) => RefreshActions(menu);
-        return menu;
-    }
-
     private void ResetSemanticSession()
     {
         CloseCompletion();
@@ -98,6 +91,55 @@ public sealed partial class EditorWindow
         foreach (JvmLanguageClient client in languageClients.Values.Where(client => !client.HasExited))
             UnawaitedWork.Observe(client.ReloadModelAsync(snapshot, token));
         RefreshKotlinClasses();
+        StartLanguageServers();
+    }
+
+    /// <summary>Whether a trusted folder's language servers start as soon as its model is read, rather than on the first
+    /// completion or rename. Tests turn it off so opening a fixture starts no server.</summary>
+    public static bool StartsLanguageServersOnOpen { get; set; } = true;
+
+    /// <summary>Starts the server of each language the project's sources are written in, one after the other, so the
+    /// first completion finds it running. A server that cannot start says nothing here; the first ask tries again and
+    /// reports why.</summary>
+    private void StartLanguageServers()
+    {
+        if (!StartsLanguageServersOnOpen || Session is not { IsTrusted: true, Snapshot: { } snapshot } session) return;
+        CancellationToken lifetime = semanticLifetime.Token;
+        UnawaitedWork.Observe(StartAsync());
+
+        async Task StartAsync()
+        {
+            try
+            {
+                IReadOnlyList<string> languages = await Task.Run(() => SourceLanguages(snapshot, lifetime), lifetime);
+                foreach (string language in languages)
+                {
+                    if (lifetime.IsCancellationRequested || Session != session || !session.IsTrusted) return;
+                    try { await StartedClientAsync(language); }
+                    catch (Exception error) when (error is not OperationCanceledException) { /* reported on the first ask */ }
+                }
+            }
+            catch (OperationCanceledException) { }
+        }
+    }
+
+    /// <summary>The languages, of those with a server, that the model's source roots hold files of: Java first, since on
+    /// Maven the Kotlin class bridge waits for the Java server.</summary>
+    private static IReadOnlyList<string> SourceLanguages(WorkspaceSnapshot snapshot, CancellationToken token)
+    {
+        EnumerationOptions everywhere = new() { RecurseSubdirectories = true, IgnoreInaccessible = true };
+        HashSet<string> found = [];
+        foreach (string root in snapshot.Modules.SelectMany(m => m.SourceRoots).Select(s => s.Path).Distinct(PathNames.Comparer))
+        {
+            if (!Directory.Exists(root)) continue;
+            foreach (string file in Directory.EnumerateFiles(root, "*", everywhere))
+            {
+                token.ThrowIfCancellationRequested();
+                if (Language(file) is { } language && found.Add(language) && found.Count == 2)
+                    return [.. found.Order()];
+            }
+        }
+        return [.. found.Order()];
     }
 
     private async Task RunSemanticAsync(Func<Task> action)

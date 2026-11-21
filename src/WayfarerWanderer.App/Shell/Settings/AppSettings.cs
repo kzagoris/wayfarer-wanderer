@@ -43,8 +43,8 @@ public sealed record AppSettings : IStateDocument<AppSettings>
 
     /// <summary>The main menu as a bar of its menus on the toolbar (File, Edit, View…) rather than behind its button,
     /// where the system has no menu bar of its own; those the toolbar has no room for behind the button after
-    /// them.</summary>
-    public bool MainMenuBar { get; init; }
+    /// them. On at first: Wayfarer's menus are few enough to stand side by side.</summary>
+    public bool MainMenuBar { get; init; } = true;
 
     /// <summary>The window's typeface by its family's name, <see cref="WindowFontNames.SystemUi"/> for the system's own UI
     /// font, or null for the Inter Passenger carries.</summary>

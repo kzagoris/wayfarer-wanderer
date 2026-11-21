@@ -72,30 +72,6 @@ public sealed partial class EditorWindow
     /// <summary>The Welcome screen shows while no folder and no file is open.</summary>
     private void ShowWelcomeWhenEmpty() => Welcome.IsVisible = Session is null && !Editor.IsVisible;
 
-    /// <summary>File, Recent Folders: each recent folder but the one open, newest first, by name and where it is.</summary>
-    private MenuItem RecentMenu()
-    {
-        MenuItem recent = new() { Header = "Recent Folders" };
-        recent.Items.Add(new MenuItem());
-        void Fill()
-        {
-            recent.Items.Clear();
-            foreach (RecentRow row in RecentFolders.Where(r => Session is null || !PathNames.Same(r.Path, Session.Root)))
-            {
-                MenuItem item = new() { Header = $"{row.Name} – {row.Shown}" };
-                item.Click += (_, _) => OpenRecent(row.Path);
-                recent.Items.Add(item);
-            }
-            if (recent.Items.Count == 0)
-            {
-                recent.Items.Add(new MenuItem { Header = "No recent folders", IsEnabled = false });
-            }
-        }
-        recent.SubmenuOpened += (_, _) => Fill();
-        Fill();
-        return recent;
-    }
-
     /// <summary>Opens a recent folder, as the Welcome screen and File, Recent Folders do: null once it is opening, else why
     /// not (it is gone), which the Welcome screen says.</summary>
     public string? OpenRecent(string path)
@@ -155,6 +131,18 @@ public sealed partial class EditorWindow
         }
         rememberedRoot = canonical;
         state.Recent.Set(recent.Opened(canonical, Path.GetFileName(Path.TrimEndingDirectorySeparator(canonical)), DateTimeOffset.UtcNow));
+        Welcome.Show(RecentFolders);
+        FollowRecentShortcuts();
+    }
+
+    /// <summary>The folder open is open no longer among the recent ones (Close Project), so a start does not open it again.</summary>
+    private void ForgetOpen()
+    {
+        if (EditorApplication.State is { } state && rememberedRoot is { } root)
+        {
+            state.Recent.Set(state.Recent.Value.Closed(root));
+        }
+        rememberedRoot = null;
         Welcome.Show(RecentFolders);
         FollowRecentShortcuts();
     }
@@ -259,6 +247,8 @@ public sealed partial class EditorWindow
             keys = AppActions.Keymap();
             Editor.Keymap = keys;
             TerminalSettingsChanged(change);
+            FollowMainMenu(SettingsKept.Value);
+            FollowTitleBar(SettingsKept.Value);
         });
 
     /// <summary>The Trusted Folders page's change put in force and kept: a folder trusted anew is trusted, one whose trust

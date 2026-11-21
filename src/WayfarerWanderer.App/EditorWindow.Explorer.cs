@@ -71,10 +71,10 @@ public sealed partial class EditorWindow
         Row(A.NewFile, "New File…", row => AskName("New File", string.Empty, name => CreateFile(row.Into!, name, string.Empty)), Holds);
         Row(A.NewFolder, "New Folder…", row => AskName("New Folder", string.Empty, name => CreateFolder(row.Into!, name)), Holds);
         Row(A.NewType, "Java/Kotlin Class…", row => AskType(row.Into!), Holds);
-        Row(E.Cut, "Cut", row => IdeErrors.Observe(HoldAsync(row, cut: true)), Movable);
-        Row(E.Copy, "Copy", row => IdeErrors.Observe(HoldAsync(row, cut: false)), Movable);
-        Row(E.Paste, "Paste", row => IdeErrors.Observe(PasteAsync(row)),
-            row => row.Into is null ? $"Nothing can be pasted into {row.Name}" : held is null ? NothingHeld : null);
+        ClipboardAction(E.Cut, "Cut", row => IdeErrors.Observe(HoldAsync(row, cut: true)), Movable, box => box.Cut());
+        ClipboardAction(E.Copy, "Copy", row => IdeErrors.Observe(HoldAsync(row, cut: false)), Movable, box => box.Copy());
+        ClipboardAction(E.Paste, "Paste", row => IdeErrors.Observe(PasteAsync(row)),
+            row => row.Into is null ? $"Nothing can be pasted into {row.Name}" : held is null ? NothingHeld : null, box => box.Paste());
         Row(E.Delete, "Delete…", row => IdeErrors.Observe(DeleteRowsAsync(row)), Movable);
         Row(A.Rename, "Rename…", row => AskRename(row.Path!), Movable);
         Row(A.CopyPath, "Copy Path", row => IdeErrors.Observe(CopyPathAsync(row.Path!)), row => row.Path is null ? $"{row.Name} is in no folder on disk" : null);
@@ -94,9 +94,31 @@ public sealed partial class EditorWindow
             WhyNot = c => RowOf(c) is { } row ? whyNot(row) : NoRow,
         });
 
+    /// <summary>One of the clipboard's actions, Edit's and the Explorer's alike: on the Explorer's chosen rows while its menu
+    /// asks or its rows have the keys, else on the text box with the keys or the editor shown (<see cref="EditText"/>).</summary>
+    private void ClipboardAction(string id, string title, Action<ExplorerNode> run, Func<ExplorerNode, string?> whyNot, Action<TextBox> inBox) =>
+        Actions.Registry.Add(new IdeAction(id, title, "Edit", c =>
+        {
+            if (InExplorer(c))
+            {
+                run(RowOf(c)!);
+            }
+            else
+            {
+                EditText(c, id, inBox);
+            }
+        })
+        {
+            WhyNot = c => InExplorer(c) ? RowOf(c) is { } row ? whyNot(row) : NoRow : WhyNotEditText(c),
+            InEditor = true,
+        });
+
+    /// <summary>Whether an action asked for here acts on the Explorer's rows: its menu asks, or its rows have the keys.</summary>
+    private bool InExplorer(ActionContext context) =>
+        context.ToolWindow?.Id == ToolWindowIds.Explorer || context.Focused is not TextBox && Explorer.RowList.IsKeyboardFocusWithin;
+
     /// <summary>The Explorer's row an action acts on: the one chosen while its menu asks or its rows have the keys.</summary>
-    private ExplorerNode? RowOf(ActionContext context) =>
-        context.ToolWindow?.Id == ToolWindowIds.Explorer || context.Focused is not TextBox && Explorer.RowList.IsKeyboardFocusWithin ? Explorer.Selected : null;
+    private ExplorerNode? RowOf(ActionContext context) => InExplorer(context) ? Explorer.Selected : null;
 
     /// <summary>Where the Explorer's actions run as its menu or its keys ask: on its chosen row.</summary>
     private ActionContext ExplorerContext() => Actions.Registry.Context().In(ExplorerWindow);

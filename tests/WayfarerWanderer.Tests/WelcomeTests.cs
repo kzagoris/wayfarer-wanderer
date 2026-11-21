@@ -162,8 +162,73 @@ public class WelcomeTests
         }
     }
 
-    private static MenuItem MenuNamed(Window window, string header) =>
-        window.GetVisualDescendantsOfType<Menu>().Single().Items.OfType<MenuItem>().Single(i => (string?)i.Header == header);
+    private static MenuItem MenuNamed(EditorWindow window, string header) => window.MainMenuNamed(header);
+
+    private static string[] Ids(MenuItem menu) => [.. menu.Items.Select(i => i is MenuItem item ? item.Tag as string ?? (string)item.Header! : "-")];
+
+    [AvaloniaFact]
+    public void MainMenuFollowsIdeasMenusAndGreysWhatCannotRun()
+    {
+        var window = EditorApplication.CreateWindow(null);
+        window.Show();
+        try
+        {
+            // The menus the actions name a place in, in IntelliJ IDEA's order; none empty.
+            Assert.Equal(["File", "Edit", "View", "Code", "Refactor", "Build", "Run", "Tests", "Tools", "Git", "Help"],
+                window.MainMenuEntries.Select(m => m.Title));
+            // File: projects (Recent Projects among them, then Close Project), the file, settings, Exit; split by separators.
+            Assert.Equal([EditorActions.NewProject, EditorActions.OpenWorkspace, EditorActions.OpenSource, AppActions.CloneRepository,
+                MainMenu.RecentProjects, AppActions.CloseSolution, "-", EditorActions.SaveSource, "-", AppActions.ShowSettings,
+                EditorActions.ProjectStructure, "-", AppActions.Exit], Ids(MenuNamed(window, "File")));
+            // Nothing is open: Close Project is greyed and says why.
+            MenuItem close = MenuNamed(window, "File").Items.OfType<MenuItem>().Single(i => (string?)i.Tag == AppActions.CloseSolution);
+            Assert.Equal("Close Project", close.Header);
+            Assert.False(close.IsEnabled);
+            Assert.Equal(Refusals.NoFolder, ToolTip.GetTip(close));
+            // View lists every tool window.
+            MenuItem toolWindows = MenuNamed(window, "View").Items.OfType<MenuItem>().Single(i => (string?)i.Header == MainMenu.ToolWindows);
+            Assert.Contains("Project", toolWindows.Items.OfType<MenuItem>().Select(i => (string?)i.Header));
+            // Settings' Keymap page says where the menu lists an action.
+            Assert.Equal("File", window.Actions.Registry[AppActions.CloseSolution]!.Menus.Single().Path);
+            // The toolbar's widgets say nothing is open.
+            Assert.Equal("No project", Assert.IsType<DockPanel>(window.ProjectWidget.Content).Children.OfType<TextBlock>().Single().Text);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task CloseProjectLeavesTheFolderForTheWelcomeScreen()
+    {
+        string folder = Directory.CreateTempSubdirectory("wayfarer-close-").FullName;
+        var window = EditorApplication.CreateWindow(null);
+        window.Show();
+        try
+        {
+            await window.OpenWorkspaceAsync(folder);
+            window.UpdateToolbar();
+            Assert.Equal(Path.GetFileName(folder), Assert.IsType<DockPanel>(window.ProjectWidget.Content).Children.OfType<TextBlock>().Single().Text);
+            Assert.True(MenuNamed(window, "File").Items.OfType<MenuItem>().Single(i => (string?)i.Tag == AppActions.CloseSolution).IsEnabled);
+
+            await window.CloseProjectAsync();
+            Assert.Null(window.Session);
+            Assert.True(window.Welcome.IsVisible);
+            Assert.Equal("Wayfarer Wanderer", window.Title);
+            Assert.Equal("No project", Assert.IsType<DockPanel>(window.ProjectWidget.Content).Children.OfType<TextBlock>().Single().Text);
+            Assert.False(MenuNamed(window, "File").Items.OfType<MenuItem>().Single(i => (string?)i.Tag == AppActions.CloseSolution).IsEnabled);
+        }
+        finally
+        {
+            window.Close();
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ProjectBadgeTakesTheFirstLettersOfItsWords() =>
+        Assert.Equal(["WW", "TE", "A"], new[] { "wayfarer-wanderer", "test", "a" }.Select(EditorWindow.Badge));
 
     [Fact]
     public void TrustTakenBackInSettingsEndsTheRepositorysTrustAndKeepsOtherAnswers()

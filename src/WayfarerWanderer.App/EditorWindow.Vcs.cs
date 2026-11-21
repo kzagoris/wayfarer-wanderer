@@ -337,35 +337,6 @@ public sealed partial class EditorWindow
         : remote ? Vcs.WhyNotRemote
         : whyNot?.Invoke();
 
-    /// <summary>The Git menu: its actions in Passenger's groups, each greyed with why where it cannot run.</summary>
-    private MenuItem GitMenu()
-    {
-        MenuItem menu = new()
-        {
-            Header = "Git",
-            Items =
-            {
-                MenuAction(AppActions.Commit), MenuAction(AppActions.Push), MenuAction(AppActions.UpdateProject), MenuAction(AppActions.Fetch),
-                MenuAction(AppActions.Branches), new Separator(),
-                MenuAction(AppActions.Stash), MenuAction(AppActions.Unstash), new Separator(),
-                MenuAction(AppActions.ShowDiff), MenuAction(AppActions.Annotate), MenuAction(AppActions.RollbackLines),
-                MenuAction(AppActions.ResolveConflicts), new Separator(),
-                RegistryItem(AppActions.CreateRepository), RegistryItem(AppActions.CommitSigning), MenuAction(AppActions.CloneRepository),
-            },
-        };
-        menu.SubmenuOpened += (_, _) => RefreshActions(menu);
-        return menu;
-    }
-
-    /// <summary>A menu item for an action only the registry holds, greyed as it says.</summary>
-    private MenuItem RegistryItem(string id)
-    {
-        IdeAction action = Actions.Registry[id]!;
-        MenuItem item = new() { Header = action.Title, Tag = (Func<bool>)(() => action.CanRun(Actions.Registry.Context())) };
-        item.Click += (_, _) => Actions.TryExecute(id);
-        return item;
-    }
-
     private const string NoDiff = "No diff has the keys";
 
     private static DiffView? DiffWithKeys(ActionContext context) => (context.Focused as Visual)?.FindAncestorOfType<DiffView>(includeSelf: true);

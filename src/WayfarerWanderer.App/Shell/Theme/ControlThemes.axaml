@@ -5,6 +5,19 @@
     <!-- Passenger's own themes for the controls it draws whole, in place of Fluent's: in App.axaml's resources, which a
          control finds before the Fluent theme's. Shell.axaml restyles the rest. -->
 
+    <!-- Avalonia's own title bar, which Windows and Linux draw once the window extends into its frame: none of it is
+         drawn, the toolbar being the title bar with the window's buttons its own (EditorWindow.Toolbar.cs). -->
+    <ControlTheme x:Key="TitleBarDecorations" TargetType="WindowDrawnDecorations">
+        <Setter Property="DefaultTitleBarHeight" Value="40" />
+        <Setter Property="DefaultFrameThickness" Value="4" />
+        <Setter Property="DefaultShadowThickness" Value="0" />
+        <Setter Property="Template">
+            <WindowDrawnDecorationsTemplate>
+                <WindowDrawnDecorationsContent />
+            </WindowDrawnDecorationsTemplate>
+        </Setter>
+    </ControlTheme>
+
     <!-- The ring round what has the keys: rounded as what it surrounds, just outside its edge, a check box's or a radio
          button's round the box alone (FocusRing). -->
     <ControlTheme x:Key="{x:Type AdornerLayer}" TargetType="AdornerLayer">

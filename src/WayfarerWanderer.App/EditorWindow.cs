@@ -48,37 +48,8 @@ public sealed partial class EditorWindow : Window
         AddProjectActions();
         AddSemanticActions();
         AddVcs();
-        MenuItem build = MenuAction(EditorActions.Build);
-        MenuItem test = MenuAction(EditorActions.RunTests);
-        MenuItem run = MenuAction(EditorActions.Run);
-        MenuItem debug = MenuAction(EditorActions.Debug);
-        MenuItem toggle = MenuAction(EditorActions.ToggleBreakpoint);
-        MenuItem stop = MenuAction(EditorActions.Stop);
-        MenuItem newProject = MenuAction(EditorActions.NewProject);
-        MenuItem runMenu = new()
-        {
-            Header = "Run",
-            Items = { build, test, run, debug, toggle, MenuAction(EditorActions.Continue),
-                MenuAction(EditorActions.StepInto), MenuAction(EditorActions.StepOver), MenuAction(EditorActions.StepOut), stop,
-                new Separator(), MenuAction(EditorActions.ChooseRunJdk) }
-        };
         AddWelcome();
-        MenuItem fileMenu = new() { Header = "File", Items = { newProject, MenuAction(EditorActions.OpenWorkspace), MenuAction(AppActions.CloneRepository), RecentMenu(),
-            MenuAction(EditorActions.OpenSource), MenuAction(EditorActions.SaveSource), new Separator(), MenuAction(EditorActions.ProjectStructure),
-            MenuAction(AppActions.ShowSettings) } };
-        fileMenu.SubmenuOpened += (_, _) => RefreshActions(fileMenu);
-        runMenu.SubmenuOpened += (_, _) => RefreshActions(runMenu);
-        Menu menu = new()
-        {
-            Items =
-            {
-                fileMenu,
-                SemanticMenu(),
-                runMenu,
-                GitMenu(),
-            }
-        };
-        DockPanel.SetDock(menu, Dock.Top);
+        AddMainMenuActions();
         var query = new TextBox { PlaceholderText = "Find Action" };
         var matches = new ListBox { DisplayMemberBinding = new Avalonia.Data.Binding(nameof(EditorAction.Title)) };
         var palette = new StackPanel
@@ -121,6 +92,13 @@ public sealed partial class EditorWindow : Window
             if (matches.SelectedItem is EditorAction selected && selected.TryExecute())
                 ClosePalette();
         }
+        openFindAction = () =>
+        {
+            palette.IsVisible = true;
+            query.Text = "";
+            Refresh();
+            query.Focus();
+        };
         query.TextChanged += (_, _) => Refresh();
         matches.DoubleTapped += (_, _) => RunSelected();
         AddHandler(KeyDownEvent, (_, e) =>
@@ -128,15 +106,7 @@ public sealed partial class EditorWindow : Window
             // The first start's page takes every key while it shows.
             if (FirstStart is not null)
                 return;
-            var modifier = OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
-            if (e.Key == Key.A && e.KeyModifiers == (modifier | KeyModifiers.Shift))
-            {
-                palette.IsVisible = true;
-                query.Text = "";
-                Refresh();
-                query.Focus();
-            }
-            else if (palette.IsVisible && e.Key == Key.Enter)
+            if (palette.IsVisible && e.Key == Key.Enter)
                 RunSelected();
             else if (palette.IsVisible && e.Key == Key.Escape)
                 ClosePalette();
@@ -150,13 +120,24 @@ public sealed partial class EditorWindow : Window
         AddExplorerActions();
         DockPanel.SetDock(TrustBanner, Dock.Top);
         DockPanel.SetDock(asking, Dock.Top);
-        frame = new DockPanel { Children = { menu, TrustBanner, MissingJdkBanner(), asking, StatusLine(), ToolDock } };
+        Control bar = Toolbar();
+        DockPanel.SetDock(bar, Dock.Top);
+        frame = new DockPanel { Children = { bar, TrustBanner, MissingJdkBanner(), asking, StatusLine(), ToolDock } };
         Content = new Panel { Children = { frame } };
-        KeyDown += (_, e) => e.Handled = FirstStart is null && Actions.TryExecute(keys.ActionFor(new Shortcut(Keystroke.From(e))));
+        // An editing action's keys (the clipboard's, Undo) are the editor's or a text box's where one has them; elsewhere
+        // they run nothing, as a menu item for them would run them in the editor.
+        KeyDown += (_, e) => e.Handled = FirstStart is null && keys.ActionFor(new Shortcut(Keystroke.From(e))) is { } pressed
+            && Actions.Registry[pressed] is { InEditor: false } && Actions.TryExecute(pressed);
         Opened += (_, _) => Editor.Focus();
         Closing += CloseSession;
         Closed += (_, _) => ForgetAllLanguages();
     }
+
+    /// <summary>Opens Find Action over the editor, its query given the keys.</summary>
+    private Action openFindAction = () => { };
+
+    /// <summary>Find Action: every action by name, the ones that can run now, run by Enter.</summary>
+    public void OpenFindAction() => openFindAction();
 
     public async Task OpenWorkspaceAsync(string root, CancellationToken cancellationToken = default)
     {
@@ -201,6 +182,7 @@ public sealed partial class EditorWindow : Window
             {
                 await Session.OpenAsync(cancellationToken);
                 ShowToolingJvmMissing(false);
+                if (request == workspaceRequest && !closing) StartLanguageServers();
             }
             catch (OperationCanceledException) when (request != workspaceRequest || closing)
             {
@@ -225,6 +207,7 @@ public sealed partial class EditorWindow : Window
             ToolDock.ShowBehind(ToolWindowIds.Build);
         }
         Title = $"Wayfarer Wanderer - {Path.GetFileName(Path.TrimEndingDirectorySeparator(root))}";
+        UpdateToolbar();
     }
 
     /// <summary>Puts the editor in the dock's centre, Project at its left, and Build, Tests and Debug at its bottom, each
@@ -299,38 +282,6 @@ public sealed partial class EditorWindow : Window
         AddLaunchJdkActions();
     }
 
-    private MenuItem MenuAction(string id)
-    {
-        EditorAction action = Actions[id];
-        MenuItem item = new() { Header = action.Title, IsEnabled = action.Available(), Tag = id, InputGesture = MenuGesture(id) };
-        item.Click += (_, _) => action.TryExecute();
-        return item;
-    }
-
-    /// <summary>The keys a menu item shows for its action: its first single-keystroke shortcut in the keymap in force, or
-    /// none for an action with only chords or no keys.</summary>
-    private KeyGesture? MenuGesture(string id) =>
-        keys.ShortcutsFor(id).FirstOrDefault(shortcut => shortcut.Second is null) is { First: var stroke }
-            ? new KeyGesture(stroke.Key, stroke.Modifiers)
-            : null;
-
-    private void RefreshActions(MenuItem menu)
-    {
-        foreach (MenuItem item in menu.Items.OfType<MenuItem>())
-        {
-            if (item.Tag is string id)
-            {
-                item.IsEnabled = Actions[id].Available();
-                // The keymap may have changed in Settings since the menu last opened.
-                item.InputGesture = MenuGesture(id);
-            }
-            else if (item.Tag is Func<bool> can)
-            {
-                item.IsEnabled = can();
-            }
-        }
-    }
-
     private void BuildCurrent()
     {
         ToolDock.ShowBehind(ToolWindowIds.Build);
@@ -374,6 +325,7 @@ public sealed partial class EditorWindow : Window
         {
             await Session.OpenAsync();
             ShowToolingJvmMissing(false);
+            StartLanguageServers();
         }
         catch (Exception failure) when (ToolingJvmMissing(failure))
         {
