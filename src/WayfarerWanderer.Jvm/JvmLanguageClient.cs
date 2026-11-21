@@ -20,13 +20,17 @@ public sealed class JvmLanguageClient : IAsyncDisposable
     private readonly Task reader;
     private readonly Task errors;
     private readonly TaskCompletionSource ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly WorkspaceSnapshot? snapshot;
+    private WorkspaceSnapshot? snapshot;
     private string lastError = "";
     private int nextId;
 
-    private JvmLanguageClient(Process process, string state, string root, WorkspaceSnapshot? snapshot)
+    private readonly string language;
+    private string[] bundles = [];
+
+    private JvmLanguageClient(Process process, string state, string root, string language, WorkspaceSnapshot? snapshot)
     {
         this.process = process;
+        this.language = language;
         this.state = state;
         this.snapshot = snapshot;
         folders = [new { uri = new Uri(root).AbsoluteUri, name = Path.GetFileName(root) }];
@@ -61,10 +65,8 @@ public sealed class JvmLanguageClient : IAsyncDisposable
             start.RedirectStandardInput = start.RedirectStandardOutput = start.RedirectStandardError = true;
             Process process = await ChildProcesses.StartAsync(start).ConfigureAwait(false);
             ChildProcesses.HoldFamily(process);
-            client = new(process, state, root, snapshot) { BundleProblem = bundleProblem };
-            object initializationOptions = snapshot is { BuildSystem: JvmBuildSystem.Idea }
-                ? new { bundles, settings = IdeaLanguageSettings.Document(snapshot) }
-                : (object)new { bundles };
+            client = new(process, state, root, language, snapshot) { BundleProblem = bundleProblem, bundles = bundles };
+            object initializationOptions = InitializationOptions(bundles, snapshot);
             await client.RequestAsync("initialize", new
             {
                 processId = Environment.ProcessId, rootUri = new Uri(root).AbsoluteUri, rootPath = root,
@@ -91,6 +93,52 @@ public sealed class JvmLanguageClient : IAsyncDisposable
 
     /// <summary>Completes when the server reports that its import finished.</summary>
     public Task WaitUntilReadyAsync(CancellationToken cancel) => ready.Task.WaitAsync(TimeSpan.FromMinutes(5), cancel);
+
+    private static object InitializationOptions(string[] bundles, WorkspaceSnapshot? snapshot) => snapshot switch
+    {
+        { BuildSystem: JvmBuildSystem.Idea } => new { bundles, settings = IdeaLanguageSettings.Document(snapshot) },
+        not null => new { bundles, settings = BuildLanguageSettings.Document(snapshot) },
+        null => new { bundles },
+    };
+
+    /// <summary>
+    /// Tells the server the build model changed after a reimport: the settings the snapshot decides (JDKs, or an IntelliJ
+    /// module's roots and libraries), then each build file the evaluation read as changed. JDT LS reimports the projects
+    /// of the build files named (<c>java/projectConfigurationsUpdate</c>). The Kotlin server watches no build file
+    /// itself: it imports again on <c>intellij/reloadWorkspace</c>, as JetBrains' own editor extension asks when a build
+    /// file is saved, and the request ends once the new workspace is loaded.
+    /// </summary>
+    public async Task ReloadModelAsync(WorkspaceSnapshot next, CancellationToken cancel)
+    {
+        snapshot = next;
+        if (language == "kotlin")
+        {
+            await RequestAsync("intellij/reloadWorkspace", new { initializationOptions = InitializationOptions(bundles, next) }, cancel).ConfigureAwait(false);
+            return;
+        }
+        object settings = next.BuildSystem == JvmBuildSystem.Idea ? IdeaLanguageSettings.Document(next) : BuildLanguageSettings.Document(next);
+        await NotifyAsync("workspace/didChangeConfiguration", new { settings }, cancel).ConfigureAwait(false);
+        object[] changes = [.. BuildFiles(next).Select(path => new { uri = new Uri(path).AbsoluteUri, type = 2 })];
+        if (changes.Length == 0)
+        {
+            return;
+        }
+        await NotifyAsync("workspace/didChangeWatchedFiles", new { changes }, cancel).ConfigureAwait(false);
+        if (language == "java" && next.BuildSystem != JvmBuildSystem.Idea)
+        {
+            object[] identifiers = [.. BuildFiles(next).Select(path => new { uri = new Uri(path).AbsoluteUri })];
+            await NotifyAsync("java/projectConfigurationsUpdate", new { identifiers }, cancel).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>The build files among what the evaluation read that exist: poms and Gradle scripts, the wrapper and
+    /// property files left out, since neither server imports from them.</summary>
+    private static IEnumerable<string> BuildFiles(WorkspaceSnapshot snapshot) =>
+        snapshot.BuildInputs.Select(input => input.Path)
+            .Where(path => Path.GetFileName(path) is "pom.xml" || path.EndsWith(".gradle", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".gradle.kts", StringComparison.OrdinalIgnoreCase))
+            .Where(File.Exists)
+            .Distinct(PathNames.Comparer);
 
     public Task NotifyAsync(string method, object parameters, CancellationToken cancel) =>
         SendAsync(new { jsonrpc = "2.0", method, @params = parameters }, cancel);
@@ -185,12 +233,13 @@ public sealed class JvmLanguageClient : IAsyncDisposable
             case "workspace/configuration":
                 result = message.GetProperty("params").GetProperty("items").EnumerateArray().Select(item =>
                 {
-                    if (snapshot is not { BuildSystem: JvmBuildSystem.Idea })
-                    {
-                        return null;
-                    }
                     string? section = item.TryGetProperty("section", out JsonElement name) ? name.GetString() : null;
-                    return IdeaLanguageSettings.Value(snapshot, section);
+                    return snapshot switch
+                    {
+                        { BuildSystem: JvmBuildSystem.Idea } => IdeaLanguageSettings.Value(snapshot, section),
+                        not null => BuildLanguageSettings.Value(snapshot, section),
+                        null => null,
+                    };
                 }).ToArray(); break;
             case "workspace/workspaceFolders": result = folders; break;
             case "workspace/applyEdit": result = new { applied = false, failureReason = "Edits require a reviewed preview." }; break;

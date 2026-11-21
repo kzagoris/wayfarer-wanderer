@@ -14,6 +14,7 @@ using Passenger.Editor;
 using Passenger.Text;
 using SkiaSharp;
 using WayfarerWanderer.App;
+using WayfarerWanderer.Jvm;
 
 namespace WayfarerWanderer.Tests;
 
@@ -265,6 +266,70 @@ public class EditorWindowTests
             WorkspaceTrust.TakeBack(trust);
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [AvaloniaFact]
+    public async Task AStaleModelTurnsRenameOffKeepsEditsAndARepairTurnsItBackOn()
+    {
+        string root = WorkspaceImportTests.Copy("maven-layouts");
+        string trust = WorkspaceTrust.FolderToTrust(root) ?? root;
+        WorkspaceTrust.Trust(root);
+        var window = EditorApplication.CreateWindow(new TextDocument("class Main {}"));
+        window.Show();
+        try
+        {
+            await window.OpenWorkspaceAsync(root, TestContext.Current.CancellationToken);
+            WorkspaceSnapshot good = window.Session!.Snapshot!;
+            string source = Path.Combine(root, "core", "src", "main", "java", "example", "core", "Greeting.java");
+            window.OpenSource(source);
+            TextDocument document = window.Editor.Document;
+            document.Edit([new TextEdit(0, 0, "// unsaved\n")], SelectionSet.Single(0), SelectionSet.Single(11));
+            string edited = document.Snapshot.ToString();
+            Assert.True(window.Actions["app.jvm.rename"].Available());
+            Assert.True(window.Actions["app.jvm.complete"].Available());
+
+            string pom = Path.Combine(root, "core", "pom.xml");
+            string text = await File.ReadAllTextAsync(pom, TestContext.Current.CancellationToken);
+            // The window watches the files the model was read from and reimports on its own after the change.
+            Task reimported = SnapshotChangedAsync(window.Session);
+            await File.WriteAllTextAsync(pom, text.Replace("</project>", "<broken>", StringComparison.Ordinal), TestContext.Current.CancellationToken);
+            await reimported;
+
+            // The last good model stays, marked stale; a workspace rename would edit files from it, so it waits.
+            Assert.True(window.Session.IsStale);
+            Assert.Same(good, window.Session.Snapshot);
+            Assert.False(window.Actions["app.jvm.rename"].Available());
+            Assert.True(window.Actions["app.jvm.complete"].Available());
+            Assert.Equal(edited, window.Editor.Document.Snapshot.ToString());
+            Assert.True(window.Editor.Document.IsModified);
+
+            reimported = SnapshotChangedAsync(window.Session);
+            await File.WriteAllTextAsync(pom, text, TestContext.Current.CancellationToken);
+            await reimported;
+            Assert.False(window.Session.IsStale);
+            Assert.True(window.Actions["app.jvm.rename"].Available());
+            Assert.Equal(edited, window.Editor.Document.Snapshot.ToString());
+        }
+        finally
+        {
+            window.Close();
+            await ProjectHosts.ReleaseAsync(root);
+            WorkspaceTrust.TakeBack(trust);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static Task SnapshotChangedAsync(ProjectSession session)
+    {
+        TaskCompletionSource changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Action? handler = null;
+        handler = () =>
+        {
+            session.SnapshotChanged -= handler;
+            changed.TrySetResult();
+        };
+        session.SnapshotChanged += handler;
+        return changed.Task.WaitAsync(TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken);
     }
 
     private static void CopyTree(string source, string destination)

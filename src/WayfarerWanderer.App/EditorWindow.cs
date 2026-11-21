@@ -183,7 +183,13 @@ public sealed partial class EditorWindow : Window
         Session.PausedAt += OpenFrame;
         ProjectSession opened = Session;
         // A build file changed and the folder was imported again: the tree shows the new model, or the kept one stale.
-        opened.SnapshotChanged += () => { if (Session == opened) Explorer.Update(opened.Snapshot); };
+        opened.SnapshotChanged += () =>
+        {
+            if (Session != opened) return;
+            Explorer.Update(opened.Snapshot);
+            // The running language servers learn the new model; a failed import leaves them on the last good one.
+            if (!opened.IsStale && opened.Snapshot is { } snapshot) ReloadLanguageModels(snapshot);
+        };
         TrustBanner.IsVisible = !Session.IsTrusted;
         if (Session.IsTrusted)
         {

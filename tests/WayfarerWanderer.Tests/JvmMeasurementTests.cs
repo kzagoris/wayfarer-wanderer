@@ -115,6 +115,121 @@ public sealed class JvmMeasurementTests
         }
     }
 
+    /// <summary>
+    /// The project host's own costs: starting it, a cold import (on Gradle with a daemon of its own, so it starts cold
+    /// without stopping anyone's daemon), a warm import on the daemon it left, a warm reopen from the kept model, and the
+    /// host's peak working set. Writes <c>artifacts/test-results/jvm-host-measurements-&lt;tool&gt;.json</c>.
+    /// </summary>
+    [Theory(SkipUnless = nameof(RunMeasurements), Skip = "Set WAYFARER_MEASURE=1 to record the project host's import times and memory.")]
+    [InlineData("gradle")]
+    [InlineData("maven")]
+    public async Task MeasureHostImportAndMemory(string buildTool)
+    {
+        CancellationToken cancel = TestContext.Current.CancellationToken;
+        string root = Directory.CreateTempSubdirectory("wayfarer measure host ").FullName;
+        string cache = Path.Combine(Directory.CreateTempSubdirectory("wayfarer measure state ").FullName, WorkspaceModelCache.FileName);
+        try
+        {
+            JvmFixtures.Copy(buildTool, root);
+            if (buildTool == "gradle")
+            {
+                // A JVM argument no running daemon has makes Gradle start one of its own; it exits a minute after.
+                await File.AppendAllTextAsync(Path.Combine(root, "gradle.properties"),
+                    $"\norg.gradle.jvmargs=-Dwayfarer.measure={Guid.NewGuid():N}\norg.gradle.daemon.idletimeout=60000\n", cancel);
+            }
+            WorkspaceTrust.Trust(root);
+            foreach (JvmProjectHost running in ProjectHosts.Current)
+            {
+                foreach (string folder in running.ServedFolders) await ProjectHosts.ReleaseAsync(folder);
+                running.End("a measurement wants a host of its own");
+            }
+
+            Stopwatch clock = Stopwatch.StartNew();
+            JvmProjectHost host = await ProjectHosts.ForAsync(root, cancel);
+            TimeSpan hostStart = clock.Elapsed;
+            using CancellationTokenSource sampling = new();
+            Task<long> memory = SampleHostAsync(host.ProcessId, sampling.Token);
+
+            ProjectHostImporter importer = new() { CacheFile = cache };
+            clock.Restart();
+            WorkspaceSnapshot snapshot = await importer.ImportAsync(root, 1, cancel);
+            TimeSpan coldImport = clock.Elapsed;
+            clock.Restart();
+            await importer.ImportAsync(root, 2, cancel);
+            TimeSpan warmImport = clock.Elapsed;
+            await sampling.CancelAsync();
+            long peak = await memory;
+
+            // A new host (a new Tooling API connection and Maven class loader) on the daemon the first one left warm.
+            await ProjectHosts.ReleaseAsync(root);
+            host.End("the measurement starts a new host on the warm daemon");
+            host = await ProjectHosts.ForAsync(root, cancel);
+            clock.Restart();
+            await new ProjectHostImporter().ImportAsync(root, 3, cancel);
+            TimeSpan newHostWarmDaemon = clock.Elapsed;
+
+            // A reopen: a new session finds the kept model and every input it was read from unchanged.
+            using WorkspaceImportSession reopened = new(new ProjectHostImporter { CacheFile = cache }, cache);
+            clock.Restart();
+            WorkspaceSnapshot? kept = await reopened.OpenAsync(root, cancel);
+            TimeSpan warmReopen = clock.Elapsed;
+            Assert.NotNull(kept);
+            Assert.False(reopened.State.IsStale);
+
+            var record = new Dictionary<string, object?>
+            {
+                ["buildTool"] = buildTool,
+                ["recordedAt"] = DateTimeOffset.Now.ToString("O"),
+                ["os"] = RuntimeInformation.OSDescription,
+                ["rid"] = RuntimeInformation.RuntimeIdentifier,
+                ["processors"] = Environment.ProcessorCount,
+                ["toolingJvm"] = new { host.Jvm.Home, host.Jvm.Version },
+                ["importJdk"] = snapshot.Modules.FirstOrDefault()?.ImportToolchain,
+                ["modules"] = snapshot.Modules.Count,
+                ["cacheState"] = buildTool == "gradle"
+                    ? "Fresh project copy; user Gradle caches warm; the first import starts a Gradle daemon of its own, which the later imports reuse."
+                    : "Fresh project copy; user Maven repository and wrapper distribution warm.",
+                ["hostStartMs"] = (long)hostStart.TotalMilliseconds,
+                ["coldImportMs"] = (long)coldImport.TotalMilliseconds,
+                ["warmImportMs"] = (long)warmImport.TotalMilliseconds,
+                ["newHostWarmDaemonImportMs"] = (long)newHostWarmDaemon.TotalMilliseconds,
+                ["warmReopenMs"] = (long)warmReopen.TotalMilliseconds,
+                ["peakHostWorkingSetMiB"] = peak / (1024 * 1024),
+            };
+            string results = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../artifacts/test-results"));
+            Directory.CreateDirectory(results);
+            string json = JsonSerializer.Serialize(record, new JsonSerializerOptions { WriteIndented = true });
+            await File.WriteAllTextAsync(Path.Combine(results, $"jvm-host-measurements-{buildTool}.json"), json, cancel);
+            TestContext.Current.SendDiagnosticMessage(json);
+            Assert.True(peak > 0, "The host process was never sampled.");
+        }
+        finally
+        {
+            await ProjectHosts.ReleaseAsync(root);
+            WorkspaceTrust.TakeBack(root);
+            Directory.Delete(root, recursive: true);
+            Directory.Delete(Path.GetDirectoryName(cache)!, recursive: true);
+        }
+    }
+
+    private static async Task<long> SampleHostAsync(int processId, CancellationToken stop)
+    {
+        long peak = 0;
+        while (true)
+        {
+            try
+            {
+                using Process process = Process.GetProcessById(processId);
+                process.Refresh();
+                peak = Math.Max(peak, process.WorkingSet64);
+            }
+            catch (ArgumentException) { return peak; }
+            catch (InvalidOperationException) { return peak; }
+            try { await Task.Delay(100, stop); }
+            catch (OperationCanceledException) { return peak; }
+        }
+    }
+
     internal static async Task<object> CompleteAsync(JvmLanguageClient client, string language, string path,
         int line, int column, string expected, CancellationToken cancel)
     {

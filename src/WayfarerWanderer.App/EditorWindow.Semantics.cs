@@ -20,6 +20,22 @@ public sealed partial class EditorWindow
     private Task kotlinRefresh = Task.CompletedTask;
     private bool kotlinRefreshQueued;
     private bool semanticBusy;
+    private readonly Dictionary<string, Task<JvmLanguageClient>> startingClients = [];
+    private readonly SemaphoreSlim sourceSync = new(1, 1);
+    private CompletionPopup? completionPopup;
+    private CompletionSession? completing;
+    private CancellationTokenSource? completionAsk;
+
+    /// <summary>What the open suggestion list was asked for: the document and where the word began, and the server's
+    /// answer, narrowed locally as the word grows.</summary>
+    private sealed record CompletionSession(string Path, TextDocument Document, int WordStart, JvmLanguageClient Client,
+        IReadOnlyList<CompletionChoice> Choices, bool Incomplete);
+
+    /// <summary>How long typing a letter waits for the next before asking the server, so a word typed quickly asks once.</summary>
+    internal static TimeSpan CompletionDelay { get; set; } = TimeSpan.FromMilliseconds(120);
+
+    /// <summary>The suggestion list under the caret: for tests.</summary>
+    public CompletionPopup Completion => completionPopup ??= NewCompletionPopup();
 
     private static string? Language(string path) => Path.GetExtension(path) switch { ".kt" => "kotlin", ".java" => "java", _ => null };
     private bool SemanticAvailable() => !semanticBusy && Session is { IsTrusted: true, Snapshot: not null } session &&
@@ -27,19 +43,30 @@ public sealed partial class EditorWindow
 
     private void AddSemanticActions()
     {
-        void Add(string id, string title, Func<Task> run) =>
-            Actions.Add(new(id, title, SemanticAvailable, () => UnawaitedWork.Observe(RunSemanticAsync(run))));
-        Add(CompleteAction, "Complete Code", CompleteAsync);
-        Add(RenameAction, "Rename Symbol…", RenameAsync);
+        Actions.Add(new(CompleteAction, "Complete Code", SemanticAvailable,
+            () => UnawaitedWork.Observe(AskCompletionAsync(trigger: null, explicitly: true, delay: TimeSpan.Zero))));
+        // A workspace rename edits files from the model; while it is older than the build files (an import failed or is
+        // running) the rename waits. Completion only suggests, so it stays.
+        Actions.Add(new(RenameAction, "Rename Symbol…", () => SemanticAvailable() && Session?.IsStale == false,
+            () => UnawaitedWork.Observe(RunSemanticAsync(RenameAsync))));
         Actions.Add(new(UndoRenameAction, "Undo Workspace Rename", () => !semanticBusy && lastRename != null && Session?.IsTrusted == true,
             () => UnawaitedWork.Observe(RunSemanticAsync(UndoRenameAsync))));
         AddHandler(KeyDownEvent, (_, args) =>
         {
+            if (completionPopup?.TakeKey(args.Key, args.KeyModifiers) == true)
+            {
+                args.Handled = true;
+                return;
+            }
             if (args.Key == Key.Space && args.KeyModifiers == KeyModifiers.Control)
                 args.Handled = Actions.TryExecute(CompleteAction);
             if (args.Key == Key.F2 && args.KeyModifiers == KeyModifiers.None)
                 args.Handled = Actions.TryExecute(RenameAction);
         }, RoutingStrategies.Tunnel);
+        Editor.Typed += (_, text) => OnTypedForCompletion(text);
+        Editor.SelectionChanged += (_, _) => { if (completing is not null) NarrowCompletion(); };
+        Editor.LostFocus += (_, _) => { if (!IsActive) CloseCompletion(); };
+        Deactivated += (_, _) => CloseCompletion();
     }
 
     private MenuItem SemanticMenu()
@@ -51,6 +78,8 @@ public sealed partial class EditorWindow
 
     private void ResetSemanticSession()
     {
+        CloseCompletion();
+        startingClients.Clear();
         semanticLifetime.Cancel();
         semanticLifetime.Dispose();
         semanticLifetime = new();
@@ -61,6 +90,14 @@ public sealed partial class EditorWindow
         kotlinClasses = null;
         kotlinRefreshQueued = false;
         lastRename = null;
+    }
+
+    private void ReloadLanguageModels(WorkspaceSnapshot snapshot)
+    {
+        CancellationToken token = semanticLifetime.Token;
+        foreach (JvmLanguageClient client in languageClients.Values.Where(client => !client.HasExited))
+            UnawaitedWork.Observe(client.ReloadModelAsync(snapshot, token));
+        RefreshKotlinClasses();
     }
 
     private async Task RunSemanticAsync(Func<Task> action)
@@ -76,48 +113,81 @@ public sealed partial class EditorWindow
         finally { semanticBusy = false; }
     }
 
+    /// <summary>The running server for <paramref name="path"/>'s language, started once however many asks wait on it, with
+    /// every open source of that language sent to it as it reads now. Sends go one at a time, so versions arrive in order.</summary>
     private async Task<JvmLanguageClient> LanguageClientAsync(string path, CancellationToken token)
     {
         string language = Language(path)!;
-        if (!languageClients.TryGetValue(language, out var client) || client.HasExited)
+        JvmLanguageClient client = await StartedClientAsync(language).WaitAsync(token);
+        await sourceSync.WaitAsync(token);
+        try
         {
-            if (client is not null)
+            foreach (string source in OpenSourcePaths.Where(p => Language(p) == language))
             {
-                languageClients.Remove(language);
-                await client.DisposeAsync();
+                TextDocument document = FindOpenDocument(source)!;
+                string uri = new Uri(source).AbsoluteUri;
+                var snapshot = document.Snapshot;
+                int version = document.Version;
+                if (sentSources.TryGetValue(source, out var previous))
+                {
+                    if (ReferenceEquals(previous.Text, snapshot)) continue;
+                    var end = previous.Text.GetPosition(previous.Text.Length);
+                    await client.NotifyAsync("textDocument/didChange", new
+                    {
+                        textDocument = new { uri, version },
+                        contentChanges = new[] { new { range = new { start = Point(default), end = Point(end) }, text = snapshot.ToString() } }
+                    }, token);
+                }
+                else
+                    await client.NotifyAsync("textDocument/didOpen", new { textDocument = new { uri, languageId = language, version, text = snapshot.ToString() } }, token);
+                sentSources[source] = (version, snapshot);
+            }
+        }
+        finally { sourceSync.Release(); }
+        token.ThrowIfCancellationRequested();
+        return client;
+    }
+
+    /// <summary>The server of a language, started on the first ask and again after it exits. Starting belongs to the
+    /// session, not to the ask that began it, so a keystroke's ask given up does not stop the server coming up.</summary>
+    private Task<JvmLanguageClient> StartedClientAsync(string language)
+    {
+        if (languageClients.TryGetValue(language, out var running) && !running.HasExited)
+            return Task.FromResult(running);
+        if (startingClients.TryGetValue(language, out var starting) && !starting.IsCompleted)
+            return starting;
+        starting = StartAsync();
+        startingClients[language] = starting;
+        return starting;
+
+        async Task<JvmLanguageClient> StartAsync()
+        {
+            CancellationToken lifetime = semanticLifetime.Token;
+            if (languageClients.Remove(language, out var exited))
+            {
+                await exited.DisposeAsync();
                 foreach (string key in sentSources.Keys.Where(p => Language(p) == language).ToArray()) sentSources.Remove(key);
             }
-            client = await JvmLanguageClient.StartAsync(Session!.Root, language, token, Session.Snapshot);
-            if (token.IsCancellationRequested)
+            string message = language == "kotlin" ? "Starting the Kotlin language server…" : "Starting the Java language server…";
+            string? was = StatusText;
+            StatusText = message;
+            try
             {
-                await client.DisposeAsync();
-                token.ThrowIfCancellationRequested();
-            }
-            languageClients.Add(language, client);
-            if (language == "java") RefreshKotlinClasses();
-        }
-        foreach (string source in OpenSourcePaths.Where(p => Language(p) == language))
-        {
-            TextDocument document = FindOpenDocument(source)!;
-            string uri = new Uri(source).AbsoluteUri;
-            var snapshot = document.Snapshot;
-            int version = document.Version;
-            if (sentSources.TryGetValue(source, out var previous))
-            {
-                if (ReferenceEquals(previous.Text, snapshot)) continue;
-                var end = previous.Text.GetPosition(previous.Text.Length);
-                await client.NotifyAsync("textDocument/didChange", new
+                JvmLanguageClient client = await JvmLanguageClient.StartAsync(Session!.Root, language, lifetime, Session.Snapshot);
+                if (lifetime.IsCancellationRequested)
                 {
-                    textDocument = new { uri, version },
-                    contentChanges = new[] { new { range = new { start = Point(default), end = Point(end) }, text = snapshot.ToString() } }
-                }, token);
+                    await client.DisposeAsync();
+                    lifetime.ThrowIfCancellationRequested();
+                }
+                languageClients[language] = client;
+                if (language == "java") RefreshKotlinClasses();
+                return client;
             }
-            else
-                await client.NotifyAsync("textDocument/didOpen", new { textDocument = new { uri, languageId = language, version, text = snapshot.ToString() } }, token);
-            token.ThrowIfCancellationRequested();
-            sentSources[source] = (version, snapshot);
+            finally
+            {
+                if (StatusText == message) StatusText = was;
+            }
         }
-        return client;
     }
 
     /// <summary>On Maven, recompiles Kotlin and hands its classes to the Java server, so Java sees Kotlin declarations.
@@ -147,51 +217,152 @@ public sealed partial class EditorWindow
     private static object Point(TextPosition p) => new { line = p.Line, character = p.Column };
     private static object DocumentId(string path) => new { uri = new Uri(path).AbsoluteUri };
 
-    private async Task CompleteAsync()
+    private CompletionPopup NewCompletionPopup()
     {
-        var token = semanticLifetime.Token;
-        string path = SourcePath!;
-        var snapshot = Editor.Document.Snapshot;
-        var caret = Editor.CaretPosition;
-        var client = await LanguageClientAsync(path, token);
-        var result = await client.RequestAsync("textDocument/completion", new { textDocument = DocumentId(path), position = Point(caret) }, token);
-        EnsureCurrent();
-        JsonElement items = result.ValueKind == JsonValueKind.Object ? result.GetProperty("items") : result;
-        if (items.ValueKind != JsonValueKind.Array || items.GetArrayLength() == 0)
-            throw new InvalidOperationException("No completions returned at this position. The project may still be indexing.");
-        var choices = items.EnumerateArray().Where(item => !item.TryGetProperty("insertTextFormat", out var format) || format.GetInt32() != 2).ToArray();
-        ListBox list = new() { ItemsSource = choices.Select(item => item.GetProperty("label").GetString()).ToArray(), SelectedIndex = 0 };
-        if (choices.Length == 0) throw new InvalidOperationException("The server returned only snippet completions.");
-        var dialog = ChoiceDialog("Complete Code", list, "Insert", out var accept);
-        list.DoubleTapped += (_, _) => dialog.Close(true);
-        list.KeyDown += (_, args) => { if (args.Key == Key.Enter) { args.Handled = true; dialog.Close(true); } };
-        accept.IsEnabled = choices.Length > 0;
-        if (!await dialog.ShowDialog<bool>(this) || list.SelectedIndex < 0) return;
-        EnsureCurrent();
-        var choice = choices[list.SelectedIndex];
-        List<TextEdit> edits = [];
-        if (choice.TryGetProperty("textEdit", out var edit))
-            edits.Add(JvmSemanticEdits.Edit(snapshot, edit.TryGetProperty("range", out var range) ? range : edit.GetProperty("replace"), edit.GetProperty("newText").GetString()!));
-        else
-        {
-            int end = snapshot.GetOffset(caret), start = end;
-            string text = snapshot.GetLineText(caret.Line);
-            for (int i = caret.Column - 1; i >= 0 && (char.IsLetterOrDigit(text[i]) || text[i] is '_' or '$'); i--) start--;
-            edits.Add(new(start, end - start, choice.TryGetProperty("insertText", out var insert) ? insert.GetString()! : choice.GetProperty("label").GetString()!));
-        }
-        if (choice.TryGetProperty("additionalTextEdits", out var extra))
-            edits.AddRange(extra.EnumerateArray().Select(e => JvmSemanticEdits.Edit(snapshot, e.GetProperty("range"), e.GetProperty("newText").GetString()!)));
-        var chosen = edits[0];
-        int offset = chosen.Start + chosen.Text.Length + edits.Skip(1).Where(e => e.Start < chosen.Start).Sum(e => e.Text.Length - e.Length);
-        Editor.Document.Edit(edits, SelectionSet.Single(snapshot.GetOffset(caret)), SelectionSet.Single(offset));
-        Editor.GoTo(Editor.Document.Snapshot.GetPosition(offset));
+        CompletionPopup popup = new(Editor);
+        popup.Chosen += choice => UnawaitedWork.Observe(AcceptCompletionAsync(choice));
+        return popup;
+    }
 
-        void EnsureCurrent()
+    /// <summary>Typing opens suggestions: a dot at once, a letter that starts or grows a word after a short pause; with the
+    /// list open a letter narrows it (asking again only if the server said its list was partial) and anything else closes it.</summary>
+    private void OnTypedForCompletion(string text)
+    {
+        if (text.Length == 0 || semanticBusy || !SemanticAvailable()) return;
+        char last = text[^1];
+        if (completing is not null)
         {
-            token.ThrowIfCancellationRequested();
-            if (SourcePath != path || !ReferenceEquals(snapshot, Editor.Document.Snapshot) || Editor.CaretPosition != caret)
-                throw new InvalidOperationException("The completion position changed. Request completion again.");
+            if (CompletionModel.IsWordCharacter(last))
+            {
+                NarrowCompletion();
+                if (completing is { Incomplete: true })
+                    UnawaitedWork.Observe(AskCompletionAsync(null, explicitly: false, CompletionDelay));
+                return;
+            }
+            CloseCompletion();
         }
+        if (last == '.')
+        {
+            UnawaitedWork.Observe(AskCompletionAsync(last, explicitly: false, TimeSpan.Zero));
+            return;
+        }
+        if (!CompletionModel.IsWordCharacter(last)) return;
+        // A number is not a name to complete.
+        var snapshot = Editor.Document.Snapshot;
+        int caret = Editor.Selections.Primary.Caret;
+        int start = CompletionModel.WordStart(snapshot, caret);
+        if (start < caret && !char.IsDigit(snapshot[start]))
+            UnawaitedWork.Observe(AskCompletionAsync(null, explicitly: false, CompletionDelay));
+    }
+
+    /// <summary>Asks the server for suggestions at the caret and lists them. An ask made by typing gives way to the next
+    /// keystroke's and fails quietly; one asked for (Ctrl+Space) says why it found nothing.</summary>
+    private async Task AskCompletionAsync(char? trigger, bool explicitly, TimeSpan delay)
+    {
+        completionAsk?.Cancel();
+        using CancellationTokenSource ask = CancellationTokenSource.CreateLinkedTokenSource(semanticLifetime.Token);
+        completionAsk = ask;
+        CancellationToken token = ask.Token;
+        try
+        {
+            if (delay > TimeSpan.Zero) await Task.Delay(delay, token);
+            if (SourcePath is not { } path || !SemanticAvailable()) return;
+            TextDocument document = Editor.Document;
+            var client = await LanguageClientAsync(path, token);
+            int caret = Editor.Selections.Primary.Caret;
+            var snapshot = document.Snapshot;
+            int wordStart = CompletionModel.WordStart(snapshot, caret);
+            object context = trigger is { } character ? new { triggerKind = 2, triggerCharacter = character.ToString() } : new { triggerKind = 1 };
+            var result = await client.RequestAsync("textDocument/completion",
+                new { textDocument = DocumentId(path), position = Point(snapshot.GetPosition(caret)), context }, token);
+            token.ThrowIfCancellationRequested();
+            // The answer is for the word asked about; typing that grew the same word keeps it, anything else drops it.
+            if (SourcePath != path || !ReferenceEquals(Editor.Document, document) ||
+                CompletionModel.WordStart(document.Snapshot, Editor.Selections.Primary.Caret) != wordStart)
+                return;
+            var choices = CompletionModel.Parse(result, out bool incomplete);
+            completing = new(path, document, wordStart, client, choices, incomplete);
+            NarrowCompletion();
+            if (completionPopup is not { IsOpen: true } && explicitly)
+                StatusText = choices.Count == 0 ? "No suggestions here. The project may still be indexing." : "No suggestions match.";
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception error) when (explicitly)
+        {
+            ToolDock.ShowBehind(Shell.ToolWindowIds.Build);
+            BuildTool.Append(error.Message);
+        }
+        catch (Exception) { /* a suggestion asked by typing that fails shows nothing; Ctrl+Space reports it */ }
+        finally
+        {
+            if (completionAsk == ask) completionAsk = null;
+        }
+    }
+
+    /// <summary>Shows the suggestions that match the word typed so far, or closes the list once the caret has left the word.</summary>
+    private void NarrowCompletion()
+    {
+        if (completing is not { } session) return;
+        int caret = Editor.Selections.Primary.Caret;
+        var snapshot = session.Document.Snapshot;
+        if (SourcePath != session.Path || !ReferenceEquals(Editor.Document, session.Document) || Editor.Selections.Count > 1 ||
+            caret < session.WordStart || caret > snapshot.Length || CompletionModel.WordStart(snapshot, caret) != session.WordStart)
+        {
+            CloseCompletion();
+            return;
+        }
+        var shown = CompletionModel.Narrow(session.Choices, snapshot.GetText(session.WordStart, caret - session.WordStart));
+        if (shown.Count == 0)
+        {
+            // A partial list may still have matches the server did not send; the next keystroke asks again.
+            if (!session.Incomplete) CloseCompletion();
+            else completionPopup?.Close();
+            return;
+        }
+        Completion.Show(shown, Editor.PointOf(session.WordStart), Editor.LineHeight);
+    }
+
+    private void CloseCompletion()
+    {
+        completionAsk?.Cancel();
+        completing = null;
+        completionPopup?.Close();
+    }
+
+    /// <summary>Takes a suggestion into the text: resolved first when the server holds back its extra edits (JDT LS adds a
+    /// type's import only then), and applied to the text as it reads now.</summary>
+    private async Task AcceptCompletionAsync(CompletionChoice choice)
+    {
+        if (completing is not { } session) return;
+        CloseCompletion();
+        JsonElement item = choice.Item;
+        if (!item.TryGetProperty("additionalTextEdits", out _) && item.TryGetProperty("data", out _))
+        {
+            try
+            {
+                using CancellationTokenSource resolving = CancellationTokenSource.CreateLinkedTokenSource(semanticLifetime.Token);
+                resolving.CancelAfter(TimeSpan.FromSeconds(2));
+                JsonElement resolved = await session.Client.RequestAsync("completionItem/resolve", item, resolving.Token);
+                if (resolved.ValueKind == JsonValueKind.Object) item = resolved.Clone();
+            }
+            catch (Exception error) when (error is OperationCanceledException or InvalidOperationException or IOException) { /* insert it unresolved */ }
+        }
+        if (SourcePath != session.Path || !ReferenceEquals(Editor.Document, session.Document)) return;
+        var snapshot = session.Document.Snapshot;
+        int caret = Editor.Selections.Primary.Caret;
+        if (caret < session.WordStart || CompletionModel.WordStart(snapshot, caret) != session.WordStart) return;
+        try
+        {
+            var (edits, after) = CompletionModel.Edits(snapshot, item, session.WordStart, caret);
+            session.Document.Edit(edits, SelectionSet.Single(caret), SelectionSet.Single(after));
+            Editor.GoTo(session.Document.Snapshot.GetPosition(after));
+        }
+        catch (InvalidDataException error)
+        {
+            ToolDock.ShowBehind(Shell.ToolWindowIds.Build);
+            BuildTool.Append(error.Message);
+        }
+        Editor.Focus();
     }
 
     private static Window ChoiceDialog(string title, Control content, string acceptText, out Button accept)

@@ -1,2 +1,5 @@
 package {{PACKAGE}}
-fun main() { println("Hello from {{NAME}}!") }
+
+fun main() {
+    println("Hello from {{NAME}}!")
+}

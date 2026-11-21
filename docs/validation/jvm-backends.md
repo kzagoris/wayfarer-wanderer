@@ -107,8 +107,8 @@ build files, so the snapshot's JDK fields stay empty and the record carries an
 
 | | Gradle | Maven |
 | --- | --- | --- |
-| Cold import (static build-file import, no wrapper) | 32 ms | 5 ms |
-| Warm reopen | 0 ms | 0 ms |
+| Cold import (static build-file import, no wrapper; superseded, see "Project host" below) | 32 ms | 5 ms |
+| Warm reopen (static reader; superseded) | 0 ms | 0 ms |
 | Kotlin classes handed to JDT LS (wrapper compile and attach) | not needed | 13.1 s |
 | Java completion of a Kotlin member, first useful result | 4.4 s | 0.4 s after the hand-over |
 | Java completion, warm median of 5 | 27 ms | 13 ms |
@@ -118,6 +118,116 @@ build files, so the snapshot's JDK fields stay empty and the record carries an
 
 Earlier runs the same day, before the Maven hand-over existed, gave similar
 Gradle and Kotlin figures and memory peaks between 2,307 and 2,860 MiB.
+
+## Project host (task 4)
+
+The project model now comes from the JVM project host under `jvm/project-host/`,
+which asks Gradle (Tooling API with Wayfarer's own model builder) and Maven
+(the wrapper's Maven in an isolated class loader) instead of reading build files.
+
+### Protocol examples
+
+One JSON object per line on stdio, logs on stderr. The examples under
+`jvm/project-host/protocol/` are checked by both ends (`ProtocolExamplesTest` in
+the host, `ProjectHostTests` in .NET):
+
+| File | What it shows |
+| --- | --- |
+| `ready.json` | The first line: protocol version, the tooling JVM, the host's pid |
+| `refused.json` | A first line saying why the host cannot start |
+| `request-import.json` | `import` with folder, generation, JDK and Maven profiles |
+| `partial-target.json` | One module as a BSP-shaped build target (sources, dependency modules, JVM run environment) |
+| `result-import.json` | The complete result: every target, the import JVM and the build inputs |
+| `request-cancel.json`, `error-cancelled.json` | `cancel` by id and the reply it ends with |
+| `request-ping.json`, `result-ping.json` | The liveness ping, answered on the reader thread |
+
+### Snapshot against the language servers
+
+`LanguageServerModelTests` (`WAYFARER_LANGUAGE_ACCEPTANCE=1`) imports the mixed
+fixtures, starts a server on the snapshot, adds
+`org.apache.commons:commons-text:1.12.0` to the Kotlin module (Maven `library`,
+Gradle `app`), reimports, tells the server through
+`JvmLanguageClient.ReloadModelAsync`, compares, removes the dependency, and
+compares again. The Java module `service` sees the library through the Kotlin
+module. JDT LS is compared on its own model: `java.project.getClasspaths`
+(runtime and test scope), `java.project.listSourcePaths` and the compiler
+compliance from `java.project.getSettings`.
+
+| Compared | Maven, JDT LS 1.53.0 (m2e) | Gradle, JDT LS 1.53.0 (Buildship) |
+| --- | --- | --- |
+| Library jars, before, added, removed | Same set as the snapshot's runtime classpath | Same set as the snapshot's compile ∪ runtime classpath |
+| Order of library jars | Same | Two jars swap places (`spring-boot-webmvc`, `spring-boot-http-converter`); not asserted |
+| Compile-only jars | None in the fixture | JDT LS keeps one classpath per project, so Gradle's compile-only API jars (bnd, error_prone, OSGi annotations) appear there; the snapshot keeps them on the compile classpath only, as Gradle does |
+| Modules on the classpath | `library` | `app`, `library` |
+| Module outputs | `target/classes`, the same folders | Buildship's own `bin/main`; the snapshot has Gradle's `build/classes/...` (by design, so a launch runs what Gradle built) |
+| Existing source roots | Same | Same |
+| Language level | 17, both | 24, both, once JDT LS is given the import JDK (below) |
+| Generated roots | JDT LS lists `target/generated-sources/annotations` before it exists; compared only once on disk | None |
+| Kotlin server 271.2085.0, `WordUtils` from the added library | Not resolved before, resolved after the reload, gone after the removal | Same |
+
+Before this change JDT LS reported Java 21 on Gradle while the snapshot said 24:
+Buildship ran Gradle on JDT LS's bundled JRE 21, and a build without a toolchain
+takes its language level from the daemon's JVM. `BuildLanguageSettings` now passes
+`java.import.gradle.java.home` (the import JDK) and `java.configuration.runtimes`
+(each module JDK whose `release` file matches its level) in the initialization
+options and in `workspace/configuration`. After a reimport the editor sends the
+new settings, the changed build files as watched-file changes and, to JDT LS,
+`java/projectConfigurationsUpdate`. A failed import sends nothing, so both
+servers stay on the last good model.
+
+The Kotlin server has no model query, so it is compared by what it resolves: a
+completion after `org.apache.commons.text.` in a Kotlin file of the module that
+gets the dependency. With the library in the build from the start it resolves
+about 15 s after start. It registers no file watchers and ignores
+watched-file notifications, so the first run never saw the added library. It
+imports again on the request `intellij/reloadWorkspace` (with the
+initialization options), which is what JetBrains' own VS Code extension sends
+when a build file is saved; `ReloadModelAsync` now sends it, and the request
+returns once the new workspace is loaded. The JetBrains Kotlin server build that
+came with the VS Code extension 0.0.12 no longer starts (it asks for a newer
+build); these runs used the standalone 271.2085.0 archive unpacked under
+`%LOCALAPPDATA%\wayfarer\kotlin-lsp\271.2085.0`, its SHA-256 checked against the
+published one.
+
+### Failure, repair and switch
+
+`WorkspaceImportTests` covers these against the real host:
+
+- `AFailedImportKeepsTheLastGoodSnapshotStaleAndARepairRestoresIt`: a broken
+  `pom.xml` fails the generation with the file named; the last good snapshot
+  stays current and stale; the repaired file brings a current one back.
+- `ASwitchWithAReplyInFlightDropsTheOldWorkspacesModel`: switching from a Maven to
+  a Gradle workspace while the Maven reply is pending; the old reply is dropped.
+- `AModuleWhoseDependencyDoesNotResolveCarriesItsProblem`: one module's problem,
+  the rest current.
+
+`EditorWindowTests.AStaleModelTurnsRenameOffKeepsEditsAndARepairTurnsItBackOn`
+drives the window: the build-file watcher reimports after the break, the kept
+model shows stale, Rename Symbol turns off (it edits files from the model) while
+Complete Code stays, the unsaved edit survives, and the repair turns Rename back on.
+
+### Measurements
+
+`JvmMeasurementTests.MeasureHostImportAndMemory` (`WAYFARER_MEASURE=1`) writes
+`artifacts/test-results/jvm-host-measurements-<tool>.json`. Recorded 2026-11-20
+on an Intel Core i7-8700K (6 cores, 12 threads) with 32 GiB of RAM, Windows 11
+(10.0.26300), win-x64. The host and the imports ran on Temurin 24.0.2. The user's
+Gradle caches, Maven repository and wrapper distributions were warm. For the
+cold daemon the Gradle fixture got a JVM argument no running daemon had, so
+Gradle started its own daemon without stopping anyone else's. Four runs agreed
+within 3%; the table gives the last.
+
+| | Gradle (Gradle 9.7.1) | Maven (Maven 3.9.11) |
+| --- | --- | --- |
+| Host start, to its first line | 204 ms | 147 ms |
+| Cold import, cold daemon (Maven: first import in the host) | 9.1 s | 2.0 s |
+| Cold import, warm daemon, new host | 2.3 s | 2.1 s |
+| Warm import, same host and daemon | 0.70 s | 0.23 s |
+| Warm reopen from the kept model (no import) | 7 ms | 2 ms |
+| Peak host working set | 245 MiB | 200 MiB |
+
+The cold Gradle import is mostly the daemon starting and configuring the build;
+a Maven import in a new host pays for loading Maven into a fresh class loader.
 
 ## Kotlin classes for Java on Maven
 
