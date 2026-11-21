@@ -249,9 +249,10 @@ public sealed class JvmRuntimeFoundationTests
             Assert.EndsWith("Course.iml", snapshot.BuildFile, StringComparison.Ordinal);
             Assert.Equal(25, module.CompileToolchain.LanguageVersion);
             Assert.Equal("openjdk-25", module.CompileToolchain.Vendor);
-            // The JDK IntelliJ names when its table has it, else JAVA_HOME; never the tooling JVM that runs the host.
-            string? javaHome = Environment.GetEnvironmentVariable("JAVA_HOME");
-            Assert.True(module.CompileToolchain.Home is null ? string.IsNullOrEmpty(javaHome) : Directory.Exists(module.CompileToolchain.Home));
+            // The JDK IntelliJ names (openjdk-25), else one of its language level, from the table; with neither on this
+            // machine the module asks for it and has none, which the window shows as a missing JDK. Never the tooling JVM.
+            Assert.Equal(new JdkRequirement("openjdk-25", 25, null, JdkRequirement.Idea), module.CompileToolchain.Requirement);
+            Assert.True(module.CompileToolchain.Home is null ? module.CompileToolchain.Missing : Directory.Exists(module.CompileToolchain.Home));
             Assert.Equal(sources, Assert.Single(module.SourceRoots).Path);
             Assert.Equal(JvmSourceKind.MainJava, module.SourceRoots[0].Kind);
             Assert.Equal("Main", Assert.Single(module.MainClasses).ClassName);
