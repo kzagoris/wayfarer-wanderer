@@ -23,9 +23,15 @@ public sealed record JdkRequirement(string? Name, int? Feature, string? Vendor, 
     /// <summary>Gradle's daemon JVM criteria (<c>gradle/gradle-daemon-jvm.properties</c>).</summary>
     public const string GradleDaemon = "gradle-daemon";
 
-    /// <summary>How the window names it: <c>JDK 17 (any vendor)</c>, <c>JDK 21 (temurin)</c>, or the JDK's name.</summary>
+    /// <summary>Wayfarer's own tooling JVM, which takes its feature or any later one.</summary>
+    public const string Tooling = "tooling";
+
+    /// <summary>How the window names it: <c>JDK 17 (any vendor)</c>, <c>JDK 21 (temurin)</c>, <c>JDK 21 or later</c>
+    /// for the tooling JVM, or the JDK's name.</summary>
     public string Describe() =>
-        Feature is int feature
+        Source == Tooling && Feature is int least
+            ? $"JDK {least} or later"
+            : Feature is int feature
             ? $"JDK {feature} ({(Vendor is { Length: > 0 } vendor ? JdkRegistry.Distribution(vendor) : "any vendor")})"
             : Name is { Length: > 0 } name ? $"the JDK named {name}" : "a JDK";
 }

@@ -3,7 +3,7 @@
 Draft for review, 2026-11-21. It compares IntelliJ IDEA's Project Structure, SDK table and JDK download with what
 Wayfarer has, and proposes a design to bring Wayfarer close to it.
 
-**Status:** steps 1 to 3 of §4 are built. Where the build settled something differently from the first draft, the
+**Status:** steps 1 to 4 of §4 are built. Where the build settled something differently from the first draft, the
 sections below now describe what was built.
 
 ## 1. How IntelliJ IDEA does it
@@ -86,12 +86,12 @@ from `gradle-daemon-jvm.properties`. Maven picks toolchains from `~/.m2/toolchai
 |---|---|---|
 | Project JDK | `.wayfarer/project.json` schema 2 holds a **requirement** (name, feature, vendor). The starter templates commit it (`!.wayfarer/project.json` in their `.gitignore`). A person's choice for one project on this machine lives in Wayfarer's state (`ProjectJdkChoices`) and wins over the shared requirement. Schema 1 paths still read. | None for the project level. |
 | JDK table | `JdkRegistry` (`jdks.json`): kept JDKs, then IntelliJ's `jdk.table.xml` names, then JDKs `JdkScanner` detects. The client sends the table in `HostImportParams.Jdks`. The host doesn't search the disk. | No JDK sources or Javadoc roots. Rename and remove don't account for what points at a name (see §3.1). |
-| Tooling JVM | A setting, then `JAVA_HOME`, `PATH`, then the newest Java 21 or later in the registry (`ToolingJvm.cs`). | The setting is still a **path**, not a registry name. When none is found, the user must install one themselves. |
-| Per-module JDKs | `JvmEnvironment` carries `required {name, feature, vendor, source}`. The host settles each module against the table in the shared order (`protocol/jdk-resolution.json`). An unmet requirement leaves `Home` null (`JvmToolchain.Missing`). | No download (step 4). |
-| Missing-JDK banner | Names the first missing requirement and how many more. **Choose…** picks from the table or adds from disk, then reimports. **Download…** is disabled. | Done, except Download. |
+| Tooling JVM | A registry **name** (`JdkRegistry.ToolingName`, kept in `jdks.json`), then `JAVA_HOME`, `PATH`, then the newest Java 21 or later in the registry (`ToolingJvm.cs`). An older path setting is registered and replaced by its name. When none is found, a banner offers **Download Temurin 21…** and **Choose…**. | No Settings page for it yet (step 6). |
+| Per-module JDKs | `JvmEnvironment` carries `required {name, feature, vendor, source}`. The host settles each module against the table in the shared order (`protocol/jdk-resolution.json`). An unmet requirement leaves `Home` null (`JvmToolchain.Missing`). | None. |
+| Missing-JDK banner | Names the first missing requirement and how many more. **Choose…** picks from the table or adds from disk; **Download…** opens the Download JDK dialog for the requirement. Either reimports. | None. |
 | JDKs for Gradle and Maven | Step 3: `BuildJdks` passes the table to the wrappers (`-Porg.gradle.java.installations.paths`, `--global-toolchains`) and the host passes it to the Tooling API (`GradleJdks.java`). | None. |
 | JDKs for language servers | `java.configuration.runtimes` lists module homes, plus the table's JDK for a feature a module asks for. `java.import.gradle.arguments` carries the same installation paths. | m2e in JDT LS reads no toolchains file (§3.3). |
-| Download | None. The fixtures turn foojay auto-download off on purpose. | Missing entirely. |
+| Download | Step 4: `JdkCatalogue` (foojay) and `JdkDownloader` in `JdkDownloads.cs`, the Download JDK dialog, tooling-JVM recovery. The fixtures still turn Gradle's own foojay download off. | No vendor signature checks yet; no proxy or catalogue setting in Settings (§3.4). |
 | IntelliJ modules | `IdeaEvaluator` reads one `.iml`: source folders, `library` entries, the JDK by name (its release read from the name when the table lacks it) and the module's own language level. | No `scope`, no `module` dependencies, no `module-library`, no `$MAVEN_REPOSITORY$`. Repository libraries with missing jars show as `AbsentLibraries` instead of being downloaded. Nothing writes `.iml` or library files. |
 | UI | New Project registers the chosen JDK and writes schema 2. The IntelliJ template writes the registry name as `project-jdk-name`. Settings has no JDK page. | No Project Structure dialog, no JDK list, no library editor. |
 
@@ -120,9 +120,9 @@ Add **`JdkRegistry`** in `WayfarerWanderer.Jvm`, kept in Wayfarer's per-user sta
   user set up in IntelliJ appear under the same names.
 - **The host stops scanning.** The client sends the registry's JDKs in `HostImportParams` (`jdks: [{name, home,
   feature, vendor}]`). `ImportJvms.candidates` then picks from that list, which removes the duplicated search.
-- **The tooling JVM is a registry entry too.** The Settings value `ToolingJvms.Configured` becomes a JDK name.
-  *Not done in step 1: it is still a path. Do it with the Settings JDK page (step 6) or with tooling-JVM recovery
-  (step 4), whichever comes first. Read an old path setting by registering it, as schema 1 files are.*
+- **The tooling JVM is a registry entry too.** *Built with step 4:* the name is `JdkRegistry.ToolingName`, kept in
+  `jdks.json` beside the JDKs, so a rename can follow it. `ToolingJvms.Configured` reads it. A path left there by an
+  older setting is registered on first use and the name kept instead, as schema 1 files are read.
 - **Sources and Javadoc.** IntelliJ's SDK entries hold `SOURCES` and `JAVADOC` roots. A registry entry holds only the
   home. Find `lib/src.zip` (or `src.zip` at the root for Java 8) when the JDK is read, and record it as `sources`, so
   navigation into JDK classes has a place to read from. A JDK without `src.zip` (some Linux packages) shows as such
@@ -223,7 +223,8 @@ Built in step 3 (`BuildJdks.cs` in the app, `GradleJdks.java` in the host):
 
 ### 3.4 Download JDKs
 
-Add **`JdkDownloader`** in `WayfarerWanderer.Jvm`:
+Add **`JdkDownloader`** in `WayfarerWanderer.Jvm`. *Built in step 4* (`JdkDownloads.cs`, `JdkDownloadDialog.cs`).
+Where the build differs from the bullets below, the *as built* notes say so.
 
 - **Catalogue: the foojay Disco API** (`api.foojay.io/disco/v3.0`), the same service Gradle's foojay resolver uses. It
   covers the main vendors and returns a direct URL and a SHA-256 checksum for each package. I checked
@@ -241,6 +242,9 @@ Add **`JdkDownloader`** in `WayfarerWanderer.Jvm`:
   removed on the next start.
 - **Defaults:** vendor Temurin (free for production use, TCK-tested). The dialog lists the vendors foojay reports as
   `free_use_in_production` first and marks the others.
+  *As built:* foojay's distribution list doesn't carry `free_use_in_production` (its packages do), so the dialog
+  puts Temurin first, keeps foojay's order for the rest (maintained vendors only), and says for the chosen package
+  whether it is free for production use.
 - **Tooling JVM recovery:** when no Java 21 or later is found on first start, offer "Download Temurin 21". This also
   partly answers task 9's bundle-or-discover question, since Wayfarer can stay unbundled and still work on a bare
   machine.
@@ -261,6 +265,8 @@ Add **`JdkDownloader`** in `WayfarerWanderer.Jvm`:
 - **Network:** honour the system proxy (`HttpClient`'s default handler does) and a proxy setting in Wayfarer's
   Settings. A catalogue URL setting lets a company point at a foojay mirror. With neither the catalogue nor a
   download reachable, the dialog offers "Add JDK from disk…" instead.
+  *As built:* the system proxy is honoured; the mirror is the `WAYFARER_JDK_CATALOGUE` environment variable. A proxy
+  and catalogue setting wait for a Settings page. Redirects are followed only over https.
 - **Space and concurrency:** check free space against the package size times three (archive, staging, final)
   before starting. One download per target folder at a time: a second request for the same JDK, from another
   window too, joins the first (a lock file next to the `.part`).
@@ -332,14 +338,14 @@ Each step stands alone and comes with tests, following the plan's rule.
 2. **Done** (`bd195c4` to `e20d27b`). Project JDK as a requirement (schema 2, schema 1 still read, never registered);
    `required` on the wire and `JvmToolchain.Requirement`; the shared resolution cases; the missing-JDK banner with
    Choose… and retry; New Project writes the requirement and the registry name.
-   *Left from this step:* the tooling-JVM setting as a registry name (§3.1).
+   *Left from this step:* the tooling-JVM setting as a registry name (§3.1), done with step 4.
 3. **Done.** Registry JDKs passed to Gradle (`installations.paths`, merged with the person's own value) and Maven (generated
    `toolchains.xml`, merged with the install's), and the same to JDT LS (§3.3). Test: the per-module JDK fixtures
    resolve with toolchains only in the registry, and a `gradle.properties` path is kept. The banner's "the build sees
    it once Wayfarer passes its JDKs" note is gone.
-4. `JdkDownloader` against foojay, with a fake catalogue server in tests (checksum mismatch, Cancel, cut-off
+4. **Done.** `JdkDownloader` against foojay, with a fake catalogue server in tests (checksum mismatch, Cancel, cut-off
    download, macOS layout, a zip without exec bits, an entry escaping staging, two concurrent requests); the
-   Download JDK dialog; tooling-JVM recovery.
+   Download JDK dialog; tooling-JVM recovery. The tooling-JVM setting is a registry name (left from step 2).
 5. `IdeaEvaluator`: scopes, module dependencies, several modules, macros and `path.macros.xml`, global libraries,
    repository-library resolution, Kotlin runtime library.
 6. Project Structure dialog; library writer for IntelliJ projects; JDK list with rename, remove and missing homes

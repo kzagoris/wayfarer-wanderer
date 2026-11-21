@@ -44,6 +44,7 @@ public sealed class JdkRegistry
     private readonly string? intelliJConfig;
     private readonly Lock gate = new();
     private List<Kept> kept;
+    private string? tooling;
 
     /// <param name="file">Where the kept JDKs are saved; null keeps them in memory only.</param>
     /// <param name="candidates">JDK homes to detect; the usual install folders when null.</param>
@@ -53,13 +54,35 @@ public sealed class JdkRegistry
         File = file;
         this.candidates = candidates ?? JdkScanner.Candidates;
         this.intelliJConfig = intelliJConfig;
-        kept = Load(file);
+        (kept, tooling) = Load(file);
     }
 
     /// <summary>The table the app and the host use; the app points it at its state folder at start.</summary>
     public static JdkRegistry Current { get; set; } = new(null);
 
     public string? File { get; }
+
+    /// <summary>The name of the JDK Wayfarer's own JVM tools run on (the project host, the debug adapter), as the person
+    /// chose it; null to take <c>JAVA_HOME</c>, <c>PATH</c> or the newest new enough JDK. Kept in the table's file, so a
+    /// rename follows it.</summary>
+    public string? ToolingName
+    {
+        get
+        {
+            lock (gate)
+            {
+                return tooling;
+            }
+        }
+        set
+        {
+            lock (gate)
+            {
+                tooling = value is { Length: > 0 } ? value : null;
+                Save();
+            }
+        }
+    }
 
     /// <summary>Every JDK on this machine, kept ones first, then IntelliJ's, then detected ones; each home once, each
     /// name once. A kept JDK whose home no longer holds one is left out (and stays kept, should it come back).</summary>
@@ -286,20 +309,20 @@ public sealed class JdkRegistry
         }
     }
 
-    private static List<Kept> Load(string? file)
+    private static (List<Kept> Kept, string? Tooling) Load(string? file)
     {
         if (file is null || !System.IO.File.Exists(file))
         {
-            return [];
+            return ([], null);
         }
         try
         {
             Table? table = JsonSerializer.Deserialize<Table>(System.IO.File.ReadAllText(file), JsonOptions);
-            return [.. (table?.Jdks ?? []).Where(jdk => jdk is { Name.Length: > 0, Home.Length: > 0 })];
+            return ([.. (table?.Jdks ?? []).Where(jdk => jdk is { Name.Length: > 0, Home.Length: > 0 })], table?.Tooling is { Length: > 0 } name ? name : null);
         }
         catch (Exception unreadable) when (unreadable is JsonException or IOException or UnauthorizedAccessException)
         {
-            return [];
+            return ([], null);
         }
     }
 
@@ -310,12 +333,12 @@ public sealed class JdkRegistry
             return;
         }
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(File))!);
-        AtomicFile.Write(File, Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new Table(1, kept), JsonOptions)));
+        AtomicFile.Write(File, Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new Table(1, kept, tooling), JsonOptions)));
     }
 
     private sealed record Kept(string Name, string Home, JdkOrigin Origin);
 
-    private sealed record Table(int Schema, IReadOnlyList<Kept>? Jdks);
+    private sealed record Table(int Schema, IReadOnlyList<Kept>? Jdks, string? Tooling = null);
 }
 
 /// <summary>Where JDKs are looked for on disk: the configured tooling JVM, <c>JAVA_HOME</c>, the <c>java</c> on
@@ -328,7 +351,8 @@ public static class JdkScanner
     /// <summary>The homes the person points at: Wayfarer's tooling JVM setting, <c>JAVA_HOME</c>, then <c>PATH</c>.</summary>
     public static IEnumerable<string> Preferred()
     {
-        if (ToolingJvms.Configured is { Length: > 0 } configured)
+        // A tooling JDK chosen by name is in the table already; only an old setting's path is looked at here.
+        if (ToolingJvms.Configured is { Length: > 0 } configured && Path.IsPathFullyQualified(configured))
         {
             yield return configured;
         }

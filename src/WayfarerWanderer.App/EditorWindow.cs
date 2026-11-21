@@ -195,11 +195,20 @@ public sealed partial class EditorWindow : Window
         ShowMissingJdks();
         if (Session.IsTrusted)
         {
-            try { await Session.OpenAsync(cancellationToken); }
+            try
+            {
+                await Session.OpenAsync(cancellationToken);
+                ShowToolingJvmMissing(false);
+            }
             catch (OperationCanceledException) when (request != workspaceRequest || closing)
             {
                 IdeErrors.Observe(git);
                 return;
+            }
+            catch (Exception failure) when (ToolingJvmMissing(failure))
+            {
+                // No JVM to read the project with: the banner offers one, and the folder stays open without a model.
+                ShowToolingJvmMissing(true);
             }
         }
         await git;
@@ -355,8 +364,16 @@ public sealed partial class EditorWindow : Window
         }
         Session.Trust();
         KeepTrust(Session.Root);
-        await Session.OpenAsync();
         TrustBanner.IsVisible = false;
+        try
+        {
+            await Session.OpenAsync();
+            ShowToolingJvmMissing(false);
+        }
+        catch (Exception failure) when (ToolingJvmMissing(failure))
+        {
+            ShowToolingJvmMissing(true);
+        }
         Explorer.Update(Session.Snapshot);
         ShowMissingJdks();
     }

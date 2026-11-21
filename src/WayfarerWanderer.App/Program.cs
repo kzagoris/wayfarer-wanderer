@@ -69,6 +69,9 @@ public partial class EditorApplication : Application
             State = StateStore.Open(StateStore.DefaultRoot);
             WayfarerWanderer.Jvm.JdkRegistry.Current = new WayfarerWanderer.Jvm.JdkRegistry(Path.Combine(State.Root, "jdks.json"));
             WayfarerWanderer.Jvm.ProjectJdkChoices.Current = new WayfarerWanderer.Jvm.ProjectJdkChoices(Path.Combine(State.Root, "project-jdks.json"));
+            // What cut-off JDK downloads left: their .part files and staging folders.
+            string stateRoot = State.Root;
+            _ = Task.Run(() => WayfarerWanderer.Jvm.JdkDownloader.CleanUp(stateRoot));
             State.Settings.PutInForce();
             EditorWindow.TrustKept(State);
             desktop.Exit += (_, _) => State.Release();

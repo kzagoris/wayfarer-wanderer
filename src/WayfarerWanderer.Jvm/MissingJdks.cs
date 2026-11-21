@@ -53,7 +53,8 @@ public static class MissingJdks
     public static IReadOnlyList<Jdk> Candidates(JdkRequirement requirement, IEnumerable<Jdk> jdks)
     {
         ArgumentNullException.ThrowIfNull(requirement);
-        return [.. jdks.Where(jdk => requirement.Feature is not int feature || jdk.Feature == feature)];
+        return [.. jdks.Where(jdk => requirement.Feature is not int feature || jdk.Feature == feature
+            || (requirement.Source == JdkRequirement.Tooling && jdk.Feature > feature))];
     }
 
     /// <summary>Puts <paramref name="chosen"/> where <paramref name="missing"/>'s requirement looks, keeping it in the

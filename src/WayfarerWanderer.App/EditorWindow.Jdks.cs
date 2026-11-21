@@ -8,8 +8,9 @@ using WayfarerWanderer.Jvm;
 namespace WayfarerWanderer.App;
 
 /// <summary>The missing-JDK banner, as IntelliJ shows a missing SDK: after every import whose model asks for a JDK no JDK
-/// here meets, it names the first and how many more, with Choose… (pick from the JDK table, or add one from disk, then
-/// import again) and Download…, which waits for JDK downloads.</summary>
+/// here meets, it names the first and how many more, with Choose… (pick from the JDK table, or add one from disk) and
+/// Download… (the Download JDK dialog), each followed by a new import. A second banner offers to download Temurin 21
+/// when no JVM new enough to run Wayfarer's project host is found.</summary>
 public sealed partial class EditorWindow
 {
     public Border JdkBanner { get; private set; } = null!;
@@ -18,7 +19,14 @@ public sealed partial class EditorWindow
 
     public Button ChooseJdkButton { get; } = new() { Content = "Choose…" };
 
-    public Button DownloadJdkButton { get; } = new() { Content = "Download…", IsEnabled = false };
+    public Button DownloadJdkButton { get; } = new() { Content = "Download…" };
+
+    /// <summary>Shown when no tooling JVM is found: Wayfarer cannot read the project until one is.</summary>
+    public Border ToolingJvmBanner { get; private set; } = null!;
+
+    public Button DownloadToolingJvmButton { get; } = new() { Content = "Download Temurin 21…" };
+
+    public Button ChooseToolingJvmButton { get; } = new() { Content = "Choose…" };
 
     /// <summary>What the banner's model asks for that no JDK meets, in the order the banner names them.</summary>
     public IReadOnlyList<MissingJdk> MissingJdkList { get; private set; } = [];
@@ -26,14 +34,16 @@ public sealed partial class EditorWindow
     /// <summary>Asks the person for a JDK for a missing requirement; the picker dialog unless a test sets another.</summary>
     public Func<MissingJdk, Task<Jdk?>> PickJdk { get; set; } = null!;
 
-    private Border MissingJdkBanner()
+    /// <summary>Downloads a JDK for a requirement, or null when the person cancels; the Download JDK dialog unless a test
+    /// sets another.</summary>
+    public Func<JdkRequirement, Task<Jdk?>> DownloadJdk { get; set; } = null!;
+
+    private Control MissingJdkBanner()
     {
         PickJdk = missing => new JdkPickerDialog(missing).ShowDialog<Jdk?>(this);
+        DownloadJdk = wanted => new JdkDownloadDialog(wanted).ShowDialog<Jdk?>(this);
         ChooseJdkButton.Click += (_, _) => UnawaitedWork.Observe(ChooseJdkAsync());
-        ToolTip.SetTip(DownloadJdkButton, "Downloading JDKs is not available yet. Choose an installed JDK, or add one from disk.");
-        ToolTip.SetShowOnDisabled(DownloadJdkButton, true);
-        DockPanel.SetDock(ChooseJdkButton, Dock.Right);
-        DockPanel.SetDock(DownloadJdkButton, Dock.Right);
+        DownloadJdkButton.Click += (_, _) => UnawaitedWork.Observe(DownloadMissingJdkAsync());
         JdkBanner = new Border
         {
             IsVisible = false,
@@ -45,8 +55,31 @@ public sealed partial class EditorWindow
                 Children = { JdkBannerText, ChooseJdkButton, DownloadJdkButton },
             },
         };
-        DockPanel.SetDock(JdkBanner, Dock.Top);
-        return JdkBanner;
+        DownloadToolingJvmButton.Click += (_, _) => UnawaitedWork.Observe(DownloadToolingJvmAsync());
+        ChooseToolingJvmButton.Click += (_, _) => UnawaitedWork.Observe(ChooseToolingJvmAsync());
+        ToolingJvmBanner = new Border
+        {
+            IsVisible = false,
+            Padding = new(8),
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 8,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = $"Wayfarer needs Java {ToolingJvms.Minimum} or later to read projects, and none was found.",
+                        VerticalAlignment = VerticalAlignment.Center,
+                    },
+                    DownloadToolingJvmButton,
+                    ChooseToolingJvmButton,
+                },
+            },
+        };
+        StackPanel banners = new() { Children = { ToolingJvmBanner, JdkBanner } };
+        DockPanel.SetDock(banners, Dock.Top);
+        return banners;
     }
 
     /// <summary>Shows the banner for the session's accepted model, or puts it away when nothing is missing.</summary>
@@ -56,6 +89,12 @@ public sealed partial class EditorWindow
         JdkBannerText.Text = MissingJdks.Say(MissingJdkList);
         JdkBanner.IsVisible = MissingJdkList.Count > 0;
     }
+
+    /// <summary>Whether an import failed for want of a tooling JVM: the tooling banner shows until one is found.</summary>
+    private static bool ToolingJvmMissing(Exception failure) =>
+        failure is ProjectHostFailed { InnerException: ToolingJvmMissingException };
+
+    private void ShowToolingJvmMissing(bool missing) => ToolingJvmBanner.IsVisible = missing;
 
     /// <summary>Choose…: a JDK for the first missing requirement, put where that requirement looks, then the folder
     /// imported again through the session, as a changed build file would have it.</summary>
@@ -70,13 +109,45 @@ public sealed partial class EditorWindow
         {
             return;
         }
+        await UseJdkAsync(session, missing, chosen);
+    }
+
+    /// <summary>Download…: the Download JDK dialog for the first missing requirement; the JDK it downloads is put where
+    /// that requirement looks, as Choose… puts one, and the folder imported again.</summary>
+    public async Task DownloadMissingJdkAsync()
+    {
+        if (Session is not { } session || MissingJdkList.Count == 0)
+        {
+            return;
+        }
+        MissingJdk missing = MissingJdkList[0];
+        if (await DownloadJdk(missing.Requirement) is not { } downloaded || Session != session)
+        {
+            return;
+        }
+        await UseJdkAsync(session, missing, downloaded);
+    }
+
+    private async Task UseJdkAsync(ProjectSession session, MissingJdk missing, Jdk chosen)
+    {
         MissingJdks.Choose(session.Root, missing, chosen, JdkRegistry.Current, ProjectJdkChoices.Current);
+        await ImportAgainAsync(session);
+    }
+
+    private async Task ImportAgainAsync(ProjectSession session)
+    {
         try
         {
             await session.ImportAsync();
+            ShowToolingJvmMissing(false);
         }
         catch (OperationCanceledException)
         {
+            return;
+        }
+        catch (Exception failure) when (ToolingJvmMissing(failure))
+        {
+            ShowToolingJvmMissing(true);
             return;
         }
         if (Session != session)
@@ -89,6 +160,37 @@ public sealed partial class EditorWindow
             ReloadLanguageModels(snapshot);
         }
         ShowMissingJdks();
+    }
+
+    /// <summary>Download Temurin 21…: the JDK downloaded becomes the tooling JDK, and the folder is read again.</summary>
+    public async Task DownloadToolingJvmAsync()
+    {
+        if (await DownloadJdk(ToolingJvms.RecoveryRequirement) is not { } downloaded)
+        {
+            return;
+        }
+        await UseToolingJvmAsync(downloaded);
+    }
+
+    /// <summary>Choose…: a JDK of the table new enough to run the host, or one added from disk.</summary>
+    public async Task ChooseToolingJvmAsync()
+    {
+        MissingJdk tooling = new(null, new JdkRequirement(null, ToolingJvms.Minimum, null, JdkRequirement.Tooling));
+        if (await PickJdk(tooling) is not { } chosen)
+        {
+            return;
+        }
+        await UseToolingJvmAsync(chosen.Origin == JdkOrigin.Detected ? JdkRegistry.Current.Add(chosen.Home) : chosen);
+    }
+
+    private async Task UseToolingJvmAsync(Jdk jdk)
+    {
+        JdkRegistry.Current.ToolingName = jdk.Name;
+        ShowToolingJvmMissing(false);
+        if (Session is { IsTrusted: true } session)
+        {
+            await ImportAgainAsync(session);
+        }
     }
 }
 
@@ -111,8 +213,14 @@ public sealed class JdkPickerDialog : IdeWindow
         list.DoubleTapped += (_, _) => Close(list.SelectedItem is Row row ? row.Jdk : null);
         Button add = new() { Content = "Add JDK from Disk…" };
         add.Click += (_, _) => UnawaitedWork.Observe(AddFromDiskAsync());
-        List<Control> paragraphs = [DialogFooter.Paragraph(MissingJdks.Say([missing]).Replace(" No installed JDK matches.", string.Empty, StringComparison.Ordinal)), list, problem];
-        DialogFooter.Question(this, "Choose JDK", paragraphs, DialogFooter.Of(choose, DialogFooter.Cancel(() => Close(null))), add);
+        Button download = new() { Content = "Download JDK…" };
+        download.Click += (_, _) => UnawaitedWork.Observe(DownloadAsync());
+        string heading = missing.Requirement.Source == JdkRequirement.Tooling
+            ? $"Wayfarer's project host needs {missing.Requirement.Describe()}."
+            : MissingJdks.Say([missing]).Replace(" No installed JDK matches.", string.Empty, StringComparison.Ordinal);
+        List<Control> paragraphs = [DialogFooter.Paragraph(heading), list, problem];
+        DialogFooter.Question(this, "Choose JDK", paragraphs, DialogFooter.Of(choose, DialogFooter.Cancel(() => Close(null))),
+            new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { add, download } });
         Fill(null);
     }
 
@@ -124,6 +232,14 @@ public sealed class JdkPickerDialog : IdeWindow
         if (rows.Length == 0)
         {
             Say($"No JDK in the table meets {missing.Requirement.Describe()}. Add one from disk.");
+        }
+    }
+
+    private async Task DownloadAsync()
+    {
+        if (await new JdkDownloadDialog(missing.Requirement).ShowDialog<Jdk?>(this) is { } downloaded)
+        {
+            Close(downloaded);
         }
     }
 

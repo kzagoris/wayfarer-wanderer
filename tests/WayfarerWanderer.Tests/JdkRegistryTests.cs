@@ -120,6 +120,22 @@ public sealed class JdkRegistryTests : IDisposable
         Assert.Equal([.. JdkRegistry.Current.All().Select(jdk => jdk.Home).Order()], [.. all.Select(jvm => jvm.Home).Order()]);
     }
 
+    [Fact]
+    public void TheToolingJdkIsKeptByNameBesideTheTable()
+    {
+        string file = Path.Combine(root, "state", "jdks.json");
+        JdkRegistry registry = Isolated(file);
+        Jdk jdk = registry.Add(FakeJdk("t21", "21.0.5", "Eclipse Adoptium"));
+        registry.ToolingName = jdk.Name;
+
+        JdkRegistry reopened = Isolated(file);
+        Assert.Equal("temurin-21", reopened.ToolingName);
+        Assert.Equal(jdk.Home, reopened.Named(reopened.ToolingName!)!.Home);
+        reopened.ToolingName = null;
+        Assert.Null(Isolated(file).ToolingName);
+        Assert.Single(Isolated(file).All());
+    }
+
     private JdkRegistry Isolated(string? file) => new(file, () => [], Path.Combine(root, "no-intellij"));
 
     private string FakeJdk(string name, string version, string vendor)
