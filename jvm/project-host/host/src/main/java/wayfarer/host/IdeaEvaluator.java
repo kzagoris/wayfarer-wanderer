@@ -114,12 +114,16 @@ final class IdeaEvaluator {
         if (jdkName == null && project != null && !project.getAttribute("project-jdk-name").isEmpty()) {
             jdkName = project.getAttribute("project-jdk-name");
         }
-        Integer level = languageLevel(project == null ? null : project.getAttribute("languageLevel"));
-        // The module's own JDK name is its requirement, with its language level as the feature: the JDK of that name in
-        // the IDE's table (which holds IntelliJ's JDK table under IntelliJ's names), else one of that feature. The host
+        // A module's own LANGUAGE_LEVEL overrides the project's, as in IntelliJ's module settings.
+        Integer level = languageLevel(manager.getAttribute("LANGUAGE_LEVEL"));
+        if (level == null) {
+            level = languageLevel(project == null ? null : project.getAttribute("languageLevel"));
+        }
+        // The module's own JDK name is its requirement: the JDK of that name in the IDE's table (which holds IntelliJ's
+        // JDK table under IntelliJ's names), else one of the release the name carries (see requirement). The host
         // settles it against the table; none meeting it leaves the module without a JDK. A module that names none takes
         // the JDK the workspace resolved to in Wayfarer, then JAVA_HOME; the import JVM falls back the same way.
-        Protocol.Requirement required = jdkName == null ? null : new Protocol.Requirement(jdkName, level, null, "idea");
+        Protocol.Requirement required = requirement(jdkName, level);
         Protocol.Jdk named = ImportJvms.choose(required, ImportJvms.usableJdks(params));
         String home = named != null ? ImportJvms.usable(named.home()).home()
                 : ImportJvms.usable(params.jdk()) != null ? params.jdk() : null;
@@ -268,6 +272,38 @@ final class IdeaEvaluator {
             }
         }
         return null;
+    }
+
+    /**
+     * What an IntelliJ JDK name asks for. IntelliJ names the JDKs it sets up by their release (corretto-21, 21,
+     * temurin-21.0.5, jdk1.8.0_202), and that release is the feature a JDK of another name must have to stand in. The
+     * language level is only the least the module compiles with (a JDK 21 compiles JDK_17 code), so it is the feature
+     * only when the name carries no release.
+     */
+    static Protocol.Requirement requirement(String jdkName, Integer level) {
+        if (jdkName == null || jdkName.isBlank()) {
+            return null;
+        }
+        Integer feature = featureOfName(jdkName);
+        return new Protocol.Requirement(jdkName, feature != null ? feature : level, null, "idea");
+    }
+
+    // A release stands on its own in the name, or right after "jdk": not inside a word or a hash (my-jdk-v2, wanted-19ab).
+    private static final java.util.regex.Pattern RELEASE = java.util.regex.Pattern.compile(
+            "(?<![a-z0-9.])(?:jdk)?(\\d+)(?:\\.(\\d+))?(?![a-z0-9])");
+
+    private static Integer featureOfName(String name) {
+        java.util.regex.Matcher release = RELEASE.matcher(name.toLowerCase(java.util.Locale.ROOT));
+        if (!release.find()) {
+            return null;
+        }
+        try {
+            int first = Integer.parseInt(release.group(1));
+            int feature = first == 1 && release.group(2) != null ? Integer.parseInt(release.group(2)) : first;
+            return feature >= 1 && feature < 1000 ? feature : null;
+        } catch (NumberFormatException tooLong) {
+            return null;
+        }
     }
 
     static Integer languageLevel(String value) {

@@ -245,20 +245,19 @@ public sealed class WorkspaceImportTests
         WorkspaceTrust.Trust(root);
         try
         {
+            // The release the name carries is the feature asked for when the name is not in the table, even over a
+            // lower language level (JDK_25 in misc.xml): one above any JDK here.
+            int absent = Math.Max(Environment.Version.Major, JdkRegistry.Current.All().Select(jdk => jdk.Feature).DefaultIfEmpty(0).Max()) + 40;
             string iml = Path.Combine(root, "Course.iml");
             await File.WriteAllTextAsync(iml, (await File.ReadAllTextAsync(iml, TestContext.Current.CancellationToken))
-                .Replace("<orderEntry type=\"inheritedJdk\" />", "<orderEntry type=\"jdk\" jdkName=\"nowhere-jdk-77\" jdkType=\"JavaSDK\" />", StringComparison.Ordinal),
+                .Replace("<orderEntry type=\"inheritedJdk\" />", $"<orderEntry type=\"jdk\" jdkName=\"nowhere-jdk-{absent}\" jdkType=\"JavaSDK\" />", StringComparison.Ordinal),
                 TestContext.Current.CancellationToken);
-            // The language level is the feature asked for when the name is not in the table: one above any JDK here.
-            int absent = Math.Max(Environment.Version.Major, JdkRegistry.Current.All().Select(jdk => jdk.Feature).DefaultIfEmpty(0).Max()) + 40;
-            string misc = Path.Combine(root, ".idea", "misc.xml");
-            await File.WriteAllTextAsync(misc, (await File.ReadAllTextAsync(misc, TestContext.Current.CancellationToken))
-                .Replace("languageLevel=\"JDK_25\"", $"languageLevel=\"JDK_{absent}\"", StringComparison.Ordinal), TestContext.Current.CancellationToken);
 
             WorkspaceSnapshot snapshot = await new ProjectHostImporter().ImportAsync(root, 1, TestContext.Current.CancellationToken);
             JvmModule module = Assert.Single(snapshot.Modules);
             Assert.True(module.CompileToolchain.Missing);
-            Assert.Equal(new JdkRequirement("nowhere-jdk-77", absent, null, JdkRequirement.Idea), module.CompileToolchain.Requirement);
+            Assert.Equal(25, module.CompileToolchain.LanguageVersion);
+            Assert.Equal(new JdkRequirement($"nowhere-jdk-{absent}", absent, null, JdkRequirement.Idea), module.CompileToolchain.Requirement);
         }
         finally
         {

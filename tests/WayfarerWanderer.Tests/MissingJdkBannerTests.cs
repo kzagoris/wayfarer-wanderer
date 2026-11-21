@@ -15,7 +15,8 @@ public class MissingJdkBannerTests
     public async Task AMissingJdkShowsTheBannerAndChoosingOneImportsAgainAndPutsItAway()
     {
         // A name and a feature no JDK here has, so the test cannot pass by accident on a machine with every JDK.
-        string name = "wanted-" + Guid.NewGuid().ToString("N")[..8];
+        // Letters only: a release in the name (wanted-19…) would be asked for instead of the language level.
+        string name = "wanted-" + new string([.. Guid.NewGuid().ToString("N")[..8].Select(c => char.IsDigit(c) ? (char)('g' + c - '0') : c)]);
         int absent = Math.Max(Environment.Version.Major, JdkRegistry.Current.All().Select(jdk => jdk.Feature).DefaultIfEmpty(0).Max()) + 40;
         string root = WorkspaceImportTests.Copy("idea/course");
         string iml = Path.Combine(root, "Course.iml");
