@@ -3,7 +3,7 @@
 Draft for review, 2026-11-21. It compares IntelliJ IDEA's Project Structure, SDK table and JDK download with what
 Wayfarer has, and proposes a design to bring Wayfarer close to it.
 
-**Status:** steps 1 to 5 of §4 are built. Where the build settled something differently from the first draft, the
+**Status:** steps 1 to 6 of §4 are built. Where the build settled something differently from the first draft, the
 sections below now describe what was built.
 
 ## 1. How IntelliJ IDEA does it
@@ -85,15 +85,15 @@ from `gradle-daemon-jvm.properties`. Maven picks toolchains from `~/.m2/toolchai
 | Concern | Today | Gap against IntelliJ |
 |---|---|---|
 | Project JDK | `.wayfarer/project.json` schema 2 holds a **requirement** (name, feature, vendor). The starter templates commit it (`!.wayfarer/project.json` in their `.gitignore`). A person's choice for one project on this machine lives in Wayfarer's state (`ProjectJdkChoices`) and wins over the shared requirement. Schema 1 paths still read. | None for the project level. |
-| JDK table | `JdkRegistry` (`jdks.json`): kept JDKs, then IntelliJ's `jdk.table.xml` names, then JDKs `JdkScanner` detects. The client sends the table in `HostImportParams.Jdks`. The host doesn't search the disk. | No JDK sources or Javadoc roots. Rename and remove don't account for what points at a name (see §3.1). |
-| Tooling JVM | A registry **name** (`JdkRegistry.ToolingName`, kept in `jdks.json`), then `JAVA_HOME`, `PATH`, then the newest Java 21 or later in the registry (`ToolingJvm.cs`). An older path setting is registered and replaced by its name. When none is found, a banner offers **Download Temurin 21…** and **Choose…**. | No Settings page for it yet (step 6). |
+| JDK table | `JdkRegistry` (`jdks.json`): kept JDKs, then IntelliJ's `jdk.table.xml` names, then JDKs `JdkScanner` detects. The client sends the table in `HostImportParams.Jdks`. The host doesn't search the disk. Step 6: rename and remove update what points at a name, a kept JDK whose home is gone is listed as missing with Locate…, each JDK records its `src.zip`, and changes are merged with another window's. | No Javadoc roots. |
+| Tooling JVM | A registry **name** (`JdkRegistry.ToolingName`, kept in `jdks.json`), then `JAVA_HOME`, `PATH`, then the newest Java 21 or later in the registry (`ToolingJvm.cs`). An older path setting is registered and replaced by its name. When none is found, a banner offers **Download Temurin 21…** and **Choose…**. Project Structure's JDKs page sets it (**Use for Wayfarer's Tools**). | None. |
 | Per-module JDKs | `JvmEnvironment` carries `required {name, feature, vendor, source}`. The host settles each module against the table in the shared order (`protocol/jdk-resolution.json`). An unmet requirement leaves `Home` null (`JvmToolchain.Missing`). | None. |
 | Missing-JDK banner | Names the first missing requirement and how many more. **Choose…** picks from the table or adds from disk; **Download…** opens the Download JDK dialog for the requirement. Either reimports. | None. |
 | JDKs for Gradle and Maven | Step 3: `BuildJdks` passes the table to the wrappers (`-Porg.gradle.java.installations.paths`, `--global-toolchains`) and the host passes it to the Tooling API (`GradleJdks.java`). | None. |
 | JDKs for language servers | `java.configuration.runtimes` lists module homes, plus the table's JDK for a feature a module asks for. `java.import.gradle.arguments` carries the same installation paths. | m2e in JDT LS reads no toolchains file (§3.3). |
 | Download | Step 4: `JdkCatalogue` (foojay) and `JdkDownloader` in `JdkDownloads.cs`, the Download JDK dialog, tooling-JVM recovery. The fixtures still turn Gradle's own foojay download off. | No vendor signature checks yet; no proxy or catalogue setting in Settings (§3.4). |
-| IntelliJ modules | Step 5: `IdeaEvaluator` reads every module `.idea/modules.xml` lists (or the folder's one `.iml`): scopes, `module` dependencies with exports, project, global and module libraries, jar directories, macros and path variables, repository libraries (downloaded with Maven Resolver) and Kotlin's bundled runtime. IntelliJ modules compile in dependency order. | Nothing writes `.iml` or library files (step 6). |
-| UI | New Project registers the chosen JDK and writes schema 2. The IntelliJ template writes the registry name as `project-jdk-name`. Settings has no JDK page. | No Project Structure dialog, no JDK list, no library editor. |
+| IntelliJ modules | Step 5: `IdeaEvaluator` reads every module `.idea/modules.xml` lists (or the folder's one `.iml`): scopes, `module` dependencies with exports, project, global and module libraries, jar directories, macros and path variables, repository libraries (downloaded with Maven Resolver) and Kotlin's bundled runtime. IntelliJ modules compile in dependency order. Step 6: `IdeaProjectWriter` writes libraries, order entries and the project JDK. | No module or module-dependency editing yet (add a module, add a module dependency). |
+| UI | New Project registers the chosen JDK and writes schema 2. The IntelliJ template writes the registry name as `project-jdk-name`. Step 6: **Project Structure** (File menu, Ctrl+Alt+Shift+S, ⌘; on macOS, and the missing-JDK banner) with Project, Modules, Libraries, JDKs and Problems pages. | Settings has no JDK page; the JDK list lives in Project Structure, as IntelliJ's SDKs page does. |
 
 ## 3. Proposed design
 
@@ -305,7 +305,7 @@ opens the same in the other.
   exported entries (theirs in turn), and runtime everything it runs with. An unresolved macro is a module `Problem`
   naming the variable and the library; Wayfarer's own path variables live in `path-variables.json` (`IdeaPlatform`).
   "Set path variable…" in the window comes with Project Structure's Problems page (step 6).
-- **Writer (client):** "Add library → From Maven…" (coordinates, transitive yes or no, scope) writes
+- **Writer (client):** *built in step 6 as `IdeaProjectWriter`.* "Add library → From Maven…" (coordinates, transitive yes or no, scope) writes
   `.idea/libraries/<name>.xml` and the `orderEntry`. "Add jars or folder" writes a plain library. Writes are
   atomic, keep unknown elements and attributes, and trigger the normal reimport through `buildInputs`.
 
@@ -315,6 +315,10 @@ and dependencies read-only, with "Open build file". "Add dependency" inserts int
 or a local index).
 
 ### 3.6 Project Structure dialog (UI)
+
+*Built in step 6* (`ProjectStructureDialog.cs`). Changes are written as they are made, not on OK; closing the dialog
+after a change imports the folder again. For a Maven or Gradle project the JDK chosen on the Project page is this
+machine's choice (`ProjectJdkChoices`), never the shared `project.json`.
 
 One dialog, opened from File › Project Structure… and the missing-JDK banner. It follows IntelliJ's layout:
 
@@ -359,7 +363,7 @@ Each step stands alone and comes with tests, following the plan's rule.
    Download JDK dialog; tooling-JVM recovery. The tooling-JVM setting is a registry name (left from step 2).
 5. **Done.** `IdeaEvaluator`: scopes, module dependencies, several modules, macros and `path.macros.xml`, global libraries,
    repository-library resolution, Kotlin runtime library.
-6. Project Structure dialog; library writer for IntelliJ projects; JDK list with rename, remove and missing homes
+6. **Done.** Project Structure dialog; library writer for IntelliJ projects; JDK list with rename, remove and missing homes
    (§3.1); JDK sources roots.
 7. Launch configuration JDKs (§3.7).
 8. Later: "Add dependency" for Maven and Gradle build files.

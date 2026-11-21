@@ -63,7 +63,8 @@ public sealed partial class EditorWindow : Window
         };
         AddWelcome();
         MenuItem fileMenu = new() { Header = "File", Items = { newProject, MenuAction(EditorActions.OpenWorkspace), MenuAction(AppActions.CloneRepository), RecentMenu(),
-            MenuAction(EditorActions.OpenSource), MenuAction(EditorActions.SaveSource), new Separator(), MenuAction(AppActions.ShowSettings) } };
+            MenuAction(EditorActions.OpenSource), MenuAction(EditorActions.SaveSource), new Separator(), MenuAction(EditorActions.ProjectStructure),
+            MenuAction(AppActions.ShowSettings) } };
         fileMenu.SubmenuOpened += (_, _) => RefreshActions(fileMenu);
         runMenu.SubmenuOpened += (_, _) => RefreshActions(runMenu);
         Menu menu = new()
@@ -292,6 +293,8 @@ public sealed partial class EditorWindow : Window
         AddDebugAndFileActions();
         Actions.Add(new EditorAction(EditorActions.NewProject, "New Project…", () => true, () =>
             UnawaitedWork.Observe(new NewProjectAction().RunAsync(this))));
+        Actions.Add(new EditorAction(EditorActions.ProjectStructure, "Project Structure…", () => Session is not null, () =>
+            UnawaitedWork.Observe(ShowProjectStructureAsync())));
     }
 
     private MenuItem MenuAction(string id)

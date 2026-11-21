@@ -21,6 +21,9 @@ public static class AppActions
 
     /// <summary>Rider's New Project (NewRiderProject), a project added to the open solution.</summary>
     public const string NewProject = "app.newProject";
+
+    /// <summary>IntelliJ's Project Structure (ShowProjectStructureSettings): the project, its modules, libraries and JDKs.</summary>
+    public const string ProjectStructure = "app.projectStructure";
     public const string Exit = "app.exit";
 
     // Rider's NextProjectWindow and PreviousProjectWindow (Next and Previous Solution Window), whose keys its Visual Studio
@@ -704,6 +707,7 @@ public static class AppActions
             return keymap
                 .Bind(Open, "meta O")
                 .Bind(NewProject, "meta shift N")
+                .Bind(ProjectStructure, "meta SEMICOLON")
                 .Bind(NewItem, "meta N", "alt INSERT")
                 .Bind(Save, "meta S")
                 .Bind(SaveAll, "meta shift S")
@@ -835,6 +839,7 @@ public static class AppActions
         return keymap
             .Bind(Open, "control O")
             .Bind(NewProject, "control shift N")
+            .Bind(ProjectStructure, "control alt shift S")
             .Bind(NewItem, "control N")
             .Bind(Save, "control S")
             .Bind(SaveAll, "control shift S")

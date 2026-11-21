@@ -24,7 +24,16 @@ public enum JdkOrigin
 }
 
 /// <summary>A JDK under the name projects and settings refer to it by, read from its home's <c>release</c> file.</summary>
-public sealed record Jdk(string Name, string Home, string Version, int Feature, string? Vendor, JdkOrigin Origin);
+public sealed record Jdk(string Name, string Home, string Version, int Feature, string? Vendor, JdkOrigin Origin)
+{
+    /// <summary>The JDK's sources archive (<c>lib/src.zip</c>, or <c>src.zip</c> at the root for Java 8), for
+    /// navigation into JDK classes; null where the JDK has none, as some Linux packages do.</summary>
+    public string? Sources { get; init; }
+}
+
+/// <summary>A kept JDK whose home no longer holds a JDK (an unplugged drive, a moved folder): listed so it can be
+/// located again or removed, never dropped by itself.</summary>
+public sealed record MissingKeptJdk(string Name, string Home, JdkOrigin Origin);
 
 /// <summary>
 /// Wayfarer's JDK table, kept per person as IntelliJ keeps <c>jdk.table.xml</c>: the JDKs the person added or Wayfarer
@@ -45,6 +54,7 @@ public sealed class JdkRegistry
     private readonly Lock gate = new();
     private List<Kept> kept;
     private string? tooling;
+    private DateTime loaded;
 
     /// <param name="file">Where the kept JDKs are saved; null keeps them in memory only.</param>
     /// <param name="candidates">JDK homes to detect; the usual install folders when null.</param>
@@ -55,6 +65,7 @@ public sealed class JdkRegistry
         this.candidates = candidates ?? JdkScanner.Candidates;
         this.intelliJConfig = intelliJConfig;
         (kept, tooling) = Load(file);
+        loaded = Stamp(file);
     }
 
     /// <summary>The table the app and the host use; the app points it at its state folder at start.</summary>
@@ -71,6 +82,7 @@ public sealed class JdkRegistry
         {
             lock (gate)
             {
+                Refresh();
                 return tooling;
             }
         }
@@ -78,6 +90,7 @@ public sealed class JdkRegistry
         {
             lock (gate)
             {
+                Reload();
                 tooling = value is { Length: > 0 } ? value : null;
                 Save();
             }
@@ -91,6 +104,7 @@ public sealed class JdkRegistry
         List<Kept> saved;
         lock (gate)
         {
+            Refresh();
             saved = [.. kept];
         }
         List<Jdk> all = [];
@@ -105,7 +119,7 @@ public sealed class JdkRegistry
             }
             string unique = name is { Length: > 0 } ? Unique(name, jvm, names) : Unique(SuggestName(jvm.Vendor, jvm.Feature), jvm, names);
             names.Add(unique);
-            all.Add(new Jdk(unique, jvm.Home, jvm.Version!, jvm.Feature, jvm.Vendor, origin));
+            all.Add(new Jdk(unique, jvm.Home, jvm.Version!, jvm.Feature, jvm.Vendor, origin) { Sources = SourcesOf(jvm.Home) });
         }
         foreach (Kept jdk in saved)
         {
@@ -157,10 +171,132 @@ public sealed class JdkRegistry
         }
         lock (gate)
         {
-            kept = [.. kept, new Kept(chosen, jvm.Home, origin)];
+            Reload();
+            kept = [.. kept.Where(jdk => !PathNames.Same(jdk.Home, jvm.Home)), new Kept(chosen, jvm.Home, origin)];
             Save();
         }
         return All().First(jdk => PathNames.Same(jdk.Home, jvm.Home));
+    }
+
+    /// <summary>The kept JDKs whose homes hold no JDK now, in the table's order.</summary>
+    public IReadOnlyList<MissingKeptJdk> MissingKept()
+    {
+        lock (gate)
+        {
+            Refresh();
+            return [.. kept.Where(jdk => ToolingJvms.At(Resolved(jdk.Home)) is null).Select(jdk => new MissingKeptJdk(jdk.Name, jdk.Home, jdk.Origin))];
+        }
+    }
+
+    /// <summary>Points the kept JDK <paramref name="name"/> at a new home (Locate… for a missing one), keeping its name.</summary>
+    /// <exception cref="ArgumentException">No kept JDK has that name, or the folder holds no JDK.</exception>
+    public Jdk Locate(string name, string home)
+    {
+        ToolingJvm jvm = ToolingJvms.At(Resolved(home)) ?? throw new ArgumentException($"{home} is not a JDK: it has no bin/java and release file.", nameof(home));
+        lock (gate)
+        {
+            Reload();
+            Kept found = kept.FirstOrDefault(jdk => string.Equals(jdk.Name, name, StringComparison.OrdinalIgnoreCase))
+                ?? throw new ArgumentException($"No kept JDK is named {name}.", nameof(name));
+            // Another kept entry for the new home gives way to the located one.
+            kept = [.. kept.Where(jdk => ReferenceEquals(jdk, found) || !PathNames.Same(jdk.Home, jvm.Home)).Select(jdk => ReferenceEquals(jdk, found) ? jdk with { Home = jvm.Home } : jdk)];
+            Save();
+        }
+        return All().First(jdk => PathNames.Same(jdk.Home, jvm.Home));
+    }
+
+    /// <summary>Renames a JDK, keeping it if it was only detected, and updates what points at the old name on this
+    /// machine: the project choices and the tooling JDK. A project's own files (<c>project.json</c>, <c>.iml</c>) keep
+    /// the name they hold, which then resolves by feature and vendor.</summary>
+    /// <exception cref="ArgumentException">No JDK has that name, it is IntelliJ's (renamed in IntelliJ), or the new name
+    /// is taken.</exception>
+    public Jdk Rename(string name, string newName, ProjectJdkChoices? choices = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(newName);
+        Jdk jdk = Named(name) ?? throw new ArgumentException($"No JDK is named {name}.", nameof(name));
+        if (jdk.Origin == JdkOrigin.IntelliJ)
+        {
+            throw new ArgumentException($"{name} is named in IntelliJ's JDK table. Rename it in IntelliJ.", nameof(name));
+        }
+        if (string.Equals(jdk.Name, newName, StringComparison.Ordinal))
+        {
+            return jdk;
+        }
+        if (All().Any(other => !PathNames.Same(other.Home, jdk.Home) && other.Origin != JdkOrigin.Detected && string.Equals(other.Name, newName, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new ArgumentException($"Another JDK is already named {newName}.", nameof(newName));
+        }
+        lock (gate)
+        {
+            Reload();
+            JdkOrigin origin = jdk.Origin == JdkOrigin.Detected ? JdkOrigin.Added : jdk.Origin;
+            kept = [.. kept.Where(k => !PathNames.Same(k.Home, jdk.Home)), new Kept(newName, jdk.Home, origin)];
+            if (string.Equals(tooling, jdk.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                tooling = newName;
+            }
+            Save();
+        }
+        choices?.Rename(jdk.Name, newName);
+        return All().First(k => PathNames.Same(k.Home, jdk.Home));
+    }
+
+    /// <summary>What on this machine points at a JDK's name: the project folders whose choice it is, and Wayfarer's own
+    /// tools when it is the tooling JDK. Shown before a JDK is removed.</summary>
+    public IReadOnlyList<string> Users(string name, ProjectJdkChoices? choices = null)
+    {
+        List<string> users = [.. choices?.Users(name) ?? []];
+        if (string.Equals(ToolingName, name, StringComparison.OrdinalIgnoreCase))
+        {
+            users.Add("Wayfarer's project host");
+        }
+        return users;
+    }
+
+    /// <summary>Forgets a kept JDK and drops what pointed at it on this machine (a project choice falls back to the
+    /// project's requirement; the tooling JDK to the usual search); false when no kept JDK has that name.</summary>
+    public bool Remove(string name, ProjectJdkChoices? choices)
+    {
+        bool removed = Remove(name);
+        if (removed)
+        {
+            choices?.Forget(name);
+            lock (gate)
+            {
+                if (string.Equals(tooling, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    tooling = null;
+                    Save();
+                }
+            }
+        }
+        return removed;
+    }
+
+    /// <summary>The folder a downloaded JDK may be deleted with: the folder under <paramref name="jdksFolder"/> holding
+    /// its home, when Wayfarer downloaded it there; null for any other JDK, whose files are never deleted.</summary>
+    public static string? DeletableFolder(Jdk jdk, string? jdksFolder = null)
+    {
+        string root = Path.GetFullPath(jdksFolder ?? JdkDownloader.DefaultFolder);
+        if (jdk.Origin != JdkOrigin.Downloaded || !PathNames.Within(jdk.Home, root) || PathNames.Same(jdk.Home, root))
+        {
+            return null;
+        }
+        string relative = Path.GetRelativePath(root, jdk.Home);
+        return Path.Combine(root, relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[0]);
+    }
+
+    /// <summary>A JDK's sources archive, or null.</summary>
+    public static string? SourcesOf(string home)
+    {
+        foreach (string candidate in new[] { Path.Combine(home, "lib", "src.zip"), Path.Combine(home, "src.zip") })
+        {
+            if (System.IO.File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     /// <summary>Forgets a kept JDK, leaving its files alone; false when no kept JDK has that name.</summary>
@@ -168,6 +304,7 @@ public sealed class JdkRegistry
     {
         lock (gate)
         {
+            Reload();
             int before = kept.Count;
             kept = [.. kept.Where(jdk => !string.Equals(jdk.Name, name, StringComparison.OrdinalIgnoreCase))];
             if (kept.Count == before)
@@ -334,6 +471,39 @@ public sealed class JdkRegistry
         }
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(File))!);
         AtomicFile.Write(File, Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new Table(1, kept, tooling), JsonOptions)));
+        loaded = Stamp(File);
+    }
+
+    /// <summary>The table as another window last wrote it, read again just before a change is made to it, so two
+    /// windows' changes both stand (read, change, write). Under the gate.</summary>
+    private void Reload()
+    {
+        if (File is not null && System.IO.File.Exists(File))
+        {
+            (kept, tooling) = Load(File);
+            loaded = Stamp(File);
+        }
+    }
+
+    /// <summary>Reads the table again when another window changed it since. Under the gate.</summary>
+    private void Refresh()
+    {
+        if (File is not null && Stamp(File) != loaded)
+        {
+            Reload();
+        }
+    }
+
+    private static DateTime Stamp(string? file)
+    {
+        try
+        {
+            return file is not null && System.IO.File.Exists(file) ? System.IO.File.GetLastWriteTimeUtc(file) : default;
+        }
+        catch (Exception unreadable) when (unreadable is IOException or UnauthorizedAccessException)
+        {
+            return default;
+        }
     }
 
     private sealed record Kept(string Name, string Home, JdkOrigin Origin);

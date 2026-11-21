@@ -35,6 +35,7 @@ public sealed class EditorActions
     public const string SaveSource = AppActions.Save;
     public const string Stop = AppActions.Stop;
     public const string NewProject = AppActions.NewProject;
+    public const string ProjectStructure = AppActions.ProjectStructure;
 
     /// <summary>The group Find Action lists Wayfarer's own actions under.</summary>
     private const string Group = "Wayfarer";

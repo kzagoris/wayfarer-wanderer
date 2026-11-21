@@ -224,6 +224,42 @@ public sealed class ProjectJdkChoices
         }
     }
 
+    /// <summary>The project folders whose choice is the JDK named <paramref name="jdk"/>.</summary>
+    public IReadOnlyList<string> Users(string jdk)
+    {
+        lock (gate)
+        {
+            return [.. choices.Where(choice => string.Equals(choice.Jdk, jdk, StringComparison.OrdinalIgnoreCase)).Select(choice => choice.Folder)];
+        }
+    }
+
+    /// <summary>Points every choice of <paramref name="jdk"/> at <paramref name="newName"/>, as a JDK's rename does.</summary>
+    public void Rename(string jdk, string newName) =>
+        Replace(choice => string.Equals(choice.Jdk, jdk, StringComparison.OrdinalIgnoreCase) ? choice with { Jdk = newName } : choice);
+
+    /// <summary>Drops every choice of <paramref name="jdk"/>, as a JDK's removal does: those projects fall back to their
+    /// requirement.</summary>
+    public void Forget(string jdk) =>
+        Replace(choice => string.Equals(choice.Jdk, jdk, StringComparison.OrdinalIgnoreCase) ? null : choice);
+
+    private void Replace(Func<Choice, Choice?> change)
+    {
+        lock (gate)
+        {
+            List<Choice> next = [.. choices.Select(change).OfType<Choice>()];
+            if (next.SequenceEqual(choices))
+            {
+                return;
+            }
+            choices = next;
+            if (File is not null)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(File))!);
+                AtomicFile.Write(File, Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new Table(1, choices), JsonOptions)));
+            }
+        }
+    }
+
     private static List<Choice> Load(string? file)
     {
         if (file is null || !System.IO.File.Exists(file))

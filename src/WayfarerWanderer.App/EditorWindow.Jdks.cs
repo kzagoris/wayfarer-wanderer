@@ -21,6 +21,11 @@ public sealed partial class EditorWindow
 
     public Button DownloadJdkButton { get; } = new() { Content = "Download…" };
 
+    public Button ProjectStructureButton { get; } = new() { Content = "Project Structure…" };
+
+    /// <summary>Shows Project Structure at a page and waits for it to close; the dialog unless a test sets another.</summary>
+    public Func<ProjectStructureDialog, Task<bool>> ShowStructure { get; set; } = null!;
+
     /// <summary>Shown when no tooling JVM is found: Wayfarer cannot read the project until one is.</summary>
     public Border ToolingJvmBanner { get; private set; } = null!;
 
@@ -44,6 +49,8 @@ public sealed partial class EditorWindow
         DownloadJdk = wanted => new JdkDownloadDialog(wanted).ShowDialog<Jdk?>(this);
         ChooseJdkButton.Click += (_, _) => UnawaitedWork.Observe(ChooseJdkAsync());
         DownloadJdkButton.Click += (_, _) => UnawaitedWork.Observe(DownloadMissingJdkAsync());
+        ProjectStructureButton.Click += (_, _) => UnawaitedWork.Observe(ShowProjectStructureAsync(ProjectStructureDialog.ProblemsPage));
+        ShowStructure = dialog => dialog.ShowDialog<bool>(this);
         JdkBanner = new Border
         {
             IsVisible = false,
@@ -52,7 +59,7 @@ public sealed partial class EditorWindow
             {
                 Orientation = Orientation.Horizontal,
                 Spacing = 8,
-                Children = { JdkBannerText, ChooseJdkButton, DownloadJdkButton },
+                Children = { JdkBannerText, ChooseJdkButton, DownloadJdkButton, ProjectStructureButton },
             },
         };
         DownloadToolingJvmButton.Click += (_, _) => UnawaitedWork.Observe(DownloadToolingJvmAsync());
@@ -160,6 +167,20 @@ public sealed partial class EditorWindow
             ReloadLanguageModels(snapshot);
         }
         ShowMissingJdks();
+    }
+
+    /// <summary>Project Structure, at <paramref name="page"/>; what it changed is imported again as it closes.</summary>
+    public async Task ShowProjectStructureAsync(string? page = null)
+    {
+        if (Session is not { } session)
+        {
+            return;
+        }
+        ProjectStructureDialog dialog = new(session.Root, session.Snapshot, page) { OpenFile = OpenSource };
+        if (await ShowStructure(dialog) && Session == session && session.IsTrusted)
+        {
+            await ImportAgainAsync(session);
+        }
     }
 
     /// <summary>Download Temurin 21…: the JDK downloaded becomes the tooling JDK, and the folder is read again.</summary>
