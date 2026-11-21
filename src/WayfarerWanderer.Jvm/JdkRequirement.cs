@@ -26,6 +26,29 @@ public sealed record JdkRequirement(string? Name, int? Feature, string? Vendor, 
     /// <summary>Wayfarer's own tooling JVM, which takes its feature or any later one.</summary>
     public const string Tooling = "tooling";
 
+    /// <summary>A launch configuration's JDK, by name.</summary>
+    public const string Launch = "launch";
+
+    /// <summary>What a JDK name asks for, as IntelliJ names JDKs: that name, and the release it carries as the feature
+    /// (<c>corretto-21</c>, <c>21</c>, <c>temurin-21.0.5</c>, <c>jdk1.8.0_202</c>; digits inside a word such as
+    /// <c>my-jdk-v2</c> don't count). The host reads IntelliJ names the same way (<c>IdeaEvaluator.requirement</c>).</summary>
+    public static JdkRequirement FromName(string name, string source) => new(name, FeatureOfName(name), null, source);
+
+    /// <summary>The release a JDK name carries; null for none.</summary>
+    public static int? FeatureOfName(string name)
+    {
+        System.Text.RegularExpressions.Match release = System.Text.RegularExpressions.Regex.Match(name.ToLowerInvariant(),
+            @"(?<![a-z0-9.])(?:jdk)?(\d+)(?:\.(\d+))?(?![a-z0-9])");
+        if (!release.Success || !int.TryParse(release.Groups[1].Value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int first))
+        {
+            return null;
+        }
+        int feature = first == 1 && release.Groups[2].Success && int.TryParse(release.Groups[2].Value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int legacy)
+            ? legacy
+            : first;
+        return feature is >= 1 and < 1000 ? feature : null;
+    }
+
     /// <summary>How the window names it: <c>JDK 17 (any vendor)</c>, <c>JDK 21 (temurin)</c>, <c>JDK 21 or later</c>
     /// for the tooling JVM, or the JDK's name.</summary>
     public string Describe() =>

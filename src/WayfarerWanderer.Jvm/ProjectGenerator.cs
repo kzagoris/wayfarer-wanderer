@@ -444,7 +444,6 @@ public static class ProjectGenerator
             Module = values.Artifact,
             MainClass = main,
             WorkingDirectory = values.Destination,
-            JavaHome = values.Jdk,
             Profile = string.Empty,
             BuildTask = (values.Options.Kind, values.Options.Build) switch
             {

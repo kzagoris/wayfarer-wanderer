@@ -112,8 +112,20 @@ public sealed partial class EditorWindow
         return new JvmLaunchConfiguration
         {
             Name = "Current", Module = selected.Id, MainClass = main.ClassName,
-            WorkingDirectory = selected.Root, JavaHome = selected.RuntimeToolchain.Home ?? string.Empty
+            WorkingDirectory = selected.Root
         };
+    }
+
+    /// <summary>The configuration Run and Debug use for the current main class: the one saved for it (its JDK and
+    /// arguments), else the module's defaults.</summary>
+    private async Task<JvmLaunchConfiguration?> CurrentLaunchAsync()
+    {
+        if (CurrentLaunch() is not { } current || Session is not { } session)
+        {
+            return null;
+        }
+        IReadOnlyList<JvmLaunchConfiguration> saved = await session.Launches.ListAsync();
+        return saved.FirstOrDefault(item => item.MainClass == current.MainClass && item.Module == current.Module) ?? current;
     }
 
     private void DebugCurrent()
@@ -130,7 +142,7 @@ public sealed partial class EditorWindow
             DebugTool.Status = $"Save {Path.GetRelativePath(session.Root, modified)} before debugging.";
             return;
         }
-        UnawaitedWork.Observe(session.DebugAsync(configuration, Breakpoints.Snapshot()));
+        UnawaitedWork.Observe(DebugAsync(session, configuration));
     }
 
     private async void CloseSession(object? sender, WindowClosingEventArgs args)

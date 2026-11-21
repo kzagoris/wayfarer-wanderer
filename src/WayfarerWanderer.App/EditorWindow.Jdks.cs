@@ -92,7 +92,9 @@ public sealed partial class EditorWindow
     /// <summary>Shows the banner for the session's accepted model, or puts it away when nothing is missing.</summary>
     private void ShowMissingJdks()
     {
-        MissingJdkList = Session is { IsTrusted: true } session ? MissingJdks.Of(session.Snapshot) : [];
+        MissingJdkList = Session is { IsTrusted: true } session
+            ? [.. MissingJdks.Of(session.Snapshot), .. launchMissing is { } launch ? new[] { launch } : []]
+            : [];
         JdkBannerText.Text = MissingJdks.Say(MissingJdkList);
         JdkBanner.IsVisible = MissingJdkList.Count > 0;
     }
@@ -138,6 +140,13 @@ public sealed partial class EditorWindow
     private async Task UseJdkAsync(ProjectSession session, MissingJdk missing, Jdk chosen)
     {
         MissingJdks.Choose(session.Root, missing, chosen, JdkRegistry.Current, ProjectJdkChoices.Current);
+        if (missing.Requirement.Source == JdkRequirement.Launch)
+        {
+            // A run configuration's JDK: nothing the import reads changed.
+            launchMissing = null;
+            ShowMissingJdks();
+            return;
+        }
         await ImportAgainAsync(session);
     }
 

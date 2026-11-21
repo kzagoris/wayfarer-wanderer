@@ -3,7 +3,7 @@
 Draft for review, 2026-11-21. It compares IntelliJ IDEA's Project Structure, SDK table and JDK download with what
 Wayfarer has, and proposes a design to bring Wayfarer close to it.
 
-**Status:** steps 1 to 6 of §4 are built. Where the build settled something differently from the first draft, the
+**Status:** steps 1 to 7 of §4 are built; step 8 is for later. Where the build settled something differently from the first draft, the
 sections below now describe what was built.
 
 ## 1. How IntelliJ IDEA does it
@@ -332,6 +332,12 @@ One dialog, opened from File › Project Structure… and the missing-JDK banner
 
 ### 3.7 The JDK a launch runs on
 
+*Built in step 7* (`LaunchJdks.cs`, `EditorWindow.LaunchJdks.cs`). Run › Choose JDK for Run… saves a JDK name in the
+current main class's configuration under `.wayfarer/launches`. A configuration that names a JDK is launched directly
+on it once the build compiled the module, for Gradle and Maven too: the build tool's own `run` task would take the
+build's toolchain instead. An older configuration's `javaHome` path is still read, for that configuration only. The
+starter template no longer writes one.
+
 The initial spec asks each launch configuration to keep its own project JDK. Today `JvmLaunch` and `JvmBuild` take
 the module's runtime toolchain from the snapshot. Rules:
 
@@ -354,37 +360,43 @@ Each step stands alone and comes with tests, following the plan's rule.
    `required` on the wire and `JvmToolchain.Requirement`; the shared resolution cases; the missing-JDK banner with
    Choose… and retry; New Project writes the requirement and the registry name.
    *Left from this step:* the tooling-JVM setting as a registry name (§3.1), done with step 4.
-3. **Done.** Registry JDKs passed to Gradle (`installations.paths`, merged with the person's own value) and Maven (generated
-   `toolchains.xml`, merged with the install's), and the same to JDT LS (§3.3). Test: the per-module JDK fixtures
+3. **Done** (`e24e36e`). Registry JDKs passed to Gradle (`installations.paths`, merged with the person's own value)
+   and Maven (generated `toolchains.xml`, merged with the install's), and the same to JDT LS (§3.3). Test: the per-module JDK fixtures
    resolve with toolchains only in the registry, and a `gradle.properties` path is kept. The banner's "the build sees
    it once Wayfarer passes its JDKs" note is gone.
-4. **Done.** `JdkDownloader` against foojay, with a fake catalogue server in tests (checksum mismatch, Cancel, cut-off
+4. **Done** (`9af891c`). `JdkDownloader` against foojay, with a fake catalogue server in tests (checksum mismatch, Cancel, cut-off
    download, macOS layout, a zip without exec bits, an entry escaping staging, two concurrent requests); the
    Download JDK dialog; tooling-JVM recovery. The tooling-JVM setting is a registry name (left from step 2).
-5. **Done.** `IdeaEvaluator`: scopes, module dependencies, several modules, macros and `path.macros.xml`, global libraries,
-   repository-library resolution, Kotlin runtime library.
-6. **Done.** Project Structure dialog; library writer for IntelliJ projects; JDK list with rename, remove and missing homes
-   (§3.1); JDK sources roots.
-7. Launch configuration JDKs (§3.7).
+5. **Done** (`1a7a945`). `IdeaEvaluator`: scopes, module dependencies, several modules, macros and
+   `path.macros.xml`, global libraries, repository-library resolution, Kotlin runtime library.
+6. **Done** (`dbebf17`). Project Structure dialog; library writer for IntelliJ projects; JDK list with rename,
+   remove and missing homes (§3.1); JDK sources roots.
+7. **Done.** Launch configuration JDKs (§3.7).
 8. Later: "Add dependency" for Maven and Gradle build files.
 
 ## 5. Decisions for the owner
 
+Steps 3 to 7 were built with the proposed answer to each open question below, so the product works end to end. Each
+is still the owner's to change; where the build answered one, the item says how.
+
 - **Catalogue source:** foojay Disco API (recommended), Adoptium's API only, or JetBrains' feed once its terms are
-  cleared.
-- **Default vendor** for one-click downloads: Temurin is proposed.
-- **Download location:** `~/.jdks`, shared with IntelliJ (proposed), or a Wayfarer-only folder.
+  cleared. *Built: foojay.*
+- **Default vendor** for one-click downloads: Temurin is proposed. *Built: Temurin.*
+- **Download location:** `~/.jdks`, shared with IntelliJ (proposed), or a Wayfarer-only folder. *Built: `~/.jdks`,
+  changeable per download in the dialog.*
 - **Writing IntelliJ files:** Wayfarer edits `.idea` and `.iml` in place (proposed, which keeps both IDEs in step), or
-  keeps its own format for plain projects.
+  keeps its own format for plain projects. *Built: in place (`IdeaProjectWriter`).*
 - **Maven toolchains for JDT LS:** if m2e can't take a toolchains file through settings, may Wayfarer write to the
   person's `~/.m2/toolchains.xml` (with consent, keeping their entries), or do Maven toolchain modules stay
-  unresolved in the editor?
+  unresolved in the editor? *Built: neither is needed. m2e takes each module's JRE from its execution environment,
+  which the runtimes Wayfarer sends answer (§3.3). Wayfarer doesn't write `~/.m2`.*
 - **Choose… for an IntelliJ name that already exists:** ask and replace (proposed), or always register under a new
-  name and record a per-project choice instead.
+  name and record a per-project choice instead. *Not changed from step 2: the chosen JDK is kept under its own name
+  when the asked name is taken, without asking, and the name resolves by its release.*
 - **Deleting downloaded JDKs:** offer to delete the folder on remove (proposed, Wayfarer's downloads only), or never
-  delete files.
+  delete files. *Built: Remove… offers "Also delete its files" for a JDK Wayfarer downloaded under `~/.jdks`.*
 - **Signature checks:** verify vendor signatures in step 4, or ship with checksums and an allow-list of hosts first
-  (proposed).
+  (proposed). *Built: checksums and the host allow-list (`JdkDownloader.Hosts`).*
 
 ### Settled
 

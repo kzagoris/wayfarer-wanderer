@@ -44,7 +44,9 @@ public static class MissingJdks
             return string.Empty;
         }
         MissingJdk first = missing[0];
-        string who = first.Module is null ? "The project" : $"Module '{first.Module}'";
+        string who = first.Module is null ? "The project"
+            : first.Requirement.Source == JdkRequirement.Launch ? $"The run configuration '{first.Module}'"
+            : $"Module '{first.Module}'";
         string more = missing.Count > 1 ? $", and {missing.Count - 1} more" : string.Empty;
         return $"{who} needs {first.Requirement.Describe()}{more}. No installed JDK matches.";
     }
@@ -66,7 +68,7 @@ public static class MissingJdks
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(choices);
         Jdk kept;
-        if (missing.Requirement.Source == JdkRequirement.Idea && missing.Requirement.Name is { Length: > 0 } name)
+        if (missing.Requirement.Source is JdkRequirement.Idea or JdkRequirement.Launch && missing.Requirement.Name is { Length: > 0 } name)
         {
             try
             {

@@ -59,7 +59,8 @@ public sealed partial class EditorWindow : Window
         {
             Header = "Run",
             Items = { build, test, run, debug, toggle, MenuAction(EditorActions.Continue),
-                MenuAction(EditorActions.StepInto), MenuAction(EditorActions.StepOver), MenuAction(EditorActions.StepOut), stop }
+                MenuAction(EditorActions.StepInto), MenuAction(EditorActions.StepOver), MenuAction(EditorActions.StepOut), stop,
+                new Separator(), MenuAction(EditorActions.ChooseRunJdk) }
         };
         AddWelcome();
         MenuItem fileMenu = new() { Header = "File", Items = { newProject, MenuAction(EditorActions.OpenWorkspace), MenuAction(AppActions.CloneRepository), RecentMenu(),
@@ -295,6 +296,7 @@ public sealed partial class EditorWindow : Window
             UnawaitedWork.Observe(new NewProjectAction().RunAsync(this))));
         Actions.Add(new EditorAction(EditorActions.ProjectStructure, "Project Structure…", () => Session is not null, () =>
             UnawaitedWork.Observe(ShowProjectStructureAsync())));
+        AddLaunchJdkActions();
     }
 
     private MenuItem MenuAction(string id)
@@ -355,8 +357,8 @@ public sealed partial class EditorWindow : Window
     {
         // The program's output goes to Build, as a build's does.
         ToolDock.ShowBehind(ToolWindowIds.Build);
-        if (CurrentLaunch() is { } configuration)
-            UnawaitedWork.Observe(Session!.RunAsync(configuration));
+        if (CurrentLaunch() is not null)
+            UnawaitedWork.Observe(RunCurrentAsync());
     }
 
     private async Task TrustWorkspaceAsync()

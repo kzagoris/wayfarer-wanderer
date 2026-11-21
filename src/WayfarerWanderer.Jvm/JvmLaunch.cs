@@ -15,6 +15,13 @@ public sealed record JvmLaunchConfiguration
 
     public string WorkingDirectory { get; init; } = string.Empty;
 
+    /// <summary>The JDK this configuration runs on, by its name in the JDK table, never a path, so a shared
+    /// configuration travels as <c>project.json</c> does; empty for the module's runtime JDK. A name the table lacks is
+    /// met by a JDK of the release the name carries (<see cref="LaunchJdks"/>).</summary>
+    public string Jdk { get; init; } = string.Empty;
+
+    /// <summary>A JDK home an older configuration recorded; read for that configuration only. New ones name a
+    /// <see cref="Jdk"/>.</summary>
     public string JavaHome { get; init; } = string.Empty;
 
     public string Profile { get; init; } = string.Empty;
@@ -47,7 +54,9 @@ public sealed class DirectJvmLaunchAdapter : IJvmLaunchAdapter
             throw new InvalidDataException($"The main class '{configuration.MainClass}' is not in module '{module.Name}'.");
         }
 
-        string javaHome = FirstNotEmpty(configuration.JavaHome, module.RuntimeToolchain.Home, module.CompileToolchain.Home, module.ImportToolchain.Home);
+        string javaHome = configuration.Jdk.Length > 0
+            ? LaunchJdks.Home(module, configuration, JdkRegistry.Current)
+            : FirstNotEmpty(configuration.JavaHome, module.RuntimeToolchain.Home, module.CompileToolchain.Home, module.ImportToolchain.Home);
         if (javaHome.Length == 0)
         {
             throw new InvalidDataException("The launch configuration has no project JDK.");
@@ -226,7 +235,13 @@ public sealed class JvmLaunch
             }
             return await runner.RunAsync(new DirectJvmLaunchAdapter().Command(snapshot, configuration), output, cancellationToken).ConfigureAwait(false);
         }
-        ProcessStartInfo start = adapter is WrapperJvmLaunchAdapter && WrapperJvmLaunchAdapter.LaunchesDirectly(snapshot, configuration)
+        // A configuration that names its JDK is launched directly on it once the build compiled it: a build tool's own
+        // run task would take the build's toolchain instead.
+        if (configuration.Jdk.Length > 0 && snapshot.Module(configuration.Module) is { } named)
+        {
+            LaunchJdks.Home(named, configuration, JdkRegistry.Current);
+        }
+        ProcessStartInfo start = adapter is WrapperJvmLaunchAdapter && (configuration.Jdk.Length > 0 || WrapperJvmLaunchAdapter.LaunchesDirectly(snapshot, configuration))
             ? await DirectJvmLaunchAdapter.ResolvedCommandAsync(snapshot, configuration, cancellationToken).ConfigureAwait(false)
             : adapter.Command(snapshot, configuration);
         return await runner.RunAsync(start, output, cancellationToken).ConfigureAwait(false);

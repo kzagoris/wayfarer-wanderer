@@ -346,7 +346,7 @@ public class EditorWindowTests
     {
         var menu = window.GetVisualDescendants().OfType<Menu>().Single();
         var run = Assert.IsType<MenuItem>(menu.Items.Cast<MenuItem>().Single(item => item.Header?.ToString() == "Run"));
-        return Assert.IsType<MenuItem>(run.Items.Cast<MenuItem>().Single(item =>
+        return Assert.IsType<MenuItem>(run.Items.OfType<MenuItem>().Single(item =>
             item.Header?.ToString() == "Toggle Breakpoint"));
     }
 }
