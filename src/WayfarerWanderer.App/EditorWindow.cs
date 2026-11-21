@@ -148,7 +148,7 @@ public sealed partial class EditorWindow : Window
         AddExplorerActions();
         DockPanel.SetDock(TrustBanner, Dock.Top);
         DockPanel.SetDock(asking, Dock.Top);
-        frame = new DockPanel { Children = { menu, TrustBanner, asking, StatusLine(), ToolDock } };
+        frame = new DockPanel { Children = { menu, TrustBanner, MissingJdkBanner(), asking, StatusLine(), ToolDock } };
         Content = new Panel { Children = { frame } };
         KeyDown += (_, e) => e.Handled = FirstStart is null && Actions.TryExecute(keys.ActionFor(new Shortcut(Keystroke.From(e))));
         Opened += (_, _) => Editor.Focus();
@@ -187,10 +187,12 @@ public sealed partial class EditorWindow : Window
         {
             if (Session != opened) return;
             Explorer.Update(opened.Snapshot);
+            ShowMissingJdks();
             // The running language servers learn the new model; a failed import leaves them on the last good one.
             if (!opened.IsStale && opened.Snapshot is { } snapshot) ReloadLanguageModels(snapshot);
         };
         TrustBanner.IsVisible = !Session.IsTrusted;
+        ShowMissingJdks();
         if (Session.IsTrusted)
         {
             try { await Session.OpenAsync(cancellationToken); }
@@ -203,6 +205,7 @@ public sealed partial class EditorWindow : Window
         await git;
         if (request != workspaceRequest || closing) return;
         Explorer.Update(Session.Snapshot);
+        ShowMissingJdks();
         // A first start shows Build as the folder opens, unless a bottom window already is; after that the layout kept says
         // what is open.
         if (EditorApplication.State?.Layout.IsKept != true
@@ -355,5 +358,6 @@ public sealed partial class EditorWindow : Window
         await Session.OpenAsync();
         TrustBanner.IsVisible = false;
         Explorer.Update(Session.Snapshot);
+        ShowMissingJdks();
     }
 }

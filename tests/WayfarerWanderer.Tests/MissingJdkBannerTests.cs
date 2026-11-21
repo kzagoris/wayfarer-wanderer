@@ -1,0 +1,63 @@
+using Avalonia.Headless.XUnit;
+using Passenger.Core;
+using WayfarerWanderer.App;
+using WayfarerWanderer.Jvm;
+using Xunit;
+
+namespace WayfarerWanderer.Tests;
+
+/// <summary>The window's missing-JDK banner, after a real import: an IntelliJ module that names a JDK no JDK here meets
+/// shows it, with Download… waiting for JDK downloads, and Choose… with a JDK of the table imports again and puts it
+/// away.</summary>
+public class MissingJdkBannerTests
+{
+    [AvaloniaFact]
+    public async Task AMissingJdkShowsTheBannerAndChoosingOneImportsAgainAndPutsItAway()
+    {
+        // A name and a feature no JDK here has, so the test cannot pass by accident on a machine with every JDK.
+        string name = "wanted-" + Guid.NewGuid().ToString("N")[..8];
+        int absent = Math.Max(Environment.Version.Major, JdkRegistry.Current.All().Select(jdk => jdk.Feature).DefaultIfEmpty(0).Max()) + 40;
+        string root = WorkspaceImportTests.Copy("idea/course");
+        string iml = Path.Combine(root, "Course.iml");
+        File.WriteAllText(iml, File.ReadAllText(iml).Replace("<orderEntry type=\"inheritedJdk\" />",
+            $"<orderEntry type=\"jdk\" jdkName=\"{name}\" jdkType=\"JavaSDK\" />", StringComparison.Ordinal));
+        string misc = Path.Combine(root, ".idea", "misc.xml");
+        File.WriteAllText(misc, File.ReadAllText(misc).Replace("languageLevel=\"JDK_25\"", $"languageLevel=\"JDK_{absent}\"", StringComparison.Ordinal));
+        string jdk = Directory.CreateTempSubdirectory("wayfarer-chosen-jdk-").FullName;
+        Directory.CreateDirectory(Path.Combine(jdk, "bin"));
+        File.WriteAllText(Path.Combine(jdk, "bin", OperatingSystem.IsWindows() ? "java.exe" : "java"), string.Empty);
+        File.WriteAllText(Path.Combine(jdk, "release"), $"JAVA_VERSION=\"{absent}.0.1\"\nIMPLEMENTOR=\"Eclipse Adoptium\"\n");
+        WorkspaceTrust.Trust(root);
+        EditorWindow window = EditorApplication.CreateWindow(null);
+        window.Show();
+        try
+        {
+            await window.OpenWorkspaceAsync(root, TestContext.Current.CancellationToken);
+            Assert.True(window.JdkBanner.IsVisible);
+            Assert.Equal($"Module 'Course' needs JDK {absent} (any vendor). No installed JDK matches.", window.JdkBannerText.Text);
+            Assert.False(window.DownloadJdkButton.IsEnabled);
+            Assert.True(window.ChooseJdkButton.IsEnabled);
+
+            MissingJdk? asked = null;
+            window.PickJdk = missing =>
+            {
+                asked = missing;
+                return Task.FromResult<Jdk?>(new Jdk("picked", jdk, $"{absent}.0.1", absent, "Eclipse Adoptium", JdkOrigin.Detected));
+            };
+            await window.ChooseJdkAsync();
+
+            Assert.Equal(new JdkRequirement(name, absent, null, JdkRequirement.Idea), asked?.Requirement);
+            Assert.Equal(name, JdkRegistry.Current.Named(name)?.Name);
+            Assert.False(window.JdkBanner.IsVisible);
+            Assert.True(PathNames.Same(Path.GetFullPath(jdk), Assert.Single(window.Session!.Snapshot!.Modules).CompileToolchain.Home!));
+        }
+        finally
+        {
+            window.Close();
+            await ProjectHosts.ReleaseAsync(root);
+            JdkRegistry.Current.Remove(name);
+            WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root) ?? root);
+            Directory.Delete(jdk, recursive: true);
+        }
+    }
+}

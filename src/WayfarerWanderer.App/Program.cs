@@ -68,6 +68,7 @@ public partial class EditorApplication : Application
             IdeErrors.Install();
             State = StateStore.Open(StateStore.DefaultRoot);
             WayfarerWanderer.Jvm.JdkRegistry.Current = new WayfarerWanderer.Jvm.JdkRegistry(Path.Combine(State.Root, "jdks.json"));
+            WayfarerWanderer.Jvm.ProjectJdkChoices.Current = new WayfarerWanderer.Jvm.ProjectJdkChoices(Path.Combine(State.Root, "project-jdks.json"));
             State.Settings.PutInForce();
             EditorWindow.TrustKept(State);
             desktop.Exit += (_, _) => State.Release();
