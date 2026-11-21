@@ -30,7 +30,17 @@ public sealed record HostJvm(string Home, string? Version, int? Feature, string?
 
 public sealed record HostReady(int Protocol, HostJvm Java, long Pid);
 
-public sealed record HostImportParams(string Folder, long Generation, string? Jdk, IReadOnlyList<string> MavenProfiles, string? BuildTool);
+/// <summary>A JDK of the app's <see cref="JdkRegistry"/>, sent with each import so the host chooses among them rather
+/// than searching the disk itself.</summary>
+public sealed record HostJdk(string Name, string Home, string? Version, int? Feature, string? Vendor);
+
+public sealed record HostImportParams(
+    string Folder,
+    long Generation,
+    string? Jdk,
+    IReadOnlyList<string> MavenProfiles,
+    string? BuildTool,
+    IReadOnlyList<HostJdk> Jdks);
 
 public sealed record HostCancelParams(int Request);
 

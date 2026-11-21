@@ -1,6 +1,5 @@
 package wayfarer.host;
 
-import java.io.File;
 import java.io.IOException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -26,7 +25,7 @@ import org.xml.sax.SAXException;
 /**
  * Reads one IntelliJ {@code JAVA_MODULE} folder without a build tool: its {@code .iml} source folders and library order
  * entries, the project's {@code .idea/misc.xml} (output folder, language level, project JDK) and {@code .idea/libraries},
- * and the JDK it names from the newest JetBrains {@code jdk.table.xml}. Library jars that are not on disk are reported
+ * and the JDK it names, looked up by that name in the IDE's JDK table. Library jars that are not on disk are reported
  * as absent; IntelliJ's {@code out} folder is the output root.
  */
 final class IdeaEvaluator {
@@ -116,8 +115,13 @@ final class IdeaEvaluator {
             jdkName = project.getAttribute("project-jdk-name");
         }
         Integer level = languageLevel(project == null ? null : project.getAttribute("languageLevel"));
-        // A JDK recorded for the project in Wayfarer wins; otherwise the one IntelliJ names, then JAVA_HOME.
-        String home = ImportJvms.usable(params.jdk()) != null ? params.jdk() : IdeaJdks.home(jdkName, null, inputs);
+        // A JDK recorded for the project in Wayfarer wins; otherwise the one of that name in the IDE's table (which holds
+        // IntelliJ's JDK table under IntelliJ's names), then JAVA_HOME.
+        String home = ImportJvms.usable(params.jdk()) != null ? params.jdk() : ImportJvms.named(jdkName, params.jdks());
+        if (home == null) {
+            String javaHome = System.getenv("JAVA_HOME");
+            home = javaHome == null || javaHome.isBlank() ? null : Path.of(javaHome).toAbsolutePath().normalize().toString();
+        }
         Protocol.JvmEnvironment jvm = new Protocol.JvmEnvironment(home, level, jdkName);
 
         String id = name;
@@ -323,80 +327,6 @@ final class IdeaEvaluator {
             return builder.parse(file.toFile());
         } catch (ParserConfigurationException | SAXException | IOException failure) {
             throw new Problems.Problem(file + " is not an IntelliJ project file: " + failure.getMessage(), failure);
-        }
-    }
-
-    /** The JDK an IntelliJ project names, from the newest JetBrains jdk.table.xml, then JAVA_HOME. */
-    static final class IdeaJdks {
-        private IdeaJdks() {
-        }
-
-        static String home(String jdkName, Path configDirectory, List<Path> inputs) {
-            if (jdkName != null && !jdkName.isBlank()) {
-                for (Path table : tables(configDirectory)) {
-                    if (inputs != null) {
-                        inputs.add(table);
-                    }
-                    String home = readHome(table, jdkName);
-                    if (home != null && Files.isDirectory(Path.of(home))) {
-                        return home;
-                    }
-                }
-            }
-            String javaHome = System.getenv("JAVA_HOME");
-            return javaHome == null || javaHome.isBlank() ? null : Path.of(javaHome).toAbsolutePath().normalize().toString();
-        }
-
-        private static List<Path> tables(Path configDirectory) {
-            Path root = configDirectory != null ? configDirectory : defaultConfig();
-            List<Path> tables = new ArrayList<>();
-            if (!Files.isDirectory(root)) {
-                return tables;
-            }
-            try (Stream<Path> products = Files.list(root)) {
-                products.filter(Files::isDirectory)
-                        .sorted(Comparator.comparing((Path p) -> p.getFileName().toString()).reversed())
-                        .map(product -> product.resolve("options").resolve("jdk.table.xml"))
-                        .filter(Files::isRegularFile)
-                        .forEach(tables::add);
-            } catch (IOException unreadable) {
-                // No tables to read.
-            }
-            return tables;
-        }
-
-        private static Path defaultConfig() {
-            String home = System.getProperty("user.home");
-            if (MavenEvaluator.isWindows()) {
-                String appData = System.getenv("APPDATA");
-                return Path.of(appData != null ? appData : home + File.separator + "AppData" + File.separator + "Roaming", "JetBrains");
-            }
-            if (System.getProperty("os.name", "").toLowerCase().contains("mac")) {
-                return Path.of(home, "Library", "Application Support", "JetBrains");
-            }
-            return Path.of(home, ".config", "JetBrains");
-        }
-
-        private static String readHome(Path table, String jdkName) {
-            Document document;
-            try {
-                document = load(table);
-            } catch (Problems.Problem unreadable) {
-                return null;
-            }
-            NodeList jdks = document.getElementsByTagName("jdk");
-            for (int i = 0; i < jdks.getLength(); i++) {
-                Element jdk = (Element) jdks.item(i);
-                Element nameElement = child(jdk, "name");
-                if (nameElement == null || !jdkName.equals(nameElement.getAttribute("value"))) {
-                    continue;
-                }
-                Element homePath = child(jdk, "homePath");
-                if (homePath != null && !homePath.getAttribute("value").isBlank()) {
-                    return expand(homePath.getAttribute("value"), Path.of(""), Path.of("").toAbsolutePath());
-                }
-            }
-            return null;
         }
     }
 }

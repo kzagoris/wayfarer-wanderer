@@ -1,7 +1,5 @@
 package wayfarer.host;
 
-import java.io.IOException;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -66,57 +64,39 @@ final class ImportJvms {
         return jvm.version() == null ? null : jvm;
     }
 
-    /** The JDKs the workspace and environment name, the host's own, then those in the usual install folders. */
-    private static List<Protocol.Jvm> candidates(Protocol.ImportParams params) {
+    /**
+     * The JDKs the workspace and environment name, the host's own, then those the IDE's table holds. The host never
+     * searches the disk for JDKs: the IDE sends its table with each import.
+     */
+    static List<Protocol.Jvm> candidates(Protocol.ImportParams params) {
         List<Protocol.Jvm> found = new ArrayList<>();
         add(found, usable(params.jdk()));
         add(found, usable(System.getenv("JAVA_HOME")));
         add(found, usable(System.getProperty("java.home")));
-        String user = System.getProperty("user.home");
-        List<Path> parents = new ArrayList<>(List.of(Path.of(user, ".jdks"), Path.of(user, ".sdkman", "candidates", "java"),
-                Path.of(user, ".gradle", "jdks")));
-        if (MavenEvaluator.isWindows()) {
-            for (String programs : new String[] {System.getenv("ProgramFiles"), System.getenv("ProgramFiles(x86)")}) {
-                if (programs != null) {
-                    for (String vendor : List.of("Java", "Eclipse Adoptium", "Amazon Corretto", "Microsoft", "Zulu", "BellSoft", "Semeru")) {
-                        parents.add(Path.of(programs, vendor));
-                    }
-                }
-            }
-            String scoop = System.getenv("SCOOP");
-            Path apps = Path.of(scoop != null && !scoop.isBlank() ? scoop : Path.of(user, "scoop").toString(), "apps");
-            parents.addAll(children(apps));
-        } else if (System.getProperty("os.name", "").toLowerCase().contains("mac")) {
-            for (Path bundle : children(Path.of("/Library/Java/JavaVirtualMachines"))) {
-                add(found, usable(bundle.resolve("Contents").resolve("Home").toString()));
-            }
-        } else {
-            parents.addAll(List.of(Path.of("/usr/lib/jvm"), Path.of("/usr/java"), Path.of("/opt/java")));
-        }
-        for (Path parent : parents) {
-            for (Path child : children(parent)) {
-                add(found, usable(child.toString()));
+        if (params.jdks() != null) {
+            for (Protocol.Jdk jdk : params.jdks()) {
+                add(found, usable(jdk.home()));
             }
         }
         return found;
+    }
+
+    /** The home of the JDK the IDE's table holds under {@code name} (IntelliJ's names included), while it is usable. */
+    static String named(String name, List<Protocol.Jdk> jdks) {
+        if (name == null || name.isBlank() || jdks == null) {
+            return null;
+        }
+        for (Protocol.Jdk jdk : jdks) {
+            if (name.equalsIgnoreCase(jdk.name()) && usable(jdk.home()) != null) {
+                return usable(jdk.home()).home();
+            }
+        }
+        return null;
     }
 
     private static void add(List<Protocol.Jvm> found, Protocol.Jvm jvm) {
         if (jvm != null && found.stream().noneMatch(known -> known.home().equalsIgnoreCase(jvm.home()))) {
             found.add(jvm);
         }
-    }
-
-    private static List<Path> children(Path folder) {
-        List<Path> children = new ArrayList<>();
-        if (!Files.isDirectory(folder)) {
-            return children;
-        }
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(folder, Files::isDirectory)) {
-            stream.forEach(children::add);
-        } catch (IOException unreadable) {
-            // Not ours to read.
-        }
-        return children;
     }
 }

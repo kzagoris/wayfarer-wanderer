@@ -177,7 +177,8 @@ public sealed class ProjectHostTests
     [Fact]
     public void RequestsAreWrittenAsTheExamplesSay()
     {
-        HostRequest request = new(7, HostProtocol.Import, new HostImportParams("/work/layouts", 12, null, ["-slow"], null));
+        HostRequest request = new(7, HostProtocol.Import, new HostImportParams("/work/layouts", 12, null, ["-slow"], null,
+            [new HostJdk("temurin-24", "/jdks/temurin-24.0.2", "24.0.2", 24, "Eclipse Adoptium")]));
         JsonElement written = JsonSerializer.SerializeToElement(request, HostProtocol.Json);
         using JsonDocument expected = JsonDocument.Parse(File.ReadAllText(Example("request-import.json")));
         Assert.True(JsonElement.DeepEquals(expected.RootElement, written), written.GetRawText());

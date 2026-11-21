@@ -1,1 +1,1 @@
-{"id":7,"method":"import","params":{"folder":"/work/layouts","generation":12,"jdk":null,"mavenProfiles":["-slow"],"buildTool":null}}
+{"id":7,"method":"import","params":{"folder":"/work/layouts","generation":12,"jdk":null,"mavenProfiles":["-slow"],"buildTool":null,"jdks":[{"name":"temurin-24","home":"/jdks/temurin-24.0.2","version":"24.0.2","feature":24,"vendor":"Eclipse Adoptium"}]}}

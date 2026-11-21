@@ -31,6 +31,8 @@ class ProtocolExamplesTest {
         assertEquals("/work/layouts", params.folder());
         assertEquals(12, params.generation());
         assertEquals("-slow", params.mavenProfiles().get(0));
+        assertEquals("temurin-24", params.jdks().get(0).name());
+        assertEquals(24, params.jdks().get(0).feature());
         Protocol.Request cancel = Host.JSON.fromJson(Files.readString(EXAMPLES.resolve("request-cancel.json")), Protocol.Request.class);
         assertEquals(7, Host.read(cancel, Protocol.CancelParams.class).request());
     }

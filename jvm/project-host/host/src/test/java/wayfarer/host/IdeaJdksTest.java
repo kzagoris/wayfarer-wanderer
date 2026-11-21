@@ -2,23 +2,50 @@ package wayfarer.host;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-/** Ported from the app's IdeaJdkTableResolvesTheNamedHome: the IntelliJ JDK table names a home by its JDK name. */
+/**
+ * How the host picks JDKs: from the IDE's table sent with the import, by name for an IntelliJ module, and by feature for
+ * the Gradle daemon. IntelliJ's own jdk.table.xml is read by the app, which sends its JDKs under IntelliJ's names.
+ */
 class IdeaJdksTest {
     @Test
-    void theJdkTableResolvesTheNamedHome(@TempDir Path root) throws IOException {
-        Path jdk = Files.createDirectories(root.resolve("fake-jdk"));
-        Path options = Files.createDirectories(root.resolve("config").resolve("IntelliJIdeaTest").resolve("options"));
-        Files.writeString(options.resolve("jdk.table.xml"),
-                "<application><component name=\"ProjectJdkTable\"><jdk version=\"2\"><name value=\"openjdk-25\" /><homePath value=\""
-                        + jdk + "\" /></jdk></component></application>");
-        assertEquals(jdk.toAbsolutePath().normalize().toString(), IdeaEvaluator.IdeaJdks.home("openjdk-25", root.resolve("config"), null));
+    void anIntelliJJdkNameResolvesThroughTheSentTable(@TempDir Path root) throws IOException {
+        Path jdk = fakeJdk(root.resolve("fake-jdk"), "25.0.1");
+        List<Protocol.Jdk> table = List.of(
+                new Protocol.Jdk("corretto-17", root.resolve("gone").toString(), "17", 17, null),
+                new Protocol.Jdk("openjdk-25", jdk.toString(), "25.0.1", 25, null));
+        assertEquals(jdk.toAbsolutePath().normalize().toString(), ImportJvms.named("OpenJDK-25", table));
+        assertNull(ImportJvms.named("corretto-17", table), "a JDK whose home is gone is not taken");
+        assertNull(ImportJvms.named("zulu-11", table));
+        assertNull(ImportJvms.named("openjdk-25", null));
+    }
+
+    @Test
+    void theGradleDaemonCriteriaPickFromTheSentTable(@TempDir Path root) throws IOException {
+        int wanted = Runtime.version().feature() + 7;
+        Path jdk = fakeJdk(root.resolve("jdks").resolve("wanted"), wanted + ".0.1");
+        Path project = Files.createDirectories(root.resolve("project").resolve("gradle"));
+        Files.writeString(project.resolve("gradle-daemon-jvm.properties"), "toolchainVersion=" + wanted + System.lineSeparator());
+        Protocol.ImportParams without = new Protocol.ImportParams(project.getParent().toString(), 1, null, List.of(), null, List.of());
+        assertThrows(Problems.Problem.class, () -> ImportJvms.forGradle(project.getParent(), without));
+        Protocol.ImportParams with = new Protocol.ImportParams(project.getParent().toString(), 1, null, List.of(), null,
+                List.of(new Protocol.Jdk("temurin-" + wanted, jdk.toString(), wanted + ".0.1", wanted, "Eclipse Adoptium")));
+        assertEquals(jdk.toAbsolutePath().normalize().toString(), ImportJvms.forGradle(project.getParent(), with).home());
+    }
+
+    static Path fakeJdk(Path home, String version) throws IOException {
+        Path bin = Files.createDirectories(home.resolve("bin"));
+        Files.writeString(bin.resolve(MavenEvaluator.isWindows() ? "java.exe" : "java"), "");
+        Files.writeString(home.resolve("release"), "JAVA_VERSION=\"" + version + "\"" + System.lineSeparator());
+        return home;
     }
 
     @Test

@@ -67,6 +67,7 @@ public partial class EditorApplication : Application
             // Only the person's desktop app reads and writes the state folder; a headless run keeps the defaults.
             IdeErrors.Install();
             State = StateStore.Open(StateStore.DefaultRoot);
+            WayfarerWanderer.Jvm.JdkRegistry.Current = new WayfarerWanderer.Jvm.JdkRegistry(Path.Combine(State.Root, "jdks.json"));
             State.Settings.PutInForce();
             EditorWindow.TrustKept(State);
             desktop.Exit += (_, _) => State.Release();

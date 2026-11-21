@@ -38,9 +38,14 @@ public final class Protocol {
     /**
      * Import the workspace at {@code folder}. {@code jdk} is the JDK the workspace records for itself, if any,
      * {@code mavenProfiles} the profiles it asks for beyond Maven's own activation (a leading '-' turns one off), and
-     * {@code buildTool} an installation to use where the workspace has no wrapper.
+     * {@code buildTool} an installation to use where the workspace has no wrapper. {@code jdks} are the JDKs the IDE's
+     * table holds, by name: the host chooses among these and never searches the disk for JDKs itself.
      */
-    public record ImportParams(String folder, long generation, String jdk, List<String> mavenProfiles, String buildTool) {
+    public record ImportParams(String folder, long generation, String jdk, List<String> mavenProfiles, String buildTool, List<Jdk> jdks) {
+    }
+
+    /** A JDK of the IDE's table: the name projects refer to it by, its home, version string, feature release and vendor. */
+    public record Jdk(String name, String home, String version, Integer feature, String vendor) {
     }
 
     /** A partial answer to an import: one build target as soon as it is evaluated. */

@@ -17,7 +17,7 @@ public sealed class ToolingJvmMissingException(string message, IReadOnlyList<str
 
 /// <summary>
 /// Finds the tooling JVM: the one configured in Wayfarer's settings, else <c>JAVA_HOME</c>, else the <c>java</c> on
-/// <c>PATH</c>, each taken when it is new enough; else the newest new enough one in the usual install folders.
+/// <c>PATH</c>, each taken when it is new enough; else the newest new enough one in the <see cref="JdkRegistry"/>.
 /// </summary>
 public static partial class ToolingJvms
 {
@@ -29,7 +29,7 @@ public static partial class ToolingJvms
     public static ToolingJvm Find(int minimum = Minimum)
     {
         List<string> seen = [];
-        foreach (string home in Preferred())
+        foreach (string home in JdkScanner.Preferred())
         {
             if (At(home) is { } jvm)
             {
@@ -40,9 +40,7 @@ public static partial class ToolingJvms
                 }
             }
         }
-        ToolingJvm? newest = Installed()
-            .Select(At)
-            .OfType<ToolingJvm>()
+        ToolingJvm? newest = All()
             .Where(jvm => !seen.Any(said => said.StartsWith(jvm.Home + " ", StringComparison.Ordinal)))
             .Select(jvm => { seen.Add($"{jvm.Home} (Java {jvm.Feature})"); return jvm; })
             .Where(jvm => jvm.Feature >= minimum)
@@ -58,10 +56,10 @@ public static partial class ToolingJvms
             seen);
     }
 
-    /// <summary>Every JVM found where <see cref="Find"/> looks, newest first.</summary>
+    /// <summary>Every JVM in the <see cref="JdkRegistry"/>, newest first.</summary>
     public static IReadOnlyList<ToolingJvm> All() =>
-        [.. Preferred().Concat(Installed()).Select(At).OfType<ToolingJvm>()
-            .DistinctBy(jvm => jvm.Home, Passenger.Core.PathNames.Comparer)
+        [.. JdkRegistry.Current.All()
+            .Select(jdk => new ToolingJvm(jdk.Home, jdk.Feature, jdk.Version, jdk.Vendor))
             .OrderByDescending(jvm => jvm.Feature)];
 
     /// <summary>The JVM at a home, read from its <c>release</c> file; null where there is no java to run.</summary>
@@ -98,94 +96,6 @@ public static partial class ToolingJvms
         string rest = version.StartsWith("1.", StringComparison.Ordinal) ? version[2..] : version;
         Match digits = LeadingDigits().Match(rest);
         return digits.Success ? int.Parse(digits.Value, System.Globalization.CultureInfo.InvariantCulture) : 0;
-    }
-
-    private static IEnumerable<string> Preferred()
-    {
-        if (Configured is { Length: > 0 } configured)
-        {
-            yield return configured;
-        }
-        if (Environment.GetEnvironmentVariable("JAVA_HOME") is { Length: > 0 } javaHome)
-        {
-            yield return javaHome;
-        }
-        if (OnPath() is { } onPath)
-        {
-            yield return onPath;
-        }
-    }
-
-    private static string? OnPath()
-    {
-        string name = OperatingSystem.IsWindows() ? "java.exe" : "java";
-        foreach (string folder in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            string candidate = Path.Combine(folder.Trim('"'), name);
-            if (!File.Exists(candidate))
-            {
-                continue;
-            }
-            string resolved = new FileInfo(candidate).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? candidate;
-            return Path.GetDirectoryName(Path.GetDirectoryName(resolved));
-        }
-        return null;
-    }
-
-    /// <summary>JDK homes in the folders installers and version managers use.</summary>
-    private static IEnumerable<string> Installed()
-    {
-        string user = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        List<string> parents =
-        [
-            Path.Combine(user, ".jdks"),
-            Path.Combine(user, ".sdkman", "candidates", "java"),
-            Path.Combine(user, ".gradle", "jdks"),
-        ];
-        if (OperatingSystem.IsWindows())
-        {
-            foreach (string programs in new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) }.Where(p => p.Length > 0))
-            {
-                parents.AddRange(new[] { "Java", "Eclipse Adoptium", "Amazon Corretto", "Microsoft", "Zulu", "BellSoft", "Semeru" }.Select(vendor => Path.Combine(programs, vendor)));
-            }
-            string scoop = Environment.GetEnvironmentVariable("SCOOP") is { Length: > 0 } root ? root : Path.Combine(user, "scoop");
-            foreach (string app in Children(Path.Combine(scoop, "apps")))
-            {
-                parents.Add(app);
-            }
-        }
-        else if (OperatingSystem.IsMacOS())
-        {
-            foreach (string bundle in Children("/Library/Java/JavaVirtualMachines").Concat(Children(Path.Combine(user, "Library", "Java", "JavaVirtualMachines"))))
-            {
-                yield return Path.Combine(bundle, "Contents", "Home");
-            }
-        }
-        else
-        {
-            parents.Add("/usr/lib/jvm");
-            parents.Add("/usr/java");
-            parents.Add("/opt/java");
-        }
-        foreach (string parent in parents)
-        {
-            foreach (string child in Children(parent))
-            {
-                yield return child;
-            }
-        }
-    }
-
-    private static IEnumerable<string> Children(string folder)
-    {
-        try
-        {
-            return Directory.Exists(folder) ? Directory.GetDirectories(folder) : [];
-        }
-        catch (Exception unreadable) when (unreadable is IOException or UnauthorizedAccessException)
-        {
-            return [];
-        }
     }
 
     private static string? ReleaseValue(string release, string key)
