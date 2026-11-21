@@ -33,7 +33,7 @@ public static class ProjectJdk
         {
             if (jdk.GetValueKind() == JsonValueKind.String)
             {
-                return jdk.GetValue<string>() is { Length: > 0 } home && Directory.Exists(home) && Registered(home, registry ?? JdkRegistry.Current) is { } found
+                return SchemaOne(projectRoot, jdk, registry ?? JdkRegistry.Current) is { } found
                     ? new JdkRequirement(found.Name, found.Feature, JdkRegistry.Distribution(found.Vendor), JdkRequirement.Project)
                     : null;
             }
@@ -60,6 +60,10 @@ public static class ProjectJdk
         if ((choices ?? ProjectJdkChoices.Current).Chosen(projectRoot) is { } chosen && table.Named(chosen) is { } picked)
         {
             return picked;
+        }
+        if (Read(projectRoot)?["jdk"] is { } jdk && jdk.GetValueKind() == JsonValueKind.String)
+        {
+            return SchemaOne(projectRoot, jdk, table);
         }
         return Requirement(projectRoot, table) is { } requirement ? JdkResolution.Choose(requirement, table.All()) : null;
     }
@@ -118,19 +122,32 @@ public static class ProjectJdk
         ["vendor"] = requirement.Vendor,
     };
 
-    /// <summary>The JDK at <paramref name="home"/> as the table names it, kept there if it was only detected.</summary>
-    private static Jdk? Registered(string home, JdkRegistry registry)
+    /// <summary>The JDK a schema 1 file's path names, for this project only: as the table names it when the table holds
+    /// it, else under the name Wayfarer would suggest. Reading never adds it to the person's table, since the file comes
+    /// with the project. A path on another machine (UNC) or inside the project itself is not taken.</summary>
+    private static Jdk? SchemaOne(string projectRoot, JsonNode node, JdkRegistry registry)
     {
-        string full = Path.GetFullPath(home);
-        if (registry.All().FirstOrDefault(jdk => jdk.Origin != JdkOrigin.Detected && PathNames.Same(jdk.Home, full)) is { } known)
-        {
-            return known;
-        }
         try
         {
-            return registry.Add(full);
+            if (node.GetValue<string>() is not { Length: > 0 } home || !Path.IsPathFullyQualified(home))
+            {
+                return null;
+            }
+            string full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(home));
+            if (full.StartsWith(@"\\", StringComparison.Ordinal) || full.StartsWith("//", StringComparison.Ordinal) ||
+                PathNames.Within(full, Path.GetFullPath(projectRoot)) || !Directory.Exists(full))
+            {
+                return null;
+            }
+            if (registry.All().FirstOrDefault(jdk => PathNames.Same(jdk.Home, full)) is { } known)
+            {
+                return known;
+            }
+            return ToolingJvms.At(full) is { Version: { } version } jvm
+                ? new Jdk(JdkRegistry.SuggestName(jvm.Vendor, jvm.Feature), jvm.Home, version, jvm.Feature, jvm.Vendor, JdkOrigin.Detected)
+                : null;
         }
-        catch (Exception unusable) when (unusable is ArgumentException or IOException or UnauthorizedAccessException)
+        catch (Exception unusable) when (unusable is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException or InvalidOperationException)
         {
             return null;
         }

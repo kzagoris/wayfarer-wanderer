@@ -77,17 +77,36 @@ public sealed class ProjectJdkTests : IDisposable
     }
 
     [Fact]
-    public void ASchemaOnePathStillReadsRegisteringItsHomeWithoutRewritingTheFile()
+    public void ASchemaOnePathStillReadsForThisProjectWithoutTouchingTheTableOrTheFile()
     {
-        JdkRegistry registry = Isolated();
+        string state = Directory.CreateDirectory(Path.Combine(root, "outside")).FullName;
+        string project = Directory.CreateDirectory(Path.Combine(root, "project")).FullName;
+        JdkRegistry registry = Isolated(Path.Combine(state, "jdks.json"));
         string home = FakeJdk("old", "17.0.12", "Amazon.com Inc.");
         string text = JsonSerializer.Serialize(new { schema = 1, jdk = home });
-        Write(text);
+        Write(text, project);
 
-        Assert.Equal(new JdkRequirement("corretto-17", 17, "corretto", JdkRequirement.Project), ProjectJdk.Requirement(root, registry));
-        Assert.Equal(Path.GetFullPath(home), ProjectJdk.Resolve(root, registry)?.Home);
-        Assert.Equal("corretto-17", Assert.Single(registry.All()).Name);
-        Assert.Equal(text, File.ReadAllText(ProjectJdk.FileOf(root)));
+        Assert.Equal(new JdkRequirement("corretto-17", 17, "corretto", JdkRequirement.Project), ProjectJdk.Requirement(project, registry));
+        Assert.Equal(Path.GetFullPath(home), ProjectJdk.Resolve(project, registry)?.Home);
+        Assert.Empty(registry.All());
+        Assert.False(File.Exists(registry.File), "reading a project's file never writes the person's JDK table");
+        Assert.Equal(text, File.ReadAllText(ProjectJdk.FileOf(project)));
+
+        registry.Add(home, "work");
+        Assert.Equal(new JdkRequirement("work", 17, "corretto", JdkRequirement.Project), ProjectJdk.Requirement(project, registry));
+    }
+
+    [Fact]
+    public void ASchemaOnePathInsideTheProjectIsNotTaken()
+    {
+        string project = Directory.CreateDirectory(Path.Combine(root, "project")).FullName;
+        string planted = Path.Combine(project, "jdks", "planted");
+        Directory.CreateDirectory(Path.Combine(planted, "bin"));
+        File.WriteAllText(Path.Combine(planted, "bin", OperatingSystem.IsWindows() ? "java.exe" : "java"), string.Empty);
+        File.WriteAllText(Path.Combine(planted, "release"), "JAVA_VERSION=\"21.0.1\"\n");
+        Write(JsonSerializer.Serialize(new { schema = 1, jdk = planted }), project);
+        Assert.Null(ProjectJdk.Requirement(project, Isolated()));
+        Assert.Null(ProjectJdk.Resolve(project, Isolated()));
     }
 
     [Fact]
@@ -124,13 +143,14 @@ public sealed class ProjectJdkTests : IDisposable
     internal static JsonObject Golden() =>
         JsonNode.Parse(File.ReadAllText(ProjectHostTests.Example("jdk-resolution.json")))!.AsObject();
 
-    private void Write(string text)
+    private void Write(string text, string? project = null)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(ProjectJdk.FileOf(root))!);
-        File.WriteAllText(ProjectJdk.FileOf(root), text);
+        string file = ProjectJdk.FileOf(project ?? root);
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, text);
     }
 
-    private JdkRegistry Isolated() => new(null, () => [], Path.Combine(root, "no-intellij"));
+    private JdkRegistry Isolated(string? file = null) => new(file, () => [], Path.Combine(root, "no-intellij"));
 
     private string FakeJdk(string name, string version, string vendor)
     {
