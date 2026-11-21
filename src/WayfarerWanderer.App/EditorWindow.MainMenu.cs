@@ -98,6 +98,7 @@ public sealed partial class EditorWindow
         }
         ++workspaceRequest;
         ResetSemanticSession();
+        ForgetPlaces();
         Forget(session.Root);
         Session = null;
         await session.DisposeAsync();

@@ -21,9 +21,11 @@ public sealed partial class EditorWindow
     public void OpenSource(string path)
     {
         path = Path.GetFullPath(path);
-        if (!documents.TryGetValue(path, out var source))
+        bool opened = !documents.TryGetValue(path, out var source);
+        if (opened)
         {
             FileText file = FileText.Load(path) ?? throw new InvalidDataException($"Cannot open binary file '{path}'.");
+            Leaving(path);
             documents[path] = source = new OpenDocument(path, new TextDocument(file.Text), file);
             ShowDocument(path, source.Document);
             source.Decorations = Decorated(source.Document);
@@ -31,13 +33,15 @@ public sealed partial class EditorWindow
         }
         else
         {
-            ShowDocument(path, source.Document);
+            Leaving(path);
+            ShowDocument(path, source!.Document);
         }
         Editor.IsVisible = true;
         SourcePath = path;
         ShowBlameOf(source);
         Breakpoints.Select(path);
         Title = $"Wayfarer Wanderer - {path}";
+        Visited(path, source.Document, opened);
     }
 
     private void SaveSource()

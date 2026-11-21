@@ -50,16 +50,6 @@ public sealed partial class EditorWindow : Window
         AddVcs();
         AddWelcome();
         AddMainMenuActions();
-        var query = new TextBox { PlaceholderText = "Find Action" };
-        var matches = new ListBox { DisplayMemberBinding = new Avalonia.Data.Binding(nameof(EditorAction.Title)) };
-        var palette = new StackPanel
-        {
-            Width = 340,
-            VerticalAlignment = VerticalAlignment.Top,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            IsVisible = false,
-            Children = { query, matches }
-        };
         Button trust = new() { Content = "Trust Workspace" };
         trust.Click += (_, _) => UnawaitedWork.Observe(TrustWorkspaceAsync());
         TrustBanner = new Border
@@ -77,53 +67,16 @@ public sealed partial class EditorWindow : Window
                 }
             }
         };
-        void Refresh()
-        {
-            matches.ItemsSource = Actions.Find(query.Text ?? "").Where(a => a.Available()).ToArray();
-            matches.SelectedIndex = matches.ItemCount > 0 ? 0 : -1;
-        }
-        void ClosePalette()
-        {
-            palette.IsVisible = false;
-            Editor.Focus();
-        }
-        void RunSelected()
-        {
-            if (matches.SelectedItem is EditorAction selected && selected.TryExecute())
-                ClosePalette();
-        }
-        openFindAction = () =>
-        {
-            palette.IsVisible = true;
-            query.Text = "";
-            Refresh();
-            query.Focus();
-        };
-        query.TextChanged += (_, _) => Refresh();
-        matches.DoubleTapped += (_, _) => RunSelected();
-        AddHandler(KeyDownEvent, (_, e) =>
-        {
-            // The first start's page takes every key while it shows.
-            if (FirstStart is not null)
-                return;
-            if (palette.IsVisible && e.Key == Key.Enter)
-                RunSelected();
-            else if (palette.IsVisible && e.Key == Key.Escape)
-                ClosePalette();
-            else if (palette.IsVisible && e.Key is Key.Down or Key.Up && matches.ItemCount > 0)
-                matches.SelectedIndex = Math.Clamp(matches.SelectedIndex + (e.Key == Key.Down ? 1 : -1), 0, matches.ItemCount - 1);
-            else
-                return;
-            e.Handled = true;
-        }, RoutingStrategies.Tunnel);
-        AddToolWindows(new Grid { Children = { Editor, Welcome, palette } });
+        AddNavigation();
+        AddFindInFiles();
+        AddToolWindows(new Grid { Children = { Editor, Welcome } });
         AddExplorerActions();
         DockPanel.SetDock(TrustBanner, Dock.Top);
         DockPanel.SetDock(asking, Dock.Top);
         Control bar = Toolbar();
         DockPanel.SetDock(bar, Dock.Top);
         frame = new DockPanel { Children = { bar, TrustBanner, MissingJdkBanner(), asking, StatusLine(), ToolDock } };
-        Content = new Panel { Children = { frame } };
+        Content = new Panel { Children = { frame, searchLayer } };
         // An editing action's keys (the clipboard's, Undo) are the editor's or a text box's where one has them; elsewhere
         // they run nothing, as a menu item for them would run them in the editor.
         KeyDown += (_, e) => e.Handled = FirstStart is null && keys.ActionFor(new Shortcut(Keystroke.From(e))) is { } pressed
@@ -133,11 +86,8 @@ public sealed partial class EditorWindow : Window
         Closed += (_, _) => ForgetAllLanguages();
     }
 
-    /// <summary>Opens Find Action over the editor, its query given the keys.</summary>
-    private Action openFindAction = () => { };
-
-    /// <summary>Find Action: every action by name, the ones that can run now, run by Enter.</summary>
-    public void OpenFindAction() => openFindAction();
+    /// <summary>Find Action: every action by name, the ones that cannot run where the keys were greyed, run by Enter.</summary>
+    public void OpenFindAction() => ShowFindAction();
 
     public async Task OpenWorkspaceAsync(string root, CancellationToken cancellationToken = default)
     {
@@ -149,6 +99,7 @@ public sealed partial class EditorWindow : Window
         }
         if (request != workspaceRequest || closing) return;
         Breakpoints.Reset();
+        ForgetPlaces();
         if (SourcePath != null)
         {
             SourcePath = null;

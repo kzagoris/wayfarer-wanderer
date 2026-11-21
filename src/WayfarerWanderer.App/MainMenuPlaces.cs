@@ -5,7 +5,7 @@ namespace WayfarerWanderer.App;
 
 /// <summary>Where the main menu lists each of Wayfarer's actions, in one table: the registry gives an action its places
 /// as it is added (<see cref="ActionRegistry.Places"/>), so the menus, Settings' Keymap page ("Main Menu | File") and
-/// any later action read them alike. The menus follow IntelliJ IDEA's: File, Edit, View, Code, Refactor, Build, Run,
+/// any later action read them alike. The menus follow IntelliJ IDEA's: File, Edit, View, Navigate, Code, Refactor, Build, Run,
 /// Tests, Tools, Git and Help, each a run of groups split by separators.</summary>
 public static class MainMenuPlaces
 {
@@ -29,8 +29,21 @@ public static class MainMenuPlaces
         [EditorKeys.Copy] = [new("Edit", 1, 1)],
         [EditorKeys.Paste] = [new("Edit", 1, 2)],
         [EditorKeys.SelectAll] = [new("Edit", 2, 0)],
+        [AppActions.FindInFiles] = [new("Edit", 3, 0)],
+        [AppActions.ReplaceInFiles] = [new("Edit", 3, 1)],
 
         // View: Tool Windows (0, 0) lists the dock's windows as it opens.
+
+        // Navigate: Back and Forward, the Go to popups, the recent files.
+        [AppActions.Back] = [new("Navigate", 0, 0)],
+        [AppActions.Forward] = [new("Navigate", 0, 1)],
+        [AppActions.GoToEverything] = [new("Navigate", 1, 0)],
+        [AppActions.GoToFile] = [new("Navigate", 1, 1)],
+        [AppActions.GoToSymbol] = [new("Navigate", 1, 2)],
+        [AppActions.GoToLine] = [new("Navigate", 1, 3)],
+        [AppActions.FileStructure] = [new("Navigate", 1, 4)],
+        [AppActions.RecentFiles] = [new("Navigate", 2, 0)],
+        [AppActions.RecentChangedFiles] = [new("Navigate", 2, 1)],
 
         // Code and Refactor: the language servers'.
         [EditorWindow.CompleteAction] = [new("Code", 0, 0)],

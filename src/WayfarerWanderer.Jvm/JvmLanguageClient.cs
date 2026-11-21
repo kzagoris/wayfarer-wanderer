@@ -73,7 +73,8 @@ public sealed class JvmLanguageClient : IAsyncDisposable
                 workspaceFolders = client.folders,
                 initializationOptions,
                 capabilities = new { workspace = new { configuration = true, workspaceFolders = true, workspaceEdit = new { documentChanges = true } },
-                    textDocument = new { completion = new { completionItem = new { snippetSupport = false } } } }
+                    textDocument = new { completion = new { completionItem = new { snippetSupport = false } },
+                        documentSymbol = new { hierarchicalDocumentSymbolSupport = true } } }
             }, cancel).ConfigureAwait(false);
             await client.NotifyAsync("initialized", new { }, cancel).ConfigureAwait(false);
             return client;

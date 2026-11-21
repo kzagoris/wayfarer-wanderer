@@ -174,7 +174,7 @@ public class WelcomeTests
         try
         {
             // The menus the actions name a place in, in IntelliJ IDEA's order; none empty.
-            Assert.Equal(["File", "Edit", "View", "Code", "Refactor", "Build", "Run", "Tests", "Tools", "Git", "Help"],
+            Assert.Equal(["File", "Edit", "View", "Navigate", "Code", "Refactor", "Build", "Run", "Tests", "Tools", "Git", "Help"],
                 window.MainMenuEntries.Select(m => m.Title));
             // File: projects (Recent Projects among them, then Close Project), the file, settings, Exit; split by separators.
             Assert.Equal([EditorActions.NewProject, EditorActions.OpenWorkspace, EditorActions.OpenSource, AppActions.CloneRepository,
