@@ -88,21 +88,7 @@ public sealed partial class EditorWindow
     /// own, and a shell no longer set given back to the system's.</summary>
     private static void FollowTerminal(TerminalPanel panel, AppSettings next, AppSettings? before)
     {
-        panel.View.FontSize = next.TerminalFontSize;
-        if (before is null || before.TerminalFontFamily != next.TerminalFontFamily)
-        {
-            if (CodeFonts.Named(next.TerminalFontFamily) is { } own)
-            {
-                panel.View.FontFamily = own;
-            }
-            else
-            {
-                panel.View.ClearValue(Passenger.Terminal.TerminalView.FontFamilyProperty);
-            }
-        }
-        panel.View.CursorBlinking = next.TerminalCursorBlinking;
-        panel.View.CursorStyle = next.TerminalCursorStyle;
-        panel.View.CopyOnSelection = next.TerminalCopyOnSelection;
+        FollowTerminalView(panel.View, next, before);
         if (next.TerminalShell is { } shell && CommandLine.Split(shell) is { Count: > 0 } parts)
         {
             panel.Shell = (parts[0], [.. parts.Skip(1)]);
@@ -113,9 +99,32 @@ public sealed partial class EditorWindow
         }
     }
 
+    /// <summary>A terminal view's look as the settings in force give it: the Terminal window's, and the Run and Debug
+    /// consoles'.</summary>
+    private static void FollowTerminalView(Passenger.Terminal.TerminalView view, AppSettings next, AppSettings? before)
+    {
+        view.FontSize = next.TerminalFontSize;
+        if (before is null || before.TerminalFontFamily != next.TerminalFontFamily)
+        {
+            if (CodeFonts.Named(next.TerminalFontFamily) is { } own)
+            {
+                view.FontFamily = own;
+            }
+            else
+            {
+                view.ClearValue(Passenger.Terminal.TerminalView.FontFamilyProperty);
+            }
+        }
+        view.CursorBlinking = next.TerminalCursorBlinking;
+        view.CursorStyle = next.TerminalCursorStyle;
+        view.CopyOnSelection = next.TerminalCopyOnSelection;
+    }
+
     /// <summary>The terminal follows a change of the settings, once it is built.</summary>
     private void TerminalSettingsChanged(SettingsChange change)
     {
+        FollowTerminalView(RunTool.Console.View, change.After, change.Before);
+        FollowTerminalView(DebugTool.Console.View, change.After, change.Before);
         if (terminal is { } panel)
         {
             FollowTerminal(panel, change.After, change.Before);

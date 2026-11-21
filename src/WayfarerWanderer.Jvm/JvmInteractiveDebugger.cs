@@ -5,27 +5,85 @@ using Passenger.Dap;
 
 namespace WayfarerWanderer.Jvm;
 
-public sealed record JvmDebugFrame(string Name, string? Path, int Line);
+/// <summary>A stack frame: <see cref="Name"/> is <c>Type.method</c>; <see cref="Id"/> asks for its variables while the
+/// target stays suspended.</summary>
+public sealed record JvmDebugFrame(string Name, string? Path, int Line)
+{
+    public int Id { get; init; }
 
-public sealed record JvmDebugPause(IReadOnlyList<JvmDebugFrame> Frames, IReadOnlyList<string> Locals);
+    public string Method { get; init; } = string.Empty;
 
-/// <summary>One launch. Owns both the target process and the JDK's JDI adapter process.</summary>
+    public string Type { get; init; } = string.Empty;
+
+    /// <summary>As IntelliJ lists a frame: <c>main:7, Main (com.example)</c>.</summary>
+    public string Display
+    {
+        get
+        {
+            string type = Type.Length > 0 ? Type : Name.Contains('.') ? Name[..Name.LastIndexOf('.')] : Name;
+            string method = Method.Length > 0 ? Method : Name[(Name.LastIndexOf('.') + 1)..];
+            int dot = type.LastIndexOf('.');
+            string simple = type[(dot + 1)..];
+            string place = Line > 0 ? $"{method}:{Line}, {simple}" : $"{method}, {simple}";
+            return dot > 0 ? $"{place} ({type[..dot]})" : place;
+        }
+    }
+}
+
+public sealed record JvmDebugThread(long Id, string Name, string Group, string Status, bool Suspended)
+{
+    /// <summary>As IntelliJ names a thread: <c>"main"@1 in group "main": RUNNING</c>.</summary>
+    public string Display => Group.Length > 0 ? $"\"{Name}\"@{Id} in group \"{Group}\": {Status}" : $"\"{Name}\"@{Id}: {Status}";
+}
+
+/// <summary>A variable, field, element or evaluated value; <see cref="Reference"/> is not 0 when it has children.</summary>
+public sealed record JvmDebugVariable(string Name, string Value, string Type, int Reference);
+
+public sealed record JvmDebugPause(IReadOnlyList<JvmDebugFrame> Frames, IReadOnlyList<string> Locals)
+{
+    public long ThreadId { get; init; }
+
+    public string Reason { get; init; } = string.Empty;
+
+    public IReadOnlyList<JvmDebugThread> Threads { get; init; } = [];
+
+    /// <summary>The top frame's variables, <see cref="Locals"/> as rows.</summary>
+    public IReadOnlyList<JvmDebugVariable> Variables { get; init; } = [];
+}
+
+/// <summary>One launch. Owns the target program, where its host runs it, and the JDK's JDI adapter process.</summary>
 public sealed class JvmInteractiveDebugger : IAsyncDisposable
 {
     private readonly SemaphoreSlim lifecycle = new(1);
     private readonly CancellationTokenSource stopping = new();
-    private Process? target;
+    private readonly IJvmProgramHost host;
+    private IJvmProgram? target;
     private Process? adapter;
     private DapConnection? connection;
     private long thread;
     private int ended;
     private int started;
-    private Task targetOutput = Task.CompletedTask;
     private Task adapterErrors = Task.CompletedTask;
+
+    /// <param name="host">Where the target runs; its output goes to <see cref="Output"/> through pipes when none is given.</param>
+    public JvmInteractiveDebugger(IJvmProgramHost? host = null)
+    {
+        this.host = host ?? new PipedProgramHost(line => Output?.Invoke(line));
+    }
 
     public event Action<JvmDebugPause>? Paused;
     public event Action<string>? Output;
     public event Action? Ended;
+
+    /// <summary>The target's exit code, once it has ended on its own.</summary>
+    public int? ExitCode { get; private set; }
+
+    /// <summary>The thread steps and Continue act on: the one that stopped, or the one chosen since.</summary>
+    public long CurrentThread
+    {
+        get => Interlocked.Read(ref thread);
+        set => Interlocked.Exchange(ref thread, value);
+    }
 
     public async Task StartAsync(WorkspaceSnapshot snapshot, JvmLaunchConfiguration configuration,
         IReadOnlyDictionary<string, int[]> breakpoints, CancellationToken cancellationToken = default)
@@ -40,7 +98,8 @@ public sealed class JvmInteractiveDebugger : IAsyncDisposable
         {
             JvmModule module = snapshot.Module(configuration.Module)
                 ?? throw new InvalidDataException($"Unknown module '{configuration.Module}'.");
-            ProcessStartInfo launch = await DirectJvmLaunchAdapter.ResolvedCommandAsync(snapshot, configuration, cancel).ConfigureAwait(false);
+            ProcessStartInfo launch = await DirectJvmLaunchAdapter.ResolvedCommandAsync(snapshot, configuration, cancel,
+                output: line => Output?.Invoke(line.Line)).ConfigureAwait(false);
 
             // The adapter listens and the target connects out to it, so the target never exposes a
             // JDWP port. The adapter accepts one connection and then stops listening.
@@ -55,18 +114,15 @@ public sealed class JvmInteractiveDebugger : IAsyncDisposable
             adapterErrors = ReadAdapterErrorsAsync(adapter.StandardError);
             var dap = new DapConnection(adapter.StandardOutput.BaseStream, adapter.StandardInput.BaseStream, line => Output?.Invoke(line));
             connection = dap;
-            dap.OnEvent<JsonElement>("stopped", body => _ = InspectAsync(dap, body.GetProperty("threadId").GetInt64()));
+            dap.OnEvent<JsonElement>("stopped", body => _ = InspectAsync(dap, body));
             dap.Start();
             await dap.RequestAsync("initialize", new { adapterID = "wayfarer-jdi", linesStartAt1 = true, pathFormat = "path" }, cancel).ConfigureAwait(false);
             var listening = await dap.RequestAsync<JsonElement>("listen", new { }, cancel).ConfigureAwait(false);
             int port = listening.GetProperty("port").GetInt32();
 
             launch.ArgumentList.Insert(0, $"-agentlib:jdwp=transport=dt_socket,server=n,suspend=y,address=127.0.0.1:{port}");
-            launch.RedirectStandardOutput = launch.RedirectStandardError = true;
-            target = await ChildProcesses.StartAsync(launch).ConfigureAwait(false);
-            ChildProcesses.HoldFamily(target);
-            targetOutput = ChildProcesses.Hear(target, line => Output?.Invoke(line), line => Output?.Invoke(line));
-            Task exited = target.WaitForExitAsync();
+            target = await host.StartAsync(launch, cancel).ConfigureAwait(false);
+            Task exited = target.Exited;
 
             string[] roots = [.. module.SourceRoots.Concat(snapshot.Modules.SelectMany(m => m.SourceRoots))
                 .Select(r => r.Path).Distinct(PathNames.Comparer)];
@@ -74,13 +130,13 @@ public sealed class JvmInteractiveDebugger : IAsyncDisposable
             if (await Task.WhenAny(attach, exited).WaitAsync(TimeSpan.FromSeconds(45), cancel).ConfigureAwait(false) == exited)
             {
                 _ = attach.ContinueWith(t => t.Exception, TaskContinuationOptions.OnlyOnFaulted);
-                throw new InvalidOperationException($"Java exited with code {target.ExitCode} before the debugger attached.");
+                throw new InvalidOperationException($"Java exited with code {target.Exited.Result} before the debugger attached.");
             }
             await attach.ConfigureAwait(false);
             foreach (var (path, lines) in breakpoints)
                 await SetBreakpointsAsync(dap, path, lines, cancel).ConfigureAwait(false);
             await dap.RequestAsync("configurationDone", new { }, cancel).ConfigureAwait(false);
-            _ = ObserveEndAsync(exited, dap.Completion);
+            _ = ObserveEndAsync(target.Exited, dap.Completion);
         }
         catch
         {
@@ -102,41 +158,80 @@ public sealed class JvmInteractiveDebugger : IAsyncDisposable
     public Task StepOverAsync() => ResumeAsync("next");
     public Task StepOutAsync() => ResumeAsync("stepOut");
 
+    /// <summary>Suspends every thread; <see cref="Paused"/> follows with the main thread's stack.</summary>
+    public Task PauseAsync() => Active().RequestAsync("pause", new { }, stopping.Token);
+
     private Task ResumeAsync(string command) =>
-        Active().RequestAsync(command, new { threadId = Interlocked.Read(ref thread) }, stopping.Token);
+        Active().RequestAsync(command, new { threadId = CurrentThread }, stopping.Token);
+
+    public async Task<IReadOnlyList<JvmDebugThread>> ThreadsAsync()
+    {
+        var body = await Active().RequestAsync<JsonElement>("threads", new { }, stopping.Token).ConfigureAwait(false);
+        return [.. body.GetProperty("threads").EnumerateArray().Select(item => new JvmDebugThread(
+            item.GetProperty("id").GetInt64(), item.GetProperty("name").GetString() ?? "",
+            item.TryGetProperty("group", out var group) ? group.GetString() ?? "" : "",
+            item.TryGetProperty("status", out var status) ? status.GetString() ?? "" : "",
+            item.TryGetProperty("suspended", out var suspended) && suspended.GetBoolean()))];
+    }
+
+    /// <summary>A suspended thread's frames, top first; none for one that runs.</summary>
+    public async Task<IReadOnlyList<JvmDebugFrame>> FramesAsync(long threadId)
+    {
+        var stack = await Active().RequestAsync<JsonElement>("stackTrace", new { threadId }, stopping.Token).ConfigureAwait(false);
+        return [.. stack.GetProperty("stackFrames").EnumerateArray().Select(item => new JvmDebugFrame(
+            item.GetProperty("name").GetString()!,
+            item.TryGetProperty("source", out var source) ? source.GetProperty("path").GetString() : null,
+            item.GetProperty("line").GetInt32())
+        {
+            Id = item.GetProperty("id").GetInt32(),
+            Method = item.TryGetProperty("method", out var method) ? method.GetString() ?? "" : "",
+            Type = item.TryGetProperty("type", out var type) ? type.GetString() ?? "" : "",
+        })];
+    }
+
+    /// <summary>A frame's variables (by its <see cref="JvmDebugFrame.Id"/>), or an object's or array's children.</summary>
+    public async Task<IReadOnlyList<JvmDebugVariable>> VariablesAsync(int reference)
+    {
+        var body = await Active().RequestAsync<JsonElement>("variables", new { variablesReference = reference }, stopping.Token).ConfigureAwait(false);
+        return [.. body.GetProperty("variables").EnumerateArray().Select(value => new JvmDebugVariable(
+            value.GetProperty("name").GetString() ?? "", value.GetProperty("value").GetString() ?? "",
+            value.TryGetProperty("type", out var type) ? type.GetString() ?? "" : "",
+            value.TryGetProperty("variablesReference", out var children) ? children.GetInt32() : 0))];
+    }
+
+    /// <summary>An expression's value in a frame; a <see cref="DapException"/> says why it has none.</summary>
+    public async Task<JvmDebugVariable> EvaluateAsync(string expression, int frameId)
+    {
+        var body = await Active().RequestAsync<JsonElement>("evaluate", new { expression, frameId, context = "watch" }, stopping.Token).ConfigureAwait(false);
+        return new JvmDebugVariable(expression, body.GetProperty("result").GetString() ?? "",
+            body.TryGetProperty("type", out var type) ? type.GetString() ?? "" : "",
+            body.TryGetProperty("variablesReference", out var children) ? children.GetInt32() : 0);
+    }
 
     private DapConnection Active() => connection ?? throw new InvalidOperationException("The debugger is not connected.");
 
-    private async Task InspectAsync(DapConnection dap, long id)
+    private async Task InspectAsync(DapConnection dap, JsonElement stopped)
     {
         try
         {
             CancellationToken cancel = stopping.Token;
-            Interlocked.Exchange(ref thread, id);
-            var stack = await dap.RequestAsync<JsonElement>("stackTrace", new { threadId = id }, cancel).ConfigureAwait(false);
-            List<JvmDebugFrame> frames = [];
-            List<string> locals = [];
-            int? top = null;
-            foreach (var item in stack.GetProperty("stackFrames").EnumerateArray())
+            long id = stopped.GetProperty("threadId").GetInt64();
+            CurrentThread = id;
+            IReadOnlyList<JvmDebugThread> threads = await ThreadsAsync().ConfigureAwait(false);
+            IReadOnlyList<JvmDebugFrame> frames = id == 0 ? [] : await FramesAsync(id).ConfigureAwait(false);
+            IReadOnlyList<JvmDebugVariable> variables = frames.Count == 0 ? [] : await VariablesAsync(frames[0].Id).ConfigureAwait(false);
+            if (!cancel.IsCancellationRequested)
             {
-                top ??= item.GetProperty("id").GetInt32();
-                string? path = item.TryGetProperty("source", out var source) ? source.GetProperty("path").GetString() : null;
-                frames.Add(new(item.GetProperty("name").GetString()!, path, item.GetProperty("line").GetInt32()));
-            }
-            if (top is int frameId)
-            {
-                var scopes = await dap.RequestAsync<JsonElement>("scopes", new { frameId }, cancel).ConfigureAwait(false);
-                foreach (var scope in scopes.GetProperty("scopes").EnumerateArray())
+                Paused?.Invoke(new(frames, [.. variables.Select(v => $"{v.Name} = {v.Value}")])
                 {
-                    int reference = scope.GetProperty("variablesReference").GetInt32();
-                    var values = await dap.RequestAsync<JsonElement>("variables", new { variablesReference = reference }, cancel).ConfigureAwait(false);
-                    foreach (var value in values.GetProperty("variables").EnumerateArray())
-                        locals.Add($"{value.GetProperty("name").GetString()} = {value.GetProperty("value").GetString()}");
-                }
+                    ThreadId = id,
+                    Reason = stopped.TryGetProperty("reason", out var reason) ? reason.GetString() ?? "" : "",
+                    Threads = threads,
+                    Variables = variables,
+                });
             }
-            if (!cancel.IsCancellationRequested) Paused?.Invoke(new(frames, locals));
         }
-        catch (Exception ex) when (ex is DapException or OperationCanceledException or IOException)
+        catch (Exception ex) when (ex is DapException or OperationCanceledException or IOException or InvalidOperationException)
         {
             if (!stopping.IsCancellationRequested) Output?.Invoke(ex.Message);
         }
@@ -147,9 +242,10 @@ public sealed class JvmInteractiveDebugger : IAsyncDisposable
         while (await errors.ReadLineAsync().ConfigureAwait(false) is { } line) Output?.Invoke(line);
     }
 
-    private async Task ObserveEndAsync(Task targetExit, Task adapterExit)
+    private async Task ObserveEndAsync(Task<int> targetExit, Task adapterExit)
     {
-        await Task.WhenAny(targetExit, adapterExit).ConfigureAwait(false);
+        if (await Task.WhenAny(targetExit, adapterExit).ConfigureAwait(false) == targetExit)
+            ExitCode = targetExit.Result;
         await StopAsync().ConfigureAwait(false);
     }
 
@@ -164,18 +260,22 @@ public sealed class JvmInteractiveDebugger : IAsyncDisposable
 
     private async Task CleanupAsync()
     {
-        foreach (var process in new[] { target, adapter })
+        if (target is { } program)
         {
-            if (process == null) continue;
+            program.Stop();
+            await program.DisposeAsync().ConfigureAwait(false);
+        }
+        if (adapter is { } process)
+        {
             ChildProcesses.Kill(process);
             await process.WaitForExitAsync().ConfigureAwait(false);
         }
-        await Task.WhenAll(targetOutput, adapterErrors).ConfigureAwait(false);
+        await adapterErrors.ConfigureAwait(false);
         if (connection != null) await connection.DisposeAsync().ConfigureAwait(false);
         connection = null;
-        target?.Dispose();
         adapter?.Dispose();
-        target = adapter = null;
+        target = null;
+        adapter = null;
     }
 
     public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);

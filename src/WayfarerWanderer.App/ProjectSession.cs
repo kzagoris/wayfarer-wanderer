@@ -16,9 +16,11 @@ public sealed partial class ProjectSession : IAsyncDisposable
     private readonly JvmLaunch launch = new();
     private readonly LaunchConfigurationStore launches;
 
-    public ProjectSession(string root, BuildToolWindow buildWindow, TestToolWindow testWindow, DebugToolWindow debugWindow)
+    public ProjectSession(string root, BuildToolWindow buildWindow, TestToolWindow testWindow, DebugToolWindow debugWindow,
+        RunToolWindow? runWindow = null)
     {
         Root = Path.GetFullPath(root);
+        RunWindow = runWindow;
         BuildWindow = buildWindow;
         TestWindow = testWindow;
         DebugWindow = debugWindow;
@@ -82,6 +84,9 @@ public sealed partial class ProjectSession : IAsyncDisposable
     public TestToolWindow TestWindow { get; }
 
     public DebugToolWindow DebugWindow { get; }
+
+    /// <summary>Where Run starts the program, in a console that takes its input; without one its output goes to Build.</summary>
+    public RunToolWindow? RunWindow { get; }
 
     public ILaunchConfigurationStore Launches => launches;
 
@@ -162,11 +167,27 @@ public sealed partial class ProjectSession : IAsyncDisposable
         try
         {
             BuildWindow.Reset();
-            return await launch.RunAsync(
+            if (RunWindow is null)
+            {
+                return await launch.RunAsync(
+                    snapshot,
+                    configuration,
+                    output => OnUi(() => BuildWindow.Append(output.Line)),
+                    running.Token);
+            }
+            JvmPreparedLaunch prepared = await launch.PrepareAsync(
                 snapshot,
                 configuration,
                 output => OnUi(() => BuildWindow.Append(output.Line)),
                 running.Token);
+            if (prepared.Start is not { } start)
+            {
+                return prepared.Failed!;
+            }
+            System.Diagnostics.Stopwatch time = System.Diagnostics.Stopwatch.StartNew();
+            await using IJvmProgram program = await RunWindow.Console.StartAsync(start, running.Token);
+            int exitCode = await program.Exited.WaitAsync(running.Token);
+            return new ProcessResult(exitCode, [], time.Elapsed);
         }
         finally
         {

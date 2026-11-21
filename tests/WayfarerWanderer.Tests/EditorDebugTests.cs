@@ -6,6 +6,7 @@ using Avalonia.Input.Raw;
 using Passenger.Core;
 using Passenger.Text;
 using WayfarerWanderer.App;
+using WayfarerWanderer.Jvm;
 
 namespace WayfarerWanderer.Tests;
 
@@ -44,6 +45,89 @@ public sealed class EditorDebugTests
         }
     }
 
+    [AvaloniaFact]
+    public async Task DebugAndRunAnIntelliJModuleInTheWindowWithConsoleInput()
+    {
+        CancellationToken cancel = TestContext.Current.CancellationToken;
+        await using JvmConsoleDebugTests.Module module = await JvmConsoleDebugTests.Module.CreateAsync(cancel);
+        var window = EditorApplication.CreateWindow(null);
+        try
+        {
+            window.Show();
+            await window.OpenWorkspaceAsync(module.Snapshot.Root, cancel);
+            ProjectSession session = window.Session!;
+            await session.Launches.SaveAsync(module.Launch("ask") with { Name = "App" }, cancel);
+            window.OpenSource(module.Source);
+            window.Editor.GoTo(new TextPosition(11, 0));
+            Assert.True(window.Actions.TryExecute(EditorActions.ToggleBreakpoint));
+
+            Assert.True(window.Actions.TryExecute(EditorActions.Debug));
+            await Until(() => session.IsPaused, "the breakpoint");
+            Assert.Equal("main:12, App (com.example.console)", window.DebugTool.Frames[0]);
+            Assert.Contains("answer = 42", window.DebugTool.Variables);
+            Assert.Equal(11, window.Breakpoints.ExecutionLine);
+            Assert.Contains(window.DebugTool.Threads, thread => thread.Name == "main");
+            Assert.True(window.Actions[EditorActions.Pause].Available() is false);
+
+            VariableNode primes = Assert.Single(window.DebugTool.VariableNodes, node => node.Name == "primes");
+            primes.IsExpanded = true;
+            await Until(() => primes.Children.Select(child => child.ToString()).SequenceEqual(["[0] = 2", "[1] = 3", "[2] = 5"]), "the array's elements");
+            await window.DebugTool.EvaluateAsync("primes[1]");
+            Assert.Equal("primes[1] = 3", window.DebugTool.Variables[0]);
+            window.DebugTool.AddWatch("app.greeting");
+            await Until(() => window.DebugTool.Variables.Contains("app.greeting = \"Hello\""), "the watch");
+            Render("debug-paused");
+
+            Assert.True(window.Actions.TryExecute(EditorActions.StepOver));
+            await Until(() => session.IsPaused, "the step");
+            Assert.Equal(12, window.Breakpoints.ExecutionLine);
+            await Until(() => window.DebugTool.Variables.Contains("app.greeting = \"Hello\""), "the watch after the step");
+
+            Assert.True(window.Actions.TryExecute(EditorActions.Continue));
+            await Until(() => window.DebugTool.Console.Text.Contains("Name?", StringComparison.Ordinal), "the program to ask");
+            Assert.Equal(-1, window.Breakpoints.ExecutionLine);
+            window.DebugTool.Console.View.Session!.Write("Ada\r");
+            await Until(() => !session.IsRunning, "the debugged program to end");
+            Assert.Contains("Typed Ada", window.DebugTool.Console.Text);
+            Assert.Equal("Process finished with exit code 0", window.DebugTool.Status);
+
+            Assert.True(window.Actions.TryExecute(EditorActions.Run));
+            await Until(() => window.RunTool.Console.Text.Contains("Name?", StringComparison.Ordinal), "the run to ask");
+            window.RunTool.Console.View.Session!.Write("Bob\r");
+            await Until(() => !session.IsRunning, "the run to end");
+            Assert.Contains("Typed Bob", window.RunTool.Console.Text);
+            Render("run-console");
+            Assert.Contains("Process finished with exit code 0", window.RunTool.Console.Text);
+            Assert.True(window.Actions[EditorActions.Rerun].Available());
+        }
+        finally
+        {
+            if (window.Session != null) await window.Session.CancelAsync();
+            window.Close();
+        }
+
+        // The window as it shows then, for a look at the Debug and Run windows.
+        void Render(string name)
+        {
+            window.Width = 1400;
+            window.Height = 900;
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            using var frame = window.CaptureRenderedFrame();
+            string folder = Environment.GetEnvironmentVariable("WAYFARER_TEST_OUTPUT") ??
+                Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../test-results"));
+            Directory.CreateDirectory(folder);
+            frame?.Save(Path.Combine(folder, $"{name}.png"), Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
+        }
+
+        async Task Until(Func<bool> condition, string what)
+        {
+            Stopwatch timeout = Stopwatch.StartNew();
+            while (!condition() && timeout.Elapsed < TimeSpan.FromMinutes(2))
+                await Task.Delay(30, cancel);
+            Assert.True(condition(), $"Waiting for {what}: {window.DebugTool.Status}\n{string.Join("\n", window.BuildTool.Output)}\n{window.DebugTool.Console.Text}\n{window.RunTool.Console.Text}");
+        }
+    }
+
     [AvaloniaFact(SkipUnless = nameof(RunGradle), Skip = "Set WAYFARER_DEBUG_ACCEPTANCE=1 to run the Gradle wrapper and debug JVM.")]
     public async Task DebugGradleMainAndStepFromKotlinIntoJava()
     {
@@ -72,7 +156,7 @@ public sealed class EditorDebugTests
             Assert.True(window.Breakpoints.IsMarked(3));
             Assert.True(window.Actions.TryExecute(EditorActions.Debug));
             await Until(() => window.Session!.IsPaused);
-            Assert.Contains(window.DebugTool.Frames, line => line.Contains("Main.kt:4", StringComparison.Ordinal));
+            Assert.Contains(window.DebugTool.Frames, line => line.StartsWith("main:4, MainKt", StringComparison.Ordinal));
             Assert.True(window.Actions.TryExecute(EditorActions.StepInto));
             await Until(() => window.Session!.IsPaused);
             Assert.Equal("Greeting.java", Path.GetFileName(window.SourcePath));
@@ -83,7 +167,7 @@ public sealed class EditorDebugTests
             Assert.Equal(main, window.SourcePath);
             Assert.True(window.Actions.TryExecute(EditorActions.Continue));
             await Until(() => !window.Session!.IsRunning);
-            Assert.Contains(window.BuildTool.Output, line => line.Contains("Hello, Wayfarer"));
+            Assert.Contains("Hello, Wayfarer", window.DebugTool.Console.Text);
             window.OpenSource(main);
             Assert.True(window.Actions.TryExecute(EditorActions.Debug));
             await Until(() => window.Session!.IsPaused);

@@ -157,13 +157,16 @@ public sealed partial class EditorWindow : Window
             ShowBlameOf(null);
         }
         DebugTool.Reset();
-        Session = new ProjectSession(root, BuildTool, TestsTool, DebugTool);
+        RunTool.Console.Reset();
+        DebugTool.Console.Reset();
+        lastLaunchDebugs = null;
+        Session = new ProjectSession(root, BuildTool, TestsTool, DebugTool, RunTool);
         Remember(root);
         ShowWelcomeWhenEmpty();
         Explorer.Load(root, Session.Snapshot);
         // Git reads the folder while it is imported; the folder is open once both are done.
         Task git = OpenVcsAsync(root);
-        Session.PausedAt += OpenFrame;
+        FollowDebugSession(Session);
         ProjectSession opened = Session;
         // A build file changed and the folder was imported again: the tree shows the new model, or the kept one stale.
         opened.SnapshotChanged += () =>
@@ -231,6 +234,7 @@ public sealed partial class EditorWindow : Window
         ToolDock.Add(new ToolWindow(ToolWindowIds.Build, "Build", IconKeys.Build, BuildTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowBuild, ActionTitle = "Build Tool Window" });
         ToolDock.Add(new ToolWindow(ToolWindowIds.Tests, "Tests", IconKeys.Tests, TestsTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowTests, ActionTitle = "Tests Tool Window" });
         ToolDock.Add(new ToolWindow(ToolWindowIds.Debug, "Debug", IconKeys.Debug, DebugTool, ToolAnchor.BottomLeft) { Action = AppActions.ShowDebug, ActionTitle = "Debug Tool Window" });
+        AddRunAndDebugTools();
         AddTerminal();
         AddVcsToolWindows();
         if (EditorApplication.State is { } state)
@@ -275,6 +279,7 @@ public sealed partial class EditorWindow : Window
         Actions.Add(new EditorAction(EditorActions.Stop, "Stop", () => Session?.IsRunning == true, () =>
             UnawaitedWork.Observe(Session!.CancelAsync())));
         AddDebugAndFileActions();
+        AddRunAndDebugActions();
         Actions.Add(new EditorAction(EditorActions.NewProject, "New Project…", () => true, () =>
             UnawaitedWork.Observe(new NewProjectAction().RunAsync(this))));
         Actions.Add(new EditorAction(EditorActions.ProjectStructure, "Project Structure…", () => Session is not null, () =>
@@ -306,10 +311,13 @@ public sealed partial class EditorWindow : Window
 
     private void RunCurrent()
     {
-        // The program's output goes to Build, as a build's does.
+        // The build's output goes to Build; the program's to the Run window's console, shown as it starts.
         ToolDock.ShowBehind(ToolWindowIds.Build);
         if (CurrentLaunch() is not null)
+        {
+            lastLaunchDebugs = false;
             UnawaitedWork.Observe(RunCurrentAsync());
+        }
     }
 
     private async Task TrustWorkspaceAsync()

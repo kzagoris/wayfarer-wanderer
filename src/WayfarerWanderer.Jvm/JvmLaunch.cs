@@ -219,6 +219,23 @@ public sealed class JvmLaunch
         Action<ProcessOutput>? output = null,
         CancellationToken cancellationToken = default)
     {
+        JvmPreparedLaunch prepared = await PrepareAsync(snapshot, configuration, output, cancellationToken).ConfigureAwait(false);
+        if (prepared.Start is not { } start)
+        {
+            return prepared.Failed!;
+        }
+        return await runner.RunAsync(start, output, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>What Run starts, once what it needs is compiled: the program's command, or the failed build's result.
+    /// An IntelliJ module, a configuration that names its JDK and a Maven reactor module are compiled with the build
+    /// here and launched directly; any other runs through the build tool's own run task.</summary>
+    public async Task<JvmPreparedLaunch> PrepareAsync(
+        WorkspaceSnapshot snapshot,
+        JvmLaunchConfiguration configuration,
+        Action<ProcessOutput>? output = null,
+        CancellationToken cancellationToken = default)
+    {
         WorkspaceTrust.Check(snapshot.Root);
         if (snapshot.BuildSystem == JvmBuildSystem.Idea)
         {
@@ -231,9 +248,9 @@ public sealed class JvmLaunch
                 cancellationToken).ConfigureAwait(false);
             if (compiled.ExitCode != 0)
             {
-                return compiled;
+                return new JvmPreparedLaunch(null, compiled);
             }
-            return await runner.RunAsync(new DirectJvmLaunchAdapter().Command(snapshot, configuration), output, cancellationToken).ConfigureAwait(false);
+            return new JvmPreparedLaunch(new DirectJvmLaunchAdapter().Command(snapshot, configuration), null);
         }
         // A configuration that names its JDK is launched directly on it once the build compiled it: a build tool's own
         // run task would take the build's toolchain instead.
@@ -242,8 +259,11 @@ public sealed class JvmLaunch
             LaunchJdks.Home(named, configuration, JdkRegistry.Current);
         }
         ProcessStartInfo start = adapter is WrapperJvmLaunchAdapter && (configuration.Jdk.Length > 0 || WrapperJvmLaunchAdapter.LaunchesDirectly(snapshot, configuration))
-            ? await DirectJvmLaunchAdapter.ResolvedCommandAsync(snapshot, configuration, cancellationToken).ConfigureAwait(false)
+            ? await DirectJvmLaunchAdapter.ResolvedCommandAsync(snapshot, configuration, cancellationToken, output: output).ConfigureAwait(false)
             : adapter.Command(snapshot, configuration);
-        return await runner.RunAsync(start, output, cancellationToken).ConfigureAwait(false);
+        return new JvmPreparedLaunch(start, null);
     }
 }
+
+/// <summary>A program ready to start (<see cref="Start"/>), or the build that failed before it (<see cref="Failed"/>).</summary>
+public sealed record JvmPreparedLaunch(ProcessStartInfo? Start, ProcessResult? Failed);

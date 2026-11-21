@@ -11,7 +11,14 @@ public sealed partial class ProjectSession
     private readonly Dictionary<string, int[]> pendingBreakpoints = new(PathNames.Comparer);
 
     public bool IsPaused { get; private set; }
+
+    /// <summary>Whether a debug session runs now (paused or not), as against a build, test or run.</summary>
+    public bool IsDebugging => debugger is not null;
+
     public event Action<JvmDebugFrame>? PausedAt;
+
+    /// <summary>Raised on the window's thread as the target runs on after a stop, or the session ends.</summary>
+    public event Action? Resumed;
 
     public Task DebugAsync(JvmLaunchConfiguration configuration, IReadOnlyDictionary<string, int[]> breakpoints)
     {
@@ -24,8 +31,9 @@ public sealed partial class ProjectSession
     {
         CancellationTokenSource running = BeginOperation(default);
         TaskCompletionSource ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        var active = new JvmInteractiveDebugger();
+        var active = new JvmInteractiveDebugger(DebugWindow.Console);
         debugger = active;
+        DebugWindow.Attach(active);
         void IfCurrent(Action update) => OnUi(() =>
         {
             if (debugger == active && !running.IsCancellationRequested) update();
@@ -35,14 +43,9 @@ public sealed partial class ProjectSession
         active.Paused += pause => IfCurrent(() =>
         {
             IsPaused = true;
-            DebugWindow.Reset();
-            DebugWindow.Status = "Paused";
-            foreach (var frame in pause.Frames)
-                DebugWindow.Frames.Add(frame.Line > 0 ? $"{frame.Name} ({Path.GetFileName(frame.Path)}:{frame.Line})" : frame.Name);
-            foreach (string local in pause.Locals) DebugWindow.Variables.Add(local);
-            if (pause.Frames.FirstOrDefault() is { } top) PausedAt?.Invoke(top);
+            DebugWindow.ShowPause(pause);
+            if (pause.Frames.FirstOrDefault(frame => frame.Path is not null) is { } top) PausedAt?.Invoke(top);
         });
-        DebugWindow.Reset();
         DebugWindow.Status = "Starting debugger…";
         BuildWindow.Reset();
         string status = "Debugger finished";
@@ -76,9 +79,11 @@ public sealed partial class ProjectSession
             try { await active.DisposeAsync(); }
             finally
             {
-                DebugWindow.Reset();
+                DebugWindow.Detach(active);
+                if (active.ExitCode is int code && status == "Debugger finished") status = $"Process finished with exit code {code}";
                 DebugWindow.Status = status;
                 EndOperation(running);
+                OnUi(() => Resumed?.Invoke());
             }
         }
     }
@@ -99,13 +104,21 @@ public sealed partial class ProjectSession
     {
         if (!IsPaused || debugger is not { } active) return;
         IsPaused = false;
-        DebugWindow.Reset();
-        DebugWindow.Status = "Running";
+        DebugWindow.ShowRunning();
+        Resumed?.Invoke();
         try { await command(active); }
         catch (Exception error) when (active == debugger)
         {
             IsPaused = true;
             DebugWindow.Status = error.Message;
         }
+    }
+
+    /// <summary>Pause: suspends the target's threads; the stop shows as a breakpoint's does.</summary>
+    internal async Task PauseAsync()
+    {
+        if (IsPaused || !ready || debugger is not { } active) return;
+        try { await active.PauseAsync(); }
+        catch (Exception error) when (active == debugger) { DebugWindow.Status = error.Message; }
     }
 }

@@ -23,7 +23,7 @@ public class ToolDockTests
         window.Show();
         try
         {
-            Assert.Equal([ToolWindowIds.Explorer, ToolWindowIds.Build, ToolWindowIds.Tests, ToolWindowIds.Debug, ToolWindowIds.Terminal,
+            Assert.Equal([ToolWindowIds.Explorer, ToolWindowIds.Build, ToolWindowIds.Tests, ToolWindowIds.Debug, ToolWindowIds.Run, ToolWindowIds.Terminal,
                 ToolWindowIds.Commit, ToolWindowIds.Git], window.ToolDock.Windows.Select(w => w.Id));
             Assert.False(window.ToolDock.IsShown(ToolWindowIds.Build));
             Click(window, StripeButton(window, ToolWindowIds.Build));

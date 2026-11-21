@@ -42,7 +42,7 @@ public sealed class JvmProcessOwnershipTests
             var before = await JvmsAsync(jps, cancel);
             var config = new JvmLaunchConfiguration { Module = "service", MainClass = "example.Service", Arguments = ["--server.port=0"] };
             Task debugging = session.DebugAsync(config, new Dictionary<string, int[]>());
-            int port = await Until(() => BoundPort(window.BuildTool.Output), () => session.IsRunning, "the service to bind its port");
+            int port = await Until(() => BoundPort(window.DebugTool.Console.Text.Split('\n')), () => session.IsRunning, "the service to bind its port");
             using var http = new HttpClient();
             string endpoint = $"http://127.0.0.1:{port}/hello?name=Wayfarer";
             Assert.Equal("Hello, Wayfarer", await http.GetStringAsync(endpoint, cancel));

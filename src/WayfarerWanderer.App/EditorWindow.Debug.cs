@@ -142,6 +142,8 @@ public sealed partial class EditorWindow
             DebugTool.Status = $"Save {Path.GetRelativePath(session.Root, modified)} before debugging.";
             return;
         }
+        lastLaunchDebugs = true;
+        DebugTool.Console.Reset();
         UnawaitedWork.Observe(DebugAsync(session, configuration));
     }
 

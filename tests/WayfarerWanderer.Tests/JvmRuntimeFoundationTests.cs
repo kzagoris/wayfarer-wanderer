@@ -270,7 +270,7 @@ public sealed class JvmRuntimeFoundationTests
             string javac = OperatingSystem.IsWindows() ? "javac.exe" : "javac";
             Assert.Equal(Path.Combine(ready.Modules[0].CompileToolchain.Home!, "bin", javac), compile.FileName);
             Assert.Equal(
-                ["--release", "25", "-d", output, Path.Combine(sources, "Helper.java"), Path.Combine(sources, "Main.java")],
+                ["--release", "25", "-g", "-d", output, Path.Combine(sources, "Helper.java"), Path.Combine(sources, "Main.java")],
                 compile.ArgumentList);
             string json = System.Text.Json.JsonSerializer.Serialize(IdeaLanguageSettings.Runtimes(ready));
             Assert.Contains("JavaSE-25", json, StringComparison.Ordinal);

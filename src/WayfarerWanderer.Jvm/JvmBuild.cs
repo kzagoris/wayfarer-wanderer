@@ -155,6 +155,8 @@ public sealed class IdeaJvmBuildAdapter : IJvmBuildAdapter
             arguments.Add("--release");
             arguments.Add(level.ToString(CultureInfo.InvariantCulture));
         }
+        // Line numbers, source names and local variables, so the debugger shows a frame's variables as IntelliJ's build does.
+        arguments.Add("-g");
         arguments.Add("-d");
         arguments.Add(output);
         if (module.Classpath.Compile.Count > 0)

@@ -30,6 +30,8 @@ public sealed class EditorActions
     public const string StepInto = AppActions.StepInto;
     public const string StepOver = AppActions.StepOver;
     public const string StepOut = AppActions.StepOut;
+    public const string Pause = AppActions.Pause;
+    public const string Rerun = AppActions.Rerun;
     public const string OpenWorkspace = AppActions.OpenFolder;
     public const string OpenSource = AppActions.Open;
     public const string SaveSource = AppActions.Save;
