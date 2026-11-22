@@ -152,9 +152,7 @@ public sealed class JdkDownloadDialog : IdeWindow
             package = found;
             string size = found.Size > 0 ? $", {found.Size / (1024 * 1024)} MB" : string.Empty;
             string licence = found.FreeInProduction ? "Free for production use." : "Check the vendor's licence before using it in production.";
-            details.Text = $"{found.FileName} ({found.JavaVersion}{size}). {licence}\n"
-                + "The download is checked against the catalogue's SHA-256 and taken only from the vendor's own hosts. "
-                + "The checksum shows the archive arrived whole; it does not prove who published it.";
+            details.Text = $"{found.FileName} ({found.JavaVersion}{size}). {licence}";
             download.IsEnabled = true;
         }
         catch (JdkDownloadFailed unreachable) when (ask == asked)
