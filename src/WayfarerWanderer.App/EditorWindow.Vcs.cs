@@ -44,19 +44,13 @@ public sealed partial class EditorWindow
         set => statusText.Text = value;
     }
 
-    /// <summary>The status line along the window's foot: what was said last, and the branch, which opens the branches.</summary>
+    /// <summary>The status line along the window's foot (<see cref="StatusBar"/>): what was said last, the branch, which
+    /// opens the branches, and the shown file's widgets.</summary>
     private Control StatusLine()
     {
         branchButton.Click += (_, _) => ShowAllBranches();
-        DockPanel.SetDock(branchButton, Dock.Right);
         statusText.Classes.Add(StyleClasses.Status);
-        Border line = new()
-        {
-            Classes = { StyleClasses.StatusBar },
-            Child = new DockPanel { Children = { branchButton, statusText } },
-        };
-        DockPanel.SetDock(line, Dock.Bottom);
-        return line;
+        return StatusBar();
     }
 
     /// <summary>The Commit window at the left and the Git window at the bottom, each built as it is first shown.</summary>

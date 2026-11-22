@@ -11,7 +11,18 @@ public sealed partial class EditorWindow
 {
     private readonly Dictionary<string, OpenDocument> documents = new(PathNames.Comparer);
     private bool closing;
-    public string? SourcePath { get; private set; }
+    /// <summary>The file the editor shows, or null; the status bar follows it.</summary>
+    public string? SourcePath
+    {
+        get => sourcePath;
+        private set
+        {
+            sourcePath = value;
+            FileShown();
+        }
+    }
+
+    private string? sourcePath;
     public IReadOnlyCollection<string> OpenSourcePaths =>
         documents.Keys.Where(path => Session is { } session && PathNames.IsUnder(path, session.Root)).ToArray();
 
@@ -27,6 +38,7 @@ public sealed partial class EditorWindow
             FileText file = FileText.Load(path) ?? throw new InvalidDataException($"Cannot open binary file '{path}'.");
             Leaving(path);
             documents[path] = source = new OpenDocument(path, new TextDocument(file.Text), file);
+            FileOpened(source);
             ShowDocument(path, source.Document);
             source.Decorations = Decorated(source.Document);
             DocumentOpened(source);

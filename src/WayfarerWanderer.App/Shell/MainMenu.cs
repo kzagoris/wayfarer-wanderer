@@ -31,6 +31,7 @@ public static class MainMenu
     [
         new("View/" + ToolWindows, 0, 0),
         new("File/" + RecentProjects, 0, 4),
+        new("File/Line Separators", 1, 2),
     ];
 
     private static readonly MenuEntry Separator = new(null);

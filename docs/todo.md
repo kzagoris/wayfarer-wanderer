@@ -29,3 +29,16 @@ Spring Boot):
   (needs a catalogue call when the dialog opens).
 - A `<No JDK>` choice.
 - An IntelliJ build for Kotlin projects (IntelliJ offers it; Wayfarer's Kotlin family has Gradle and Maven only).
+
+## Status bar: the inspection widget
+
+**Status:** missing (since 2026-11-22). The status bar has the path, the caret, the line separator, the encoding, the
+indentation, the language with its server's state and the read-only lock (`EditorWindow.StatusBar.cs`), but not
+Passenger's ✓ / IntelliJ's error and warning counts.
+
+It needs the language servers' diagnostics first:
+
+- `JvmLanguageClient` ignores `textDocument/publishDiagnostics`; keep each file's latest list and raise a change.
+- Draw them in the editor (squiggles, the error stripe) as Passenger's `CodeEditor` already can.
+- A Problems tool window (`ToolWindowIds.Problems` is reserved) listing them per file.
+- Then the widget: the shown file's errors and warnings, a click opening Problems, as Passenger's `AnalysisButton`.
