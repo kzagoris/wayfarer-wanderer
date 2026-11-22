@@ -188,7 +188,7 @@ public sealed class JvmConsoleDebugTests
             Module = Jvm.Id, MainClass = Jvm.MainClasses[0].ClassName, WorkingDirectory = Jvm.Root, Arguments = arguments,
         };
 
-        public static async Task<Module> CreateAsync(CancellationToken cancel)
+        public static async Task<Module> CreateAsync(CancellationToken cancel, string program = Program)
         {
             string parent = Directory.CreateTempSubdirectory("wayfarer console ").FullName;
             ProjectGenerationResult generated = await ProjectGenerator.GenerateAsync(new ProjectGenerationOptions
@@ -204,7 +204,7 @@ public sealed class JvmConsoleDebugTests
             string source = module.MainClasses[0].SourcePath;
             string app = Path.Combine(Path.GetDirectoryName(source)!, "App.java");
             if (!PathNames.Same(app, source)) File.Delete(source);
-            File.WriteAllText(app, Program);
+            File.WriteAllText(app, program);
             snapshot = await new ProjectHostImporter().ImportAsync(generated.Destination, 2, cancel);
             return new Module(parent, snapshot, Assert.Single(snapshot.Modules));
         }

@@ -39,6 +39,9 @@ public sealed record JvmDebugThread(long Id, string Name, string Group, string S
 /// <summary>A variable, field, element or evaluated value; <see cref="Reference"/> is not 0 when it has children.</summary>
 public sealed record JvmDebugVariable(string Name, string Value, string Type, int Reference);
 
+/// <summary>A completion for the evaluate box: <see cref="Text"/> replaces <see cref="Length"/> characters from <see cref="Start"/>.</summary>
+public sealed record JvmDebugCompletion(string Label, string Text, string Kind, string Detail, int Start, int Length);
+
 public sealed record JvmDebugPause(IReadOnlyList<JvmDebugFrame> Frames, IReadOnlyList<string> Locals)
 {
     public long ThreadId { get; init; }
@@ -199,13 +202,38 @@ public sealed class JvmInteractiveDebugger : IAsyncDisposable
             value.TryGetProperty("variablesReference", out var children) ? children.GetInt32() : 0))];
     }
 
-    /// <summary>An expression's value in a frame; a <see cref="DapException"/> says why it has none.</summary>
-    public async Task<JvmDebugVariable> EvaluateAsync(string expression, int frameId)
+    /// <summary>
+    /// An expression's or code fragment's value in a frame; a <see cref="DapException"/> says why it has none.
+    /// The "hover" context refuses anything with side effects: assignments, calls and object creation.
+    /// </summary>
+    public async Task<JvmDebugVariable> EvaluateAsync(string expression, int frameId, string context = "watch")
     {
-        var body = await Active().RequestAsync<JsonElement>("evaluate", new { expression, frameId, context = "watch" }, stopping.Token).ConfigureAwait(false);
+        var body = await Active().RequestAsync<JsonElement>("evaluate", new { expression, frameId, context }, stopping.Token).ConfigureAwait(false);
         return new JvmDebugVariable(expression, body.GetProperty("result").GetString() ?? "",
             body.TryGetProperty("type", out var type) ? type.GetString() ?? "" : "",
             body.TryGetProperty("variablesReference", out var children) ? children.GetInt32() : 0);
+    }
+
+    /// <summary>Sets a row of the variables tree (a frame's local, a field or an element) to an expression's value.</summary>
+    public async Task<JvmDebugVariable> SetVariableAsync(int reference, string name, string value)
+    {
+        var body = await Active().RequestAsync<JsonElement>("setVariable", new { variablesReference = reference, name, value }, stopping.Token).ConfigureAwait(false);
+        return new JvmDebugVariable(name, body.GetProperty("value").GetString() ?? "",
+            body.TryGetProperty("type", out var type) ? type.GetString() ?? "" : "",
+            body.TryGetProperty("variablesReference", out var children) ? children.GetInt32() : 0);
+    }
+
+    /// <summary>Completions at a caret (0-based) in the evaluate box: members after a dot, otherwise the names in scope.</summary>
+    public async Task<IReadOnlyList<JvmDebugCompletion>> CompletionsAsync(string text, int caret, int frameId)
+    {
+        var body = await Active().RequestAsync<JsonElement>("completions", new { text, column = caret + 1, frameId }, stopping.Token).ConfigureAwait(false);
+        return [.. body.GetProperty("targets").EnumerateArray().Select(item => new JvmDebugCompletion(
+            item.GetProperty("label").GetString() ?? "",
+            item.TryGetProperty("text", out var insert) ? insert.GetString() ?? "" : item.GetProperty("label").GetString() ?? "",
+            item.TryGetProperty("type", out var kind) ? kind.GetString() ?? "" : "",
+            item.TryGetProperty("detail", out var detail) ? detail.GetString() ?? "" : "",
+            item.TryGetProperty("start", out var start) ? start.GetInt32() : caret,
+            item.TryGetProperty("length", out var length) ? length.GetInt32() : 0))];
     }
 
     private DapConnection Active() => connection ?? throw new InvalidOperationException("The debugger is not connected.");
