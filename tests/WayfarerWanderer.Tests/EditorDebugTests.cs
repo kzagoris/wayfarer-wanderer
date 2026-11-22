@@ -177,6 +177,73 @@ public sealed class EditorDebugTests
         }
     }
 
+    /// <summary>A JDK 25 starter's App, a compact source file, debugs in the window: it stops at a breakpoint inside
+    /// main, shows its frame, variables and inline values, steps and runs to its end.</summary>
+    [AvaloniaFact]
+    public async Task DebugACompactSourceFileInTheWindow()
+    {
+        CancellationToken cancel = TestContext.Current.CancellationToken;
+        string jdk = NewProjectTests.CompactJdkHome();
+        string parent = Directory.CreateTempSubdirectory("wayfarer compact ").FullName;
+        ProjectGenerationResult generated = await ProjectGenerator.GenerateAsync(new ProjectGenerationOptions
+        {
+            ProjectName = "Compact", Destination = Path.Combine(parent, "compact"), GroupId = "com.example",
+            ArtifactId = "compact", PackageName = "com.example.compact", JdkHome = jdk,
+            Kind = NewProjectKind.Application, Language = NewProjectLanguage.Java, Build = NewProjectBuild.IntelliJ,
+            LaunchName = "Run",
+        }, cancel);
+        string source = Path.Combine(generated.Destination, "src", "App.java");
+        File.WriteAllText(source, "void main() {\n    int answer = 42;\n    IO.println(\"Answer \" + answer);\n}\n");
+        WorkspaceTrust.Trust(generated.Destination);
+        var window = EditorApplication.CreateWindow(null);
+        try
+        {
+            window.Show();
+            await window.OpenWorkspaceAsync(generated.Destination, cancel);
+            ProjectSession session = window.Session!;
+            window.OpenSource(source);
+            window.Editor.GoTo(new TextPosition(2, 0));
+            Assert.True(window.Actions.TryExecute(EditorActions.ToggleBreakpoint));
+
+            Assert.True(window.Actions.TryExecute(EditorActions.Debug));
+            await Until(() => session.IsPaused, "the breakpoint");
+            Assert.Equal("main:3, App", window.DebugTool.Frames[0]);
+            Assert.Contains("answer = 42", window.DebugTool.Variables);
+            Assert.Equal(2, window.Breakpoints.ExecutionLine);
+            await Until(() => window.Editor.LineAnnotations.Any(a => a.Line == 1 && a.Text == "answer: 42"), "the inline values");
+            VariableNode self = Assert.Single(window.DebugTool.VariableNodes, node => node.Name == "this");
+            self.IsExpanded = true;
+            await window.DebugTool.EvaluateAsync("answer + 1");
+            Assert.Equal("answer + 1 = 43", window.DebugTool.Variables[0]);
+
+            Assert.True(window.Actions.TryExecute(EditorActions.StepOver));
+            await Until(() => session.IsPaused, "the step");
+            Assert.Equal(3, window.Breakpoints.ExecutionLine);
+
+            Assert.True(window.Actions.TryExecute(EditorActions.Continue));
+            await Until(() => !session.IsRunning, "the debugged program to end");
+            Assert.Contains("Answer 42", window.DebugTool.Console.Text);
+            Assert.Equal("Process finished with exit code 0", window.DebugTool.Status);
+        }
+        finally
+        {
+            if (window.Session != null) await window.Session.CancelAsync();
+            window.Close();
+            WorkspaceTrust.TakeBack(generated.Destination);
+            try { Directory.Delete(parent, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        async Task Until(Func<bool> condition, string what)
+        {
+            Stopwatch timeout = Stopwatch.StartNew();
+            while (!condition() && timeout.Elapsed < TimeSpan.FromMinutes(2))
+                await Task.Delay(30, cancel);
+            Assert.True(condition(), $"Waiting for {what}: {window.DebugTool.Status}\n{string.Join("\n", window.BuildTool.Output)}\n{window.DebugTool.Console.Text}");
+        }
+    }
+
     [AvaloniaFact(SkipUnless = nameof(RunGradle), Skip = "Set WAYFARER_DEBUG_ACCEPTANCE=1 to run the Gradle wrapper and debug JVM.")]
     public async Task DebugGradleMainAndStepFromKotlinIntoJava()
     {

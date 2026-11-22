@@ -74,11 +74,19 @@ public static class ProjectGenerator
     /// targets its JDK's own release, so a newer JDK is refused rather than compiled down.</summary>
     public const int KotlinHighestJdk = 26;
 
-    /// <summary>The first JDK whose launcher runs an instance main (JEP 512), from which a starter's template file
-    /// with a <see cref="ModernSuffix"/> twin is written in that twin's form.</summary>
+    /// <summary>The first JDK whose launcher runs a compact source file (JEP 512). A template file ending in
+    /// <see cref="ModernSuffix"/> is written only from this JDK, one ending in <see cref="OlderSuffix"/> only below it,
+    /// each without its suffix.</summary>
     public const int InstanceMainJdk = 25;
 
     private const string ModernSuffix = ".jdk25";
+    private const string OlderSuffix = ".prejdk25";
+
+    /// <summary>Whether a starter is an IntelliJ Java module on JDK 25 or newer, whose App is a compact source file in
+    /// the unnamed package.</summary>
+    private static bool IsCompactApp(ProjectGenerationValues values) =>
+        values.Options.Build == NewProjectBuild.IntelliJ && values.Options.Language == NewProjectLanguage.Java &&
+        values.JdkVersion >= InstanceMainJdk;
 
     /// <summary>The newest JDK a starter in this language accepts, or null for no limit.</summary>
     public static int? HighestJdk(NewProjectLanguage language) =>
@@ -347,20 +355,17 @@ public static class ProjectGenerator
                      .Order(StringComparer.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            // A file with a ".jdk25" twin is that twin's older form: the twin takes its place on JDK 25 or newer.
+            // A ".jdk25" file is written only on JDK 25 or newer, a ".prejdk25" file only below it.
             bool modern = values.JdkVersion >= InstanceMainJdk;
             string current = file;
-            if (Path.GetExtension(file).Equals(ModernSuffix, StringComparison.Ordinal))
+            string extension = Path.GetExtension(file);
+            if (extension.Equals(ModernSuffix, StringComparison.Ordinal) || extension.Equals(OlderSuffix, StringComparison.Ordinal))
             {
-                if (!modern)
+                if (modern != extension.Equals(ModernSuffix, StringComparison.Ordinal))
                 {
                     continue;
                 }
-                current = file[..^ModernSuffix.Length];
-            }
-            else if (modern && File.Exists(file + ModernSuffix))
-            {
-                continue;
+                current = file[..^extension.Length];
             }
             string relative = Path.GetRelativePath(source, current)
                 .Replace("__PACKAGE_PATH__", values.Package.Replace('.', Path.DirectorySeparatorChar), StringComparison.Ordinal)
@@ -453,7 +458,9 @@ public static class ProjectGenerator
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         string main = values.Options.Kind == NewProjectKind.SpringBoot
             ? values.Package + ".Application"
-            : values.Package + ".App";
+            : IsCompactApp(values)
+                ? "App"
+                : values.Package + ".App";
         if (values.Options.Language == NewProjectLanguage.Kotlin)
         {
             main += "Kt";

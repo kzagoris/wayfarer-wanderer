@@ -133,7 +133,12 @@ public sealed class CompletionTests
         try
         {
             await window.OpenWorkspaceAsync(root, cancel);
-            string source = Path.Combine(root, "src", "com", "example", "typed", "App.java");
+            // On JDK 25 or newer the starter's App is a compact source file directly under src.
+            string source = Path.Combine(root, "src", "App.java");
+            if (!File.Exists(source))
+            {
+                source = Path.Combine(root, "src", "com", "example", "typed", "App.java");
+            }
             window.OpenSource(source);
             TextDocument document = window.Editor.Document;
             // Start on an empty line inside main, after the println.

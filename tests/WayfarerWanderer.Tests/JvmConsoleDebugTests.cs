@@ -151,6 +151,74 @@ public sealed class JvmConsoleDebugTests
         Assert.Contains("Typed Ada", console.Text);
     }
 
+    /// <summary>A JDK 25 starter's App is a compact source file (an instance main in no package or class): a
+    /// breakpoint in it stops with the frame shown, and the program runs to its end.</summary>
+    [Fact]
+    public async Task CompactSourceFileStopsAtBreakpoint()
+    {
+        CancellationToken cancel = TestContext.Current.CancellationToken;
+        string jdk = NewProjectTests.CompactJdkHome();
+        string parent = Directory.CreateTempSubdirectory("wayfarer compact ").FullName;
+        try
+        {
+            ProjectGenerationResult generated = await ProjectGenerator.GenerateAsync(new ProjectGenerationOptions
+            {
+                ProjectName = "Compact", Destination = Path.Combine(parent, "compact"), GroupId = "com.example",
+                ArtifactId = "compact", PackageName = "com.example.compact", JdkHome = jdk,
+                Kind = NewProjectKind.Application, Language = NewProjectLanguage.Java, Build = NewProjectBuild.IntelliJ,
+                LaunchName = "Run",
+            }, cancel);
+            WorkspaceTrust.Trust(generated.Destination);
+            try
+            {
+                string source = Path.Combine(generated.Destination, "src", "App.java");
+                File.WriteAllText(source, "void main() {\n    int answer = 42;\n    IO.println(\"Answer \" + answer);\n}\n");
+                WorkspaceSnapshot snapshot = await new ProjectHostImporter().ImportAsync(generated.Destination, 1, cancel);
+                JvmModule module = Assert.Single(snapshot.Modules);
+                Assert.Equal("App", module.MainClasses[0].ClassName);
+                await using var debug = new JvmInteractiveDebugger();
+                var stops = Channel.CreateUnbounded<JvmDebugPause>();
+                debug.Paused += pause => stops.Writer.TryWrite(pause);
+                var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                debug.Ended += () => ended.TrySetResult();
+                List<string> output = [];
+                debug.Output += line => { lock (output) output.Add(line); };
+                await debug.StartAsync(snapshot,
+                    new JvmLaunchConfiguration { Module = module.Id, MainClass = "App", WorkingDirectory = module.Root },
+                    new Dictionary<string, int[]> { [source] = [3] }, cancel);
+
+                JvmDebugPause paused = await NextAsync(stops, cancel);
+                Assert.Equal((source, 3), (paused.Frames[0].Path, paused.Frames[0].Line));
+                Assert.Equal("main:3, App", paused.Frames[0].Display);
+                Assert.Contains("answer = 42", paused.Locals);
+                JvmDebugVariable self = Assert.Single(paused.Variables, variable => variable.Name == "this");
+                await debug.VariablesAsync(self.Reference);
+                int frame = paused.Frames[0].Id;
+                Assert.Equal("42", (await debug.EvaluateAsync("answer", frame)).Value);
+                await debug.EvaluateAsync("this", frame);
+                await debug.CompletionsAsync("ans", 3, frame);
+                // IO.println is the JDK's, so Step Into stays in main.
+                await debug.StepIntoAsync();
+                paused = await NextAsync(stops, cancel);
+                Assert.Equal("main:4, App", paused.Frames[0].Display);
+                await debug.ContinueAsync();
+                await ended.Task.WaitAsync(TimeSpan.FromSeconds(60), cancel);
+                Assert.Equal(0, debug.ExitCode);
+                Assert.Contains("Answer 42", output);
+            }
+            finally
+            {
+                WorkspaceTrust.TakeBack(generated.Destination);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(parent, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
     private static async Task Until(Func<bool> condition, ProgramConsole console, CancellationToken cancel)
     {
         Stopwatch waited = Stopwatch.StartNew();
@@ -202,7 +270,9 @@ public sealed class JvmConsoleDebugTests
             WorkspaceSnapshot snapshot = await new ProjectHostImporter().ImportAsync(generated.Destination, 1, cancel);
             JvmModule module = Assert.Single(snapshot.Modules);
             string source = module.MainClasses[0].SourcePath;
-            string app = Path.Combine(Path.GetDirectoryName(source)!, "App.java");
+            // The program declares com.example.console, so it goes in that folder whatever form the starter's App took.
+            string app = Path.Combine(generated.Destination, "src", "com", "example", "console", "App.java");
+            Directory.CreateDirectory(Path.GetDirectoryName(app)!);
             if (!PathNames.Same(app, source)) File.Delete(source);
             File.WriteAllText(app, program);
             snapshot = await new ProjectHostImporter().ImportAsync(generated.Destination, 2, cancel);

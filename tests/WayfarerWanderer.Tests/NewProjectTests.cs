@@ -465,7 +465,10 @@ public sealed class NewProjectTests
     private static async Task AssertIntelliJModuleAsync(ProjectGenerationResult result, ProjectGenerationOptions options)
     {
         string destination = result.Destination;
-        Assert.True(File.Exists(Path.Combine(destination, "src", "com", "example", "wanderer", "App.java")));
+        bool compact = JdkMajor(options.JdkHome) >= ProjectGenerator.InstanceMainJdk;
+        Assert.True(File.Exists(compact
+            ? Path.Combine(destination, "src", "App.java")
+            : Path.Combine(destination, "src", "com", "example", "wanderer", "App.java")));
         Assert.Equal("wanderer-starter.iml", Path.GetFileName(Directory.GetFiles(destination, "*.iml").SingleOrDefault()));
         Assert.Contains("JAVA_MODULE", File.ReadAllText(Path.Combine(destination, "wanderer-starter.iml")));
         Assert.Contains($"JDK_{JdkMajor(options.JdkHome)}", File.ReadAllText(Path.Combine(destination, ".idea", "misc.xml")));
@@ -490,7 +493,7 @@ public sealed class NewProjectTests
 
         using JsonDocument launch = JsonDocument.Parse(File.ReadAllText(result.LaunchConfigurationPath));
         Assert.Equal("wanderer-starter", launch.RootElement.GetProperty("module").GetString());
-        Assert.Equal("com.example.wanderer.App", launch.RootElement.GetProperty("mainClass").GetString());
+        Assert.Equal(compact ? "App" : "com.example.wanderer.App", launch.RootElement.GetProperty("mainClass").GetString());
         LaunchConfigurationStore store = new(Path.Combine(destination, ".wayfarer", "launches"));
         Assert.Single(await store.ListAsync(TestContext.Current.CancellationToken));
         using JsonDocument provenance = JsonDocument.Parse(File.ReadAllText(Path.Combine(destination, ".wayfarer", "template.json")));
@@ -507,9 +510,9 @@ public sealed class NewProjectTests
         Assert.Equal(JsonValueKind.Object, project.RootElement.GetProperty("jdk").ValueKind);
     }
 
-    /// <summary>On JDK 25 or newer an IntelliJ module's App is a JEP 512 instance main printing with IO, still in its
-    /// package so the launch names the same class; on an older JDK it is the classic static main. Either form builds,
-    /// is found as the module's main and runs.</summary>
+    /// <summary>On JDK 25 or newer an IntelliJ module's App is a JEP 512 compact source file, src/App.java with only an
+    /// instance main printing with IO and launched as App; on an older JDK it is the classic static main in the chosen
+    /// package. Either form builds, is found as the module's main and runs.</summary>
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -528,20 +531,29 @@ public sealed class NewProjectTests
         ProjectGenerationResult generated = await ProjectGenerator.GenerateAsync(
             Options(folder.Path, NewProjectKind.Application, NewProjectLanguage.Java, NewProjectBuild.IntelliJ, jdk),
             TestContext.Current.CancellationToken);
-        string package = Path.Combine(generated.Destination, "src", "com", "example", "wanderer");
-        Assert.Equal(["App.java"], Directory.GetFiles(package).Select(Path.GetFileName));
-        string app = File.ReadAllText(Path.Combine(package, "App.java"));
-        Assert.StartsWith("package com.example.wanderer;", app);
+        string src = Path.Combine(generated.Destination, "src");
+        string[] sources = Directory.GetFiles(src, "*", SearchOption.AllDirectories)
+            .Select(file => Path.GetRelativePath(src, file).Replace(Path.DirectorySeparatorChar, '/')).ToArray();
+        string expectedMain = modern ? "App" : "com.example.wanderer.App";
         if (modern)
         {
-            Assert.Contains("    void main() {", app);
-            Assert.Contains("IO.println(\"Hello from Wanderer Starter!\");", app);
-            Assert.DoesNotContain("static", app);
+            Assert.Equal(["App.java"], sources);
+            string app = File.ReadAllText(Path.Combine(src, "App.java")).ReplaceLineEndings("\n");
+            Assert.Equal("void main() {\n    IO.println(\"Hello from Wanderer Starter!\");\n}\n", app);
+            Assert.Contains("compact source file", File.ReadAllText(Path.Combine(generated.Destination, "README.md")));
         }
         else
         {
+            Assert.Equal(["com/example/wanderer/App.java"], sources);
+            string app = File.ReadAllText(Path.Combine(src, "com", "example", "wanderer", "App.java"));
+            Assert.StartsWith("package com.example.wanderer;", app);
             Assert.Contains("public static void main(String[] args)", app);
             Assert.Contains("System.out.println(\"Hello from Wanderer Starter!\");", app);
+            Assert.Contains("com.example.wanderer.App", File.ReadAllText(Path.Combine(generated.Destination, "README.md")));
+        }
+        using (JsonDocument launch = JsonDocument.Parse(File.ReadAllText(generated.LaunchConfigurationPath)))
+        {
+            Assert.Equal(expectedMain, launch.RootElement.GetProperty("mainClass").GetString());
         }
 
         WorkspaceTrust.Trust(generated.Destination);
@@ -556,7 +568,7 @@ public sealed class NewProjectTests
                 cancellationToken: TestContext.Current.CancellationToken);
             Assert.True(built.ExitCode == 0,
                 "The generated module failed to build:\n" + string.Join(Environment.NewLine, built.Output.Select(line => line.Line)));
-            Assert.Equal("com.example.wanderer.App", module.MainClasses[0].ClassName);
+            Assert.Equal(expectedMain, module.MainClasses[0].ClassName);
             List<string> lines = [];
             ProcessResult ran = await new JvmLaunch().RunAsync(
                 snapshot,
@@ -631,6 +643,20 @@ public sealed class NewProjectTests
         {
             string range = highest is int top ? $"{ProjectGenerator.MinimumJdk} to {top}" : $"{ProjectGenerator.MinimumJdk} or newer";
             Assert.Skip($"A {language} starter needs a local JDK {range}; none was found in JAVA_HOME, on PATH or in the usual JDK install folders.");
+        }
+        return found;
+    }
+
+    /// <summary>A local JDK on which a starter's App is a compact source file (JDK 25 or newer): JAVA_HOME's or PATH's
+    /// if new enough, else the newest installed. Without one the test skips.</summary>
+    internal static string CompactJdkHome()
+    {
+        bool Compact(string home) => JdkMajor(home) >= ProjectGenerator.InstanceMainJdk;
+        string? found = PreferredJdks().FirstOrDefault(Compact) ??
+                        InstalledJdks().Where(Compact).OrderByDescending(home => JdkMajor(home)).FirstOrDefault();
+        if (found is null)
+        {
+            Assert.Skip($"Needs a local JDK {ProjectGenerator.InstanceMainJdk} or newer; none was found in JAVA_HOME, on PATH or in the usual JDK install folders.");
         }
         return found;
     }
