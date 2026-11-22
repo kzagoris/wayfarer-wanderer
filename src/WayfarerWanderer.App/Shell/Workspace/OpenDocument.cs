@@ -8,7 +8,7 @@ namespace WayfarerWanderer.App.Shell.Workspace;
 
 /// <summary>A file open in the window: its text, how it was read from disk (its encoding, BOM and breaks), and what Git
 /// draws on it, its change bars against the last commit and its blame. A UI-thread object.</summary>
-public sealed class OpenDocument(string path, TextDocument text, FileText file)
+public sealed partial class OpenDocument(string path, TextDocument text, FileText file)
 {
     private IReadOnlyList<ChangeMark> changeMarks = [];
     private IReadOnlyList<string?> gutterAnnotations = [];
@@ -44,6 +44,7 @@ public sealed class OpenDocument(string path, TextDocument text, FileText file)
     {
         File = written;
         Saved?.Invoke(this, EventArgs.Empty);
+        StorageChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>The decorations the editor draws the text with, once it has been shown: the change bars go there.</summary>
@@ -114,6 +115,7 @@ public sealed class OpenDocument(string path, TextDocument text, FileText file)
             return false;
         }
         File = read;
+        StorageChanged?.Invoke(this, EventArgs.Empty);
         if (Text.Snapshot.ToString() == read.Text)
         {
             return false;

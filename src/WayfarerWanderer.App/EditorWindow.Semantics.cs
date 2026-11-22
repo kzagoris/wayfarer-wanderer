@@ -200,6 +200,7 @@ public sealed partial class EditorWindow
             return starting;
         starting = StartAsync();
         startingClients[language] = starting;
+        ShowLanguage();
         return starting;
 
         async Task<JvmLanguageClient> StartAsync()
@@ -222,12 +223,14 @@ public sealed partial class EditorWindow
                     lifetime.ThrowIfCancellationRequested();
                 }
                 languageClients[language] = client;
+                client.StatusChanged += () => Shell.UiThread.Post(LanguageServerChanged);
                 if (language == "java") RefreshKotlinClasses();
                 return client;
             }
             finally
             {
                 if (StatusText == message) StatusText = was;
+                Shell.UiThread.Post(LanguageServerChanged);
             }
         }
     }

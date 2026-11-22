@@ -176,9 +176,11 @@ public class WelcomeTests
             // The menus the actions name a place in, in IntelliJ IDEA's order; none empty.
             Assert.Equal(["File", "Edit", "View", "Navigate", "Code", "Refactor", "Build", "Run", "Tests", "Tools", "Git", "Help"],
                 window.MainMenuEntries.Select(m => m.Title));
-            // File: projects (Recent Projects among them, then Close Project), the file, settings, Exit; split by separators.
+            // File: projects (Recent Projects among them, then Close Project), the file and how it is stored, settings, Exit;
+            // split by separators.
             Assert.Equal([EditorActions.NewProject, EditorActions.OpenWorkspace, EditorActions.OpenSource, AppActions.CloneRepository,
-                MainMenu.RecentProjects, AppActions.CloseSolution, "-", EditorActions.SaveSource, "-", AppActions.ShowSettings,
+                MainMenu.RecentProjects, AppActions.CloseSolution, "-", EditorActions.SaveSource, AppActions.FileEncoding, "Line Separators",
+                AppActions.FileIndentation, "-", AppActions.ShowSettings,
                 EditorActions.ProjectStructure, "-", AppActions.Exit], Ids(MenuNamed(window, "File")));
             // Nothing is open: Close Project is greyed and says why.
             MenuItem close = MenuNamed(window, "File").Items.OfType<MenuItem>().Single(i => (string?)i.Tag == AppActions.CloseSolution);

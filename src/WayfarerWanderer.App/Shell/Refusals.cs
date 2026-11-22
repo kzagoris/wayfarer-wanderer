@@ -14,6 +14,9 @@ public static class Refusals
     /// <summary>The window has no folder open.</summary>
     public const string NoFolder = "No folder is open";
 
+    /// <summary>The editor shows no file.</summary>
+    public const string NoFile = "No file is open";
+
     /// <summary>The folder open is in no Git working tree.</summary>
     public const string NoRepository = "The folder is not in a Git repository";
 

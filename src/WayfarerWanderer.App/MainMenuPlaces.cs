@@ -18,6 +18,12 @@ public static class MainMenuPlaces
         [AppActions.CloneRepository] = [new("File", 0, 3), new("Git", 3, 2)],
         [AppActions.CloseSolution] = [new("File", 0, 5)],
         [EditorActions.SaveSource] = [new("File", 1, 0)],
+        // The file's properties, as the status bar's widgets: File Encoding, Line Separators (1, 2) and File Indentation.
+        [AppActions.FileEncoding] = [new("File", 1, 1)],
+        [AppActions.FileIndentation] = [new("File", 1, 3)],
+        [AppActions.LineSeparatorsCrlf] = [new("File/Line Separators", 0, 0)],
+        [AppActions.LineSeparatorsLf] = [new("File/Line Separators", 0, 1)],
+        [AppActions.LineSeparatorsCr] = [new("File/Line Separators", 0, 2)],
         [AppActions.ShowSettings] = [new("File", 2, 0)],
         [EditorActions.ProjectStructure] = [new("File", 2, 1)],
         [AppActions.Exit] = [new("File", 3, 0)],

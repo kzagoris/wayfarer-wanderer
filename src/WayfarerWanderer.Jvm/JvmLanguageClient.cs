@@ -95,6 +95,18 @@ public sealed class JvmLanguageClient : IAsyncDisposable
     /// <summary>Completes when the server reports that its import finished.</summary>
     public Task WaitUntilReadyAsync(CancellationToken cancel) => ready.Task.WaitAsync(TimeSpan.FromMinutes(5), cancel);
 
+    /// <summary>Whether the server has said its import finished. JDT LS says so; the Kotlin server never does, so its
+    /// readiness is that it answered <c>initialize</c>.</summary>
+    public bool IsReady => ready.Task.IsCompletedSuccessfully;
+
+    /// <summary>What the server last said of its state (JDT LS's <c>language/status</c> message: "Importing Maven
+    /// project(s)", "Ready"), or null before it said anything.</summary>
+    public string? Status { get; private set; }
+
+    /// <summary>Raised, on the reader's thread, when <see cref="Status"/> or <see cref="IsReady"/> changes or the connection
+    /// ends.</summary>
+    public event Action? StatusChanged;
+
     private static object InitializationOptions(string[] bundles, WorkspaceSnapshot? snapshot) => snapshot switch
     {
         { BuildSystem: JvmBuildSystem.Idea } => new { bundles, settings = IdeaLanguageSettings.Document(snapshot) },
@@ -204,8 +216,14 @@ public sealed class JvmLanguageClient : IAsyncDisposable
                 if (!message.TryGetProperty("id", out var id))
                 {
                     if (message.TryGetProperty("method", out var notice) && notice.GetString() == "language/status" &&
-                        message.GetProperty("params").TryGetProperty("type", out var status) && status.GetString() is "ServiceReady" or "Started")
-                        ready.TrySetResult();
+                        message.TryGetProperty("params", out var said))
+                    {
+                        if (said.TryGetProperty("type", out var status) && status.GetString() is "ServiceReady" or "Started")
+                            ready.TrySetResult();
+                        if (said.TryGetProperty("message", out var words) && words.GetString() is { Length: > 0 } text)
+                            Status = text;
+                        StatusChanged?.Invoke();
+                    }
                     continue;
                 }
                 if (message.TryGetProperty("method", out var method))
@@ -221,6 +239,7 @@ public sealed class JvmLanguageClient : IAsyncDisposable
         catch (Exception error)
         {
             ready.TrySetException(new IOException("Language server connection ended. " + lastError, error));
+            StatusChanged?.Invoke();
             foreach (var answer in pending.Values)
                 answer.TrySetException(new IOException("Language server connection ended. " + lastError, error));
         }
