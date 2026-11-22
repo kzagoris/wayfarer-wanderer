@@ -73,6 +73,17 @@ public sealed class JdkCatalogue(HttpClient http, Uri? baseUri = null)
             .Where(d => d.Id.Length > 0)];
     }
 
+    /// <summary>Whether Download JDK leaves a vendor out: GraalVM's builds (<c>graalvm</c>, <c>graalvm_community</c>,
+    /// <c>gluon_graalvm</c>, the old <c>graalvm_ce*</c>), Mandrel and Liberica Native make native images, and
+    /// JetBrains' is the runtime IDEs ship with, none of them a JDK to build and run a project on.</summary>
+    public static bool IsSpecialised(string id) =>
+        id.Contains("graalvm", StringComparison.OrdinalIgnoreCase) || id is "mandrel" or "liberica_native" or "jetbrains";
+
+    /// <summary>The vendors Download JDK offers: <paramref name="all"/> without the <see cref="IsSpecialised"/> ones,
+    /// except <paramref name="wanted"/>, a catalogue id, when a project asks for it.</summary>
+    public static IReadOnlyList<JdkDistribution> Offered(IEnumerable<JdkDistribution> all, string? wanted = null) =>
+        [.. all.Where(d => !IsSpecialised(d.Id) || string.Equals(d.Id, wanted, StringComparison.OrdinalIgnoreCase))];
+
     /// <summary>The feature releases still maintained and generally available, newest first.</summary>
     public async Task<IReadOnlyList<int>> FeaturesAsync(CancellationToken cancel = default)
     {
