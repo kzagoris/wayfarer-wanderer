@@ -95,6 +95,7 @@ public sealed partial class EditorWindow
         AddStep(EditorActions.StepInto, "Step Into", debug => debug.StepIntoAsync());
         AddStep(EditorActions.StepOver, "Step Over", debug => debug.StepOverAsync());
         AddStep(EditorActions.StepOut, "Step Out", debug => debug.StepOutAsync());
+        AddDebugValueActions();
         Actions.Add(new EditorAction(EditorActions.OpenWorkspace, "Open Folder…", () => true,
             () => UnawaitedWork.Observe(PickWorkspaceAsync())));
         Actions.Add(new EditorAction(EditorActions.OpenSource, "Open Source…", () => true,

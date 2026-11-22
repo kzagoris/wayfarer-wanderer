@@ -77,6 +77,15 @@ public sealed class JvmConsoleDebugTests
         Assert.Equal("6", (await debug.EvaluateAsync("Math.max(6, 1)", frame)).Value);
         await Assert.ThrowsAsync<DapException>(() => debug.EvaluateAsync("missing", frame));
 
+        Assert.Equal("4", (await debug.EvaluateAsync("answer=4", frame)).Value);
+        Assert.Equal("4", (await debug.EvaluateAsync("answer", frame)).Value);
+        Assert.Equal("7", (await debug.EvaluateAsync("primes[0] = 7", frame)).Value);
+        Assert.Equal("7", (await debug.EvaluateAsync("primes[0]", frame)).Value);
+        Assert.Equal("5", (await debug.EvaluateAsync("answer = primes[2]", frame)).Value);
+        Assert.Equal("5", (await debug.EvaluateAsync("answer", frame)).Value);
+        await Assert.ThrowsAsync<DapException>(() => debug.EvaluateAsync("Math.max(6, 1) = 3", frame));
+        await Assert.ThrowsAsync<DapException>(() => debug.EvaluateAsync("answer = \"text\"", frame));
+
         await debug.StepOverAsync();
         paused = await NextAsync(stops, cancel);
         Assert.Equal(("step", 13), (paused.Reason, paused.Frames[0].Line));
@@ -179,7 +188,7 @@ public sealed class JvmConsoleDebugTests
             Module = Jvm.Id, MainClass = Jvm.MainClasses[0].ClassName, WorkingDirectory = Jvm.Root, Arguments = arguments,
         };
 
-        public static async Task<Module> CreateAsync(CancellationToken cancel)
+        public static async Task<Module> CreateAsync(CancellationToken cancel, string program = Program)
         {
             string parent = Directory.CreateTempSubdirectory("wayfarer console ").FullName;
             ProjectGenerationResult generated = await ProjectGenerator.GenerateAsync(new ProjectGenerationOptions
@@ -195,7 +204,7 @@ public sealed class JvmConsoleDebugTests
             string source = module.MainClasses[0].SourcePath;
             string app = Path.Combine(Path.GetDirectoryName(source)!, "App.java");
             if (!PathNames.Same(app, source)) File.Delete(source);
-            File.WriteAllText(app, Program);
+            File.WriteAllText(app, program);
             snapshot = await new ProjectHostImporter().ImportAsync(generated.Destination, 2, cancel);
             return new Module(parent, snapshot, Assert.Single(snapshot.Modules));
         }

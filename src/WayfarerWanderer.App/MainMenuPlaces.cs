@@ -68,8 +68,11 @@ public static class MainMenuPlaces
         [EditorActions.StepOver] = [new("Run", 1, 2)],
         [EditorActions.StepInto] = [new("Run", 1, 3)],
         [EditorActions.StepOut] = [new("Run", 1, 4)],
-        [EditorActions.ToggleBreakpoint] = [new("Run", 2, 0)],
-        [EditorActions.ChooseRunJdk] = [new("Run", 3, 0)],
+        [AppActions.Evaluate] = [new("Run", 2, 0)],
+        [AppActions.QuickEvaluate] = [new("Run", 2, 1)],
+        [AppActions.AddToWatches] = [new("Run", 2, 2)],
+        [EditorActions.ToggleBreakpoint] = [new("Run", 3, 0)],
+        [EditorActions.ChooseRunJdk] = [new("Run", 4, 0)],
 
         [EditorActions.RunTests] = [new("Tests", 0, 0)],
 
