@@ -50,23 +50,7 @@ public sealed partial class EditorWindow : Window
         AddVcs();
         AddWelcome();
         AddMainMenuActions();
-        Button trust = new() { Content = "Trust Workspace" };
-        trust.Click += (_, _) => UnawaitedWork.Observe(TrustWorkspaceAsync());
-        TrustBanner = new Border
-        {
-            IsVisible = false,
-            Padding = new(8),
-            Child = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 8,
-                Children =
-                {
-                    new TextBlock { Text = "Workspace code will not run until the folder is trusted." },
-                    trust
-                }
-            }
-        };
+        TrustBanner = TrustWorkspaceBanner();
         AddNavigation();
         AddFindInFiles();
         AddToolWindows(new Grid { Children = { Editor, Welcome } });
