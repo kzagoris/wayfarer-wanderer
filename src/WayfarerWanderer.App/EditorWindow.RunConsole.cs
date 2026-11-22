@@ -49,6 +49,7 @@ public sealed partial class EditorWindow
             OpenFrame(frame);
             MarkExecution(frame);
         };
+        FollowDebugValues();
         FollowTerminalView(RunTool.Console.View, SettingsKept.Effective, null);
         FollowTerminalView(DebugTool.Console.View, SettingsKept.Effective, null);
     }

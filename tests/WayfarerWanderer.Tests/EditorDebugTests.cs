@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
@@ -76,6 +77,54 @@ public sealed class EditorDebugTests
             Assert.Equal("primes[1] = 3", window.DebugTool.Variables[0]);
             window.DebugTool.AddWatch("app.greeting");
             await Until(() => window.DebugTool.Variables.Contains("app.greeting = \"Hello\""), "the watch");
+
+            // Inline values after the lines of main that name its variables.
+            await Until(() => window.Editor.LineAnnotations.Any(a => a.Line == 8 && a.Text == "answer: 42"), "the inline values");
+            Assert.Contains(window.Editor.LineAnnotations, a => a.Line == 11 && a.Text == "answer: 42");
+            Assert.Contains(window.Editor.LineAnnotations, a => a.Line == 7 && a.Text.StartsWith("args: ", StringComparison.Ordinal));
+
+            // Set Value on a local, then on an array's element; the inline values follow.
+            VariableNode answer = Assert.Single(window.DebugTool.VariableNodes, node => node.Name == "answer");
+            Assert.True(window.DebugTool.VariablesView.StartEditing(answer));
+            Assert.Equal("42", answer.EditText);
+            answer.IsEditing = false;
+            await window.DebugTool.SetValueAsync(answer, "answer + 1");
+            Assert.Equal("43", answer.Value);
+            await Until(() => window.Editor.LineAnnotations.Any(a => a.Line == 8 && a.Text == "answer: 43"), "the inline value set");
+            VariableNode first = primes.Children[0];
+            Assert.Equal("primes[0]", first.Expression);
+            await window.DebugTool.SetValueAsync(first, "11");
+            Assert.Equal("[0] = 11", first.ToString());
+
+            // A code fragment, then completion and history in the evaluate box.
+            await window.DebugTool.EvaluateAsync("int sum = 0;\nfor (int p : primes) sum += p;\nsum");
+            Assert.Equal("int sum = 0; for (int p : primes) sum += p; sum = 19", window.DebugTool.Variables[1]);
+            // Evaluate Expression from the editor puts the expression at the caret in the box.
+            window.Editor.GoTo(new TextPosition(11, window.Editor.Document.Snapshot.GetLineText(11).IndexOf("app.greet", StringComparison.Ordinal) + 1));
+            Assert.True(window.Actions.TryExecute(WayfarerWanderer.App.Shell.AppActions.Evaluate));
+            TextBox box = window.DebugTool.EvaluateBox;
+            Assert.Equal("app", box.Text);
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            box.Text = "app.greeti";
+            box.CaretIndex = 10;
+            box.Focus();
+            window.KeyPress(Key.Space, RawInputModifiers.Control, PhysicalKey.Space, null);
+            await Until(() => window.DebugTool.EvaluateCompletion.Shown.Any(choice => choice.Label == "greeting"), "completion in the evaluate box");
+            window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+            Assert.Equal("app.greeting", box.Text);
+            window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+            await Until(() => window.DebugTool.Variables.Contains("app.greeting = \"Hello\"") && window.DebugTool.VariableNodes.Count(n => n.Name == "app.greeting") == 2, "the completed expression evaluated");
+            box.Text = "";
+            window.KeyPress(Key.Up, RawInputModifiers.None, PhysicalKey.ArrowUp, null);
+            Assert.Equal("app.greeting", box.Text);
+            window.KeyPress(Key.Up, RawInputModifiers.None, PhysicalKey.ArrowUp, null);
+            Assert.StartsWith("int sum = 0;", box.Text);
+
+            // Quick Evaluate the expression at the caret: a card with its value.
+            window.Editor.GoTo(new TextPosition(11, window.Editor.Document.Snapshot.GetLineText(11).IndexOf("answer", StringComparison.Ordinal) + 2));
+            Assert.True(window.Actions.TryExecute(WayfarerWanderer.App.Shell.AppActions.QuickEvaluate));
+            await Until(() => window.ValueCard.Node?.ToString() == "answer = 43", "the Quick Evaluate card");
+            window.ValueCard.Close();
             Render("debug-paused");
 
             Assert.True(window.Actions.TryExecute(EditorActions.StepOver));

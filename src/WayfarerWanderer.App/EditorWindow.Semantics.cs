@@ -58,6 +58,9 @@ public sealed partial class EditorWindow
                 args.Handled = true;
                 return;
             }
+            // The editor's keys: elsewhere (the Debug window's evaluate box and variables) they are the focused control's.
+            if (args.Source is Avalonia.Visual source && source != Editor && !Avalonia.VisualTree.VisualExtensions.IsVisualAncestorOf(Editor, source))
+                return;
             if (args.Key == Key.Space && args.KeyModifiers == KeyModifiers.Control)
                 args.Handled = Actions.TryExecute(CompleteAction);
             if (args.Key == Key.F2 && args.KeyModifiers == KeyModifiers.None)
