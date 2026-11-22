@@ -367,7 +367,7 @@ public sealed partial class EditorWindow
             else completionPopup?.Close();
             return;
         }
-        Completion.Show(shown, Editor.PointOf(session.WordStart), Editor.LineHeight);
+        Completion.Show(shown, Editor.PointOf(session.WordStart), Editor.LineHeight, snapshot.GetText(session.WordStart, caret - session.WordStart));
     }
 
     private void CloseCompletion()
