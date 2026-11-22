@@ -106,14 +106,19 @@ public sealed class JdkDownloadDialog : IdeWindow
             {
                 offered.Insert(0, feature);
             }
-            List<VendorRow> rows = [.. (await vendors).Select(d => new VendorRow(d))];
+            string chosenVendor = wanted?.Vendor is { Length: > 0 } v ? JdkRegistry.Distribution(v) : "temurin";
+            if (chosenVendor == "jbr")
+            {
+                chosenVendor = "jetbrains";
+            }
+            // Native-image builds and JetBrains' IDE runtime are left out, unless the project asks for one.
+            List<VendorRow> rows = [.. JdkCatalogue.Offered(await vendors, chosenVendor).Select(d => new VendorRow(d))];
             // Temurin first: free for production use and TCK-tested.
             rows.Sort((a, b) => (b.Distribution.Id == "temurin").CompareTo(a.Distribution.Id == "temurin"));
             version.ItemsSource = offered;
             vendor.ItemsSource = rows;
             vendor.DisplayMemberBinding = new Avalonia.Data.Binding(nameof(VendorRow.Text));
             int chosenFeature = wanted?.Feature ?? (offered.Contains(ToolingJvms.Minimum) ? ToolingJvms.Minimum : offered.FirstOrDefault());
-            string chosenVendor = wanted?.Vendor is { Length: > 0 } v ? JdkRegistry.Distribution(v) : "temurin";
             version.SelectedItem = chosenFeature;
             vendor.SelectedItem = rows.FirstOrDefault(row => row.Distribution.Id == chosenVendor) ?? rows.FirstOrDefault();
         }

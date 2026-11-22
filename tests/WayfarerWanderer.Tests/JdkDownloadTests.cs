@@ -59,6 +59,15 @@ public sealed class JdkDownloadTests : IDisposable
     }
 
     [Fact]
+    public void NativeImageBuildsAndTheIdeRuntimeAreNotOffered()
+    {
+        JdkDistribution[] all = [.. new[] { "zulu", "temurin", "mandrel", "liberica_native", "liberica", "jetbrains", "graalvm_community", "graalvm_ce17", "graalvm", "gluon_graalvm", "corretto" }
+            .Select(id => new JdkDistribution(id, id))];
+        Assert.Equal(["zulu", "temurin", "liberica", "corretto"], JdkCatalogue.Offered(all).Select(d => d.Id));
+        Assert.Equal(["zulu", "temurin", "liberica", "graalvm", "corretto"], JdkCatalogue.Offered(all, "graalvm").Select(d => d.Id));
+    }
+
+    [Fact]
     public async Task AZipIsCheckedUnpackedMovedAndRegistered()
     {
         fake.Archive = Zip(Version);
