@@ -507,6 +507,85 @@ public sealed class NewProjectTests
         Assert.Equal(JsonValueKind.Object, project.RootElement.GetProperty("jdk").ValueKind);
     }
 
+    /// <summary>On JDK 25 or newer an IntelliJ module's App is a JEP 512 instance main printing with IO, still in its
+    /// package so the launch names the same class; on an older JDK it is the classic static main. Either form builds,
+    /// is found as the module's main and runs.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task IntelliJModuleAppTakesTheChosenJdksMainForm(bool modern)
+    {
+        bool Wanted(string home) => JdkMajor(home) is int major && major >= ProjectGenerator.MinimumJdk &&
+                                    (major >= ProjectGenerator.InstanceMainJdk) == modern;
+        string? jdk = PreferredJdks().Concat(InstalledJdks()).FirstOrDefault(Wanted);
+        if (jdk is null)
+        {
+            Assert.Skip(modern
+                ? $"Needs a local JDK {ProjectGenerator.InstanceMainJdk} or newer."
+                : $"Needs a local JDK {ProjectGenerator.MinimumJdk} to {ProjectGenerator.InstanceMainJdk - 1}.");
+        }
+        using TestFolder folder = new();
+        ProjectGenerationResult generated = await ProjectGenerator.GenerateAsync(
+            Options(folder.Path, NewProjectKind.Application, NewProjectLanguage.Java, NewProjectBuild.IntelliJ, jdk),
+            TestContext.Current.CancellationToken);
+        string package = Path.Combine(generated.Destination, "src", "com", "example", "wanderer");
+        Assert.Equal(["App.java"], Directory.GetFiles(package).Select(Path.GetFileName));
+        string app = File.ReadAllText(Path.Combine(package, "App.java"));
+        Assert.StartsWith("package com.example.wanderer;", app);
+        if (modern)
+        {
+            Assert.Contains("    void main() {", app);
+            Assert.Contains("IO.println(\"Hello from Wanderer Starter!\");", app);
+            Assert.DoesNotContain("static", app);
+        }
+        else
+        {
+            Assert.Contains("public static void main(String[] args)", app);
+            Assert.Contains("System.out.println(\"Hello from Wanderer Starter!\");", app);
+        }
+
+        WorkspaceTrust.Trust(generated.Destination);
+        try
+        {
+            WorkspaceSnapshot snapshot = await new ProjectHostImporter().ImportAsync(
+                generated.Destination, 1, TestContext.Current.CancellationToken);
+            JvmModule module = Assert.Single(snapshot.Modules);
+            ProcessResult built = await new JvmBuild().RunAsync(
+                snapshot,
+                new JvmBuildRequest(generated.Destination, module.Id, "classes", []),
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.True(built.ExitCode == 0,
+                "The generated module failed to build:\n" + string.Join(Environment.NewLine, built.Output.Select(line => line.Line)));
+            Assert.Equal("com.example.wanderer.App", module.MainClasses[0].ClassName);
+            List<string> lines = [];
+            ProcessResult ran = await new JvmLaunch().RunAsync(
+                snapshot,
+                new JvmLaunchConfiguration
+                {
+                    Name = "Acceptance",
+                    Module = module.Id,
+                    MainClass = module.MainClasses[0].ClassName,
+                    WorkingDirectory = module.Root,
+                    JavaHome = jdk
+                },
+                line =>
+                {
+                    lock (lines)
+                    {
+                        lines.Add(line.Line);
+                    }
+                },
+                TestContext.Current.CancellationToken);
+            Assert.True(ran.ExitCode == 0,
+                "The generated launch failed:\n" + string.Join(Environment.NewLine, ran.Output.Select(line => line.Line)));
+            Assert.Contains(lines, line => line.Contains("Hello from Wanderer Starter!", StringComparison.Ordinal));
+        }
+        finally
+        {
+            WorkspaceTrust.TakeBack(generated.Destination);
+        }
+    }
+
     [Theory]
     [InlineData(NewProjectKind.Application, NewProjectLanguage.Kotlin)]
     [InlineData(NewProjectKind.SpringBoot, NewProjectLanguage.Java)]

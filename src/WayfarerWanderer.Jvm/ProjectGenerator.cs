@@ -74,6 +74,12 @@ public static class ProjectGenerator
     /// targets its JDK's own release, so a newer JDK is refused rather than compiled down.</summary>
     public const int KotlinHighestJdk = 26;
 
+    /// <summary>The first JDK whose launcher runs an instance main (JEP 512), from which a starter's template file
+    /// with a <see cref="ModernSuffix"/> twin is written in that twin's form.</summary>
+    public const int InstanceMainJdk = 25;
+
+    private const string ModernSuffix = ".jdk25";
+
     /// <summary>The newest JDK a starter in this language accepts, or null for no limit.</summary>
     public static int? HighestJdk(NewProjectLanguage language) =>
         language == NewProjectLanguage.Kotlin ? KotlinHighestJdk : null;
@@ -341,7 +347,22 @@ public static class ProjectGenerator
                      .Order(StringComparer.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            string relative = Path.GetRelativePath(source, file)
+            // A file with a ".jdk25" twin is that twin's older form: the twin takes its place on JDK 25 or newer.
+            bool modern = values.JdkVersion >= InstanceMainJdk;
+            string current = file;
+            if (Path.GetExtension(file).Equals(ModernSuffix, StringComparison.Ordinal))
+            {
+                if (!modern)
+                {
+                    continue;
+                }
+                current = file[..^ModernSuffix.Length];
+            }
+            else if (modern && File.Exists(file + ModernSuffix))
+            {
+                continue;
+            }
+            string relative = Path.GetRelativePath(source, current)
                 .Replace("__PACKAGE_PATH__", values.Package.Replace('.', Path.DirectorySeparatorChar), StringComparison.Ordinal)
                 .Replace("__MODULE__", values.Artifact, StringComparison.Ordinal);
             string target = Path.Combine(destination, relative);
@@ -350,11 +371,11 @@ public static class ProjectGenerator
                 continue;
             }
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            if (Path.GetExtension(file).Equals(".binary", StringComparison.OrdinalIgnoreCase))
+            if (Path.GetExtension(current).Equals(".binary", StringComparison.OrdinalIgnoreCase))
             {
                 File.Copy(file, target[..^".binary".Length], overwrite: false);
             }
-            else if (Path.GetExtension(file).Equals(".jar", StringComparison.OrdinalIgnoreCase))
+            else if (Path.GetExtension(current).Equals(".jar", StringComparison.OrdinalIgnoreCase))
             {
                 File.Copy(file, target, overwrite: false);
             }
