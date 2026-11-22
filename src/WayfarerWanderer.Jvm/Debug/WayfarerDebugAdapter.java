@@ -397,7 +397,7 @@ class WayfarerDebugAdapter {
 
     // Evaluate: names (locals, then this' fields, then the frame's class' statics), field
     // access, array indexing and .length, literals, and method calls on a thread stopped by an
-    // event.
+    // event, and assignment (local = value, a.field = value, array[i] = value).
     private static final class EvaluationException extends Exception {
         EvaluationException(String message) {
             super(message);
@@ -421,10 +421,16 @@ class WayfarerDebugAdapter {
                 "variablesReference", hasChildren(value) ? handle(value) : 0);
     }
 
+    /** Where the value just read lives, so that 'place = value' can write it. */
+    private interface Place {
+        void set(Value value) throws Exception;
+    }
+
     private final class Evaluator {
         private final String text;
         private final FrameRef ref;
         private int at;
+        private Place place;
 
         Evaluator(String text, FrameRef ref) {
             this.text = text;
@@ -433,7 +439,23 @@ class WayfarerDebugAdapter {
 
         Value whole() throws Exception {
             Value value = expression();
+            Place target = place;
             space();
+            if (at + 1 < text.length() && text.charAt(at) == '=' && text.charAt(at + 1) != '=') {
+                at++;
+                if (target == null) throw new EvaluationException("Cannot assign to this expression");
+                value = expression();
+                space();
+                if (at < text.length()) throw new EvaluationException("Unexpected '" + text.substring(at) + "'");
+                try {
+                    target.set(value);
+                } catch (InvalidTypeException | ClassNotLoadedException | IllegalArgumentException e) {
+                    throw new EvaluationException(
+                            "Cannot assign " + format(value) + ": "
+                                    + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+                }
+                return value;
+            }
             if (at < text.length()) throw new EvaluationException("Unexpected '" + text.substring(at) + "'");
             return value;
         }
@@ -464,8 +486,10 @@ class WayfarerDebugAdapter {
             while (true) {
                 if (take('.')) {
                     String member = name();
-                    if (take('(')) value = call(value, null, member, arguments());
-                    else value = member(value, member);
+                    if (take('(')) {
+                        value = call(value, null, member, arguments());
+                        place = null;
+                    } else value = member(value, member);
                 } else if (take('[')) {
                     Value index = expression();
                     if (!take(']')) throw new EvaluationException("Expected ']'");
@@ -477,6 +501,7 @@ class WayfarerDebugAdapter {
                     if (i < 0 || i >= array.length())
                         throw new EvaluationException("Index " + i + " out of bounds for length " + array.length());
                     value = array.getValue(i);
+                    place = v -> array.setValue(i, v);
                 } else return value;
             }
         }
@@ -491,6 +516,7 @@ class WayfarerDebugAdapter {
         }
 
         private Value primary() throws Exception {
+            place = null;
             space();
             if (at >= text.length()) throw new EvaluationException("Incomplete expression");
             char c = text.charAt(at);
@@ -537,23 +563,35 @@ class WayfarerDebugAdapter {
             if (take('(')) {
                 List<Value> args = arguments();
                 ObjectReference self = ref.frame().thisObject();
-                return self != null
-                        ? call(self, null, name, args)
-                        : call(null, ref.frame().location().declaringType(), name, args);
+                Value result =
+                        self != null
+                                ? call(self, null, name, args)
+                                : call(null, ref.frame().location().declaringType(), name, args);
+                place = null;
+                return result;
             }
             try {
                 LocalVariable local = frame.visibleVariableByName(name);
-                if (local != null) return frame.getValue(local);
+                if (local != null) {
+                    place = v -> ref.frame().setValue(local, v);
+                    return frame.getValue(local);
+                }
             } catch (AbsentInformationException ignored) {
             }
             ObjectReference self = frame.thisObject();
             if (self != null) {
                 Field field = self.referenceType().fieldByName(name);
-                if (field != null) return self.getValue(field);
+                if (field != null) {
+                    place = v -> self.setValue(field, v);
+                    return self.getValue(field);
+                }
             }
             ReferenceType declaring = frame.location().declaringType();
             Field field = declaring.fieldByName(name);
-            if (field != null && field.isStatic()) return declaring.getValue(field);
+            if (field != null && field.isStatic()) {
+                place = statics(declaring, field);
+                return declaring.getValue(field);
+            }
             // A class: java.lang's by its simple name, any loaded one by its full name.
             ReferenceType type = type(name);
             while (type == null && take('.')) {
@@ -563,11 +601,24 @@ class WayfarerDebugAdapter {
             if (type == null) throw new EvaluationException("Cannot find local variable '" + name + "'");
             if (!take('.')) throw new EvaluationException("'" + name + "' is a class");
             String member = name();
-            if (take('(')) return call(null, type, member, arguments());
+            if (take('(')) {
+                Value result = call(null, type, member, arguments());
+                place = null;
+                return result;
+            }
             Field statics = type.fieldByName(member);
             if (statics == null || !statics.isStatic())
                 throw new EvaluationException("Cannot find static field '" + member + "' in " + type.name());
+            place = statics(type, statics);
             return type.getValue(statics);
+        }
+
+        private Place statics(ReferenceType type, Field field) {
+            return v -> {
+                if (!(type instanceof ClassType kind))
+                    throw new EvaluationException("Cannot assign " + type.name() + "." + field.name());
+                kind.setValue(field, v);
+            };
         }
 
         private ReferenceType type(String name) {
@@ -580,12 +631,14 @@ class WayfarerDebugAdapter {
 
         private Value member(Value owner, String name) throws EvaluationException {
             if (owner == null) throw new EvaluationException("NullPointerException: '" + name + "' of null");
+            place = null;
             if (owner instanceof ArrayReference array && name.equals("length")) return vm.mirrorOf(array.length());
             if (!(owner instanceof ObjectReference object))
                 throw new EvaluationException("'" + name + "' of a primitive value");
             Field field = object.referenceType().fieldByName(name);
             if (field == null)
                 throw new EvaluationException("Cannot find field '" + name + "' in " + object.referenceType().name());
+            place = v -> object.setValue(field, v);
             return object.getValue(field);
         }
 

@@ -388,6 +388,13 @@ public sealed class DebugToolWindow : UserControl
         {
             JvmDebugVariable result = await session.EvaluateAsync(expression, frame.Id);
             row = new VariableNode(expression, result.Value, result.Type, result.Reference, session.VariablesAsync);
+            // An assignment or a call may have changed the frame's variables and the watches.
+            if (shown != version) return;
+            shown = ++version;
+            IReadOnlyList<JvmDebugVariable> locals = await session.VariablesAsync(frame.Id);
+            if (shown != version) return;
+            evaluated = null;
+            await ShowVariablesAsync(shown, frame, locals);
         }
         catch (Exception error) when (error is DapException or InvalidOperationException or IOException or OperationCanceledException)
         {
