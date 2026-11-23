@@ -13,6 +13,9 @@ public sealed class StateStore
 {
     public const string SettingsFile = "settings.json";
 
+    /// <summary>The file of the starters New Project made something from lately (<see cref="Templates"/>).</summary>
+    public const string TemplatesFile = "recentTemplates.json";
+
     private static readonly Dictionary<string, StateStore> Shared = new(StringComparer.Ordinal);
 
     private readonly Dictionary<string, (ProjectState Documents, int Holds)> projects = new(StringComparer.Ordinal);
@@ -28,6 +31,7 @@ public sealed class StateStore
         Placement = new(Path.Combine(root, "windowPlacement.json"));
         Recent = new(Path.Combine(root, "recentFolders.json"));
         Trust = new(Path.Combine(root, "trust.json"));
+        Templates = new(Path.Combine(root, TemplatesFile));
         // Before this process writes any: a change is written a moment after it is made, and only through this store.
         UsedBefore = File.Exists(Path.Combine(root, SettingsFile)) || File.Exists(Recent.Path) || Directory.Exists(Path.Combine(root, "workspaces"));
     }
@@ -56,6 +60,9 @@ public sealed class StateStore
 
     /// <summary>The folders the person trusted, or opened without trusting, every window alike.</summary>
     public StateDocument<TrustState> Trust { get; }
+
+    /// <summary>The starters New Project made something from lately, which its list shows first.</summary>
+    public StateDocument<RecentTemplatesState> Templates { get; }
 
     public static StateStore Open(string root)
     {
@@ -118,6 +125,7 @@ public sealed class StateStore
         Placement.Flush();
         Recent.Flush();
         Trust.Flush();
+        Templates.Flush();
         foreach ((ProjectState documents, _) in projects.Values)
         {
             documents.Flush();

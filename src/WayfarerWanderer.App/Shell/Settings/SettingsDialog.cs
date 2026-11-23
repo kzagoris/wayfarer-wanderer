@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Passenger.Editor;
@@ -44,7 +45,10 @@ public sealed partial class SettingsDialog : IdeWindow
     private readonly TextBlock nothing;
 
     /// <summary>The page's room at its right: its gutter, where its scroll bar shows over the page, clear of what it shows.</summary>
-    private const double Gutter = 20;
+    private const double Gutter = Gaps.Page;
+
+    /// <summary>The search field's room in the pages' column, the pages' bands as wide as it below.</summary>
+    private static readonly Thickness PagesInset = new(Gaps.Normal);
 
     /// <summary>What a page keeps above its options as they scroll (the Keymap page's toolbar).</summary>
     private readonly Decorator pageTop = new() { Margin = new Thickness(0, 0, Gutter, 0) };
@@ -65,20 +69,21 @@ public sealed partial class SettingsDialog : IdeWindow
         Working = current;
         applied = current;
         Title = "Settings";
-        Width = 980;
+        Width = DialogWidths.Workspace;
         Height = 700;
         MinWidth = 640;
         MinHeight = 400;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
         AddOptions();
-        search = new TextBox { Classes = { StyleClasses.Search }, PlaceholderText = "Search settings", Margin = new Thickness(10, 10, 10, 6) };
+        search = SearchBox.Of("Search settings");
+        search.Margin = new Thickness(PagesInset.Left, PagesInset.Top, PagesInset.Right, Gaps.Small);
         search.TextChanged += (_, _) => Filter();
-        pages = new ListBox { Classes = { StyleClasses.Tree, StyleClasses.Pages } };
+        pages = new ListBox { Classes = { StyleClasses.Tree, StyleClasses.Pages }, Padding = new Thickness(PagesInset.Left, 0) };
         pages.SelectionChanged += (_, _) => ShowPage();
-        heading = new TextBlock { FontSize = 16, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 0, Gutter, 14) };
+        heading = new TextBlock { Classes = { StyleClasses.PageTitle }, Margin = new Thickness(0, 0, Gutter, Gaps.Wide) };
         // The scroll bar shows over the scrolled page's right, so the gutter is inside it: the bar stands there, beside the rows.
-        body = new StackPanel { Spacing = 12, Margin = new Thickness(0, 0, Gutter, 0) };
+        body = new StackPanel { Spacing = Gaps.Wide, Margin = new Thickness(0, 0, Gutter, 0) };
         nothing = new TextBlock { Classes = { StyleClasses.Muted }, Text = "Nothing matches", IsVisible = false, Margin = new Thickness(21, 4) };
 
         ok.Click += (_, _) => Ok();
@@ -88,9 +93,9 @@ public sealed partial class SettingsDialog : IdeWindow
         DockPanel.SetDock(search, Dock.Top);
         left.Children.Add(search);
         left.Children.Add(new Panel { Children = { pages, nothing } });
-        Border leftPane = new() { BorderThickness = new Thickness(0, 0, 1, 0), Child = left };
+        Border leftPane = new() { BorderThickness = Hairlines.After, Child = left };
         leftPane.Bind(Border.BorderBrushProperty, leftPane.GetResourceObservable(TokenKeys.Divider));
-        DockPanel right = new() { Margin = new Thickness(20, 16, 0, 0) };
+        DockPanel right = new() { Margin = new Thickness(Gaps.Page, Gaps.Group, 0, 0) };
         DockPanel.SetDock(heading, Dock.Top);
         DockPanel.SetDock(pageTop, Dock.Top);
         right.Children.Add(heading);
@@ -203,6 +208,7 @@ public sealed partial class SettingsDialog : IdeWindow
         Add(Declared.MainMenuBar);
 
         Add(Declared.ReopenProjectsOnStartup);
+        Add(Declared.ConfirmBeforeClosing);
 
         AddTrust();
 
@@ -259,11 +265,15 @@ public sealed partial class SettingsDialog : IdeWindow
         TextBlock name = new()
         {
             Text = label,
-            Padding = new Thickness(0, 0, 16, 0),
+            Padding = new Thickness(0, 0, Gaps.Group, 0),
             TextWrapping = TextWrapping.Wrap,
-            VerticalAlignment = firstLine < 0 ? VerticalAlignment.Center : VerticalAlignment.Top,
         };
         AutomationProperties.SetLabeledBy(editor, name);
+        // The one field of an editor of several parts (a check box before it, its problem under it) is heard by the row's words.
+        if (editor is not TextBox && editor.GetLogicalDescendants().OfType<TextBox>().ToList() is [{ } field] && AutomationProperties.GetName(field) is null or "")
+        {
+            AutomationProperties.SetLabeledBy(field, name);
+        }
         TextBlock? said = note is null ? null : new TextBlock { Text = note, TextWrapping = TextWrapping.Wrap, HorizontalAlignment = HorizontalAlignment.Left, Classes = { StyleClasses.Muted } };
         OptionRow row = new(name, editor, said, firstLine, null);
         options.Add(new Option(page, label, row, $"{page} {label} {keywords}", action));

@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/DialogFooter.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/DialogFooter.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -12,6 +12,19 @@ namespace WayfarerWanderer.App.Shell;
 /// <c>StackPanel.footer</c> spaces the buttons and gives each one minimum width.</summary>
 public static class DialogFooter
 {
+    /// <summary>Marks a dialog's page, which then stands as far in from the window's edges and above the footer's bar as
+    /// the footer's buttons stand in from its sides (the theme's DialogFooterPadding), so the page's fields end where the
+    /// default button does, in every dialog and under every theme.</summary>
+    public static readonly AttachedProperty<bool> InsetProperty = AvaloniaProperty.RegisterAttached<Control, bool>("Inset", typeof(DialogFooter));
+
+    static DialogFooter() => InsetProperty.Changed.AddClassHandler<Control>((page, e) =>
+    {
+        if (e.NewValue is true)
+        {
+            BySides(page, Layoutable.MarginProperty, null, null);
+        }
+    });
+
     /// <summary>A dialog's default button, OK unless its words say what it does (Next, Publish, Create): Enter clicks it,
     /// and it wears the accent.</summary>
     public static Button Default(string words = "OK") => new() { Content = words, IsDefault = true, Classes = { StyleClasses.Primary } };
@@ -41,7 +54,7 @@ public static class DialogFooter
     {
         Button cancel = new() { Content = "Cancel" };
         cancel.Click += (_, _) => cancelled();
-        StackPanel answers = new() { Orientation = Orientation.Horizontal, Spacing = 8 };
+        StackPanel answers = new() { Orientation = Orientation.Horizontal, Spacing = Gaps.Normal };
         answers.Children.AddRange(Ordered(chosen, cancel, []));
         return answers;
     }
@@ -67,7 +80,7 @@ public static class DialogFooter
         if (left is not null)
         {
             left.VerticalAlignment = VerticalAlignment.Center;
-            left.Margin = new Thickness(0, 0, 16, 0);
+            left.Margin = new Thickness(0, 0, Gaps.Group, 0);
             row.Children.Add(left);
         }
         return row;
@@ -90,21 +103,17 @@ public static class DialogFooter
     {
         StackPanel header = new()
         {
-            Margin = new Thickness(20, 16, 20, 12),
-            Spacing = 4,
-            Children = { new TextBlock { Text = title, FontWeight = FontWeight.SemiBold }, about },
+            Spacing = Gaps.Tight,
+            Children = { new TextBlock { Classes = { StyleClasses.DialogTitle }, Text = title }, about },
         };
-        Border top = new() { BorderThickness = new Thickness(0, 0, 0, 1), Child = header };
+        BySides(header, Layoutable.MarginProperty, null, Gaps.Wide);
+        Border top = new() { BorderThickness = Hairlines.Below, Child = header };
         top.Bind(Border.BorderBrushProperty, top.GetResourceObservable(TokenKeys.Divider));
         DockPanel.SetDock(top, Dock.Top);
-        bar.Padding = new Thickness(20, 10);
-        DockPanel content = Page(new Border { Padding = new Thickness(20, 14, 20, 16), Child = page }, bar);
+        DockPanel content = Page(new Border { [InsetProperty] = true, Child = page }, bar);
         content.Children.Insert(0, top);
         return content;
     }
-
-    /// <summary>How wide a question is (<see cref="Question"/>).</summary>
-    public const double QuestionWidth = 520;
 
     /// <summary>A question's whole window, laid out one way: its title in bold over its paragraphs (words from
     /// <see cref="Paragraph"/>, or what it is about, as a list), each wrapping, at one width and as tall as they are; its
@@ -115,27 +124,80 @@ public static class DialogFooter
         Control[] said = [.. paragraphs];
         AutomationProperties.SetHelpText(dialog, string.Join(" ", said.OfType<TextBlock>().Select(words => words.Text)));
         dialog.Title = title;
-        dialog.Width = QuestionWidth;
+        dialog.Width = DialogWidths.Question;
         dialog.SizeToContent = SizeToContent.Height;
         dialog.CanResize = false;
         dialog.WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        StackPanel page = new() { Margin = new Thickness(20), Spacing = 12 };
-        page.Children.Add(new TextBlock { Text = title, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap });
+        StackPanel page = new() { [InsetProperty] = true, Spacing = Gaps.Wide };
+        page.Children.Add(new TextBlock { Classes = { StyleClasses.DialogTitle }, Text = title, TextWrapping = TextWrapping.Wrap });
         page.Children.AddRange(said);
         // On a screen too short for its words, they scroll above the answers, which stay in reach.
         dialog.Content = Page(new ScrollViewer { Content = page }, Bar(answers, left));
     }
 
+    /// <summary>A question's Don't ask again, which goes beside its answers (<see cref="Question"/>'s left): ticked as the
+    /// person agrees, the asker keeps the answer in Settings.</summary>
+    public static CheckBox DontAskAgain() => new() { Content = "Don't ask again" };
+
     /// <summary>A question's paragraph of words, wrapping to its width.</summary>
     public static TextBlock Paragraph(string text) => new() { Text = text, TextWrapping = TextWrapping.Wrap };
+
+    /// <summary>Gives a part of a dialog the footer's sides, its top and foot those sides too unless given.</summary>
+    private static void BySides(Control part, StyledProperty<Thickness> property, double? top, double? bottom) =>
+        part.Bind(property, part.GetResourceObservable(TokenKeys.DialogFooterPadding, padding => padding is Thickness footer
+            ? new Thickness(footer.Left, top ?? footer.Left, footer.Right, bottom ?? footer.Left)
+            : new Thickness(Gaps.Group)));
 
     private static IEnumerable<Button> Ordered(Button chosen, Button? cancel, Button[] more) =>
         (OperatingSystem.IsMacOS() ? [cancel, .. more, chosen] : (Button?[])[chosen, cancel, .. more]).OfType<Button>();
 
     private static StackPanel Buttons(IEnumerable<Button> buttons)
     {
-        StackPanel footer = new() { Classes = { StyleClasses.Footer } };
+        StackPanel footer = new FittingRow { Classes = { StyleClasses.Footer } };
         footer.Children.AddRange(buttons);
         return footer;
+    }
+
+    /// <summary>A footer's buttons side by side where the bar has room for them, and one under another, each as wide as the
+    /// widest, where it has not (a question's long answer: Bring a package and EF Core into Step), a button's words ending
+    /// in an ellipsis (Shell.axaml) where even the bar's width is too narrow for them, so none stands past the dialog's edge.</summary>
+    private sealed class FittingRow : StackPanel
+    {
+        private bool stacked;
+
+        /// <summary>Styled as the row it is (Shell.axaml's <c>StackPanel.footer</c>).</summary>
+        protected override Type StyleKeyOverride => typeof(StackPanel);
+
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            Control[] shown = [.. Children.Where(c => c.IsVisible)];
+            double gaps = Spacing * Math.Max(0, shown.Length - 1);
+            foreach (Control button in shown)
+            {
+                button.Measure(new Size(double.PositiveInfinity, availableSize.Height));
+            }
+            stacked = shown.Sum(b => b.DesiredSize.Width) + gaps > availableSize.Width;
+            if (!stacked)
+            {
+                return new Size(shown.Sum(b => b.DesiredSize.Width) + gaps, shown.Select(b => b.DesiredSize.Height).DefaultIfEmpty(0).Max());
+            }
+            foreach (Control button in shown)
+            {
+                button.Measure(new Size(availableSize.Width, double.PositiveInfinity));
+            }
+            return new Size(shown.Select(b => b.DesiredSize.Width).DefaultIfEmpty(0).Max(), shown.Sum(b => b.DesiredSize.Height) + gaps);
+        }
+
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            double at = 0;
+            foreach (Control button in Children.Where(c => c.IsVisible))
+            {
+                Rect place = stacked ? new Rect(0, at, finalSize.Width, button.DesiredSize.Height) : new Rect(at, 0, button.DesiredSize.Width, finalSize.Height);
+                button.Arrange(place);
+                at += (stacked ? place.Height : place.Width) + Spacing;
+            }
+            return finalSize;
+        }
     }
 }

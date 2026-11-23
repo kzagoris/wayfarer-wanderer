@@ -1,5 +1,6 @@
-// From Passenger 2044e49b src/Passenger.App/Settings/Declared.cs, MIT (notices/Passenger/LICENSE): the settings Wayfarer's
+// From Passenger 8a1df7e4 src/Passenger.App/Settings/Declared.cs, MIT (notices/Passenger/LICENSE): the settings Wayfarer's
 // Settings shows; the rest cut.
+using Passenger.Core;
 using D = WayfarerWanderer.App.Shell.Settings.SettingsDialog;
 
 namespace WayfarerWanderer.App.Shell.Settings;
@@ -41,6 +42,12 @@ public static class Declared
 
     public static readonly ToggleSetting ReopenProjectsOnStartup = new(s => s.ReopenProjectsOnStartup, (s, v) => s with { ReopenProjectsOnStartup = v },
         new(D.SystemPage, "Reopen projects on startup", "reopen last project folder startup start launch welcome screen recent"));
+
+    public static readonly ChoiceSetting<ConfirmClosing> ConfirmBeforeClosing = new(s => s.ConfirmBeforeClosing, (s, v) => s with { ConfirmBeforeClosing = v },
+        [(ConfirmClosing.Never, "Never"), (ConfirmClosing.WhenQuitting, "When quitting"), (ConfirmClosing.EveryWindow, "Every window")],
+        new(D.SystemPage, "Confirm before closing", "confirm ask prompt question before closing close quit exit window are you sure accidental",
+            $"Whether {Product.Name} asks you before it quits ({(OperatingSystem.IsMacOS() ? $"Quit {Product.Name}" : "File | Exit")} or closing its last "
+            + "window) or before any of its windows closes. The question's Don't ask again sets this back to Never."));
 
     public static readonly ThemeSetting ColourScheme = new(code: true, s => s.ColourScheme, (s, v) => s with { ColourScheme = v },
         new(D.Appearance, "Colour scheme", "colour color scheme syntax highlighting code colours editor keywords strings comments " + ThemeSource.FormerScheme.ToLowerInvariant(),

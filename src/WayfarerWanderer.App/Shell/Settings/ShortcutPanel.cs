@@ -16,10 +16,10 @@ public sealed class ShortcutPanel : StackPanel
 {
     public ShortcutPanel(string secondLabel)
     {
-        Spacing = 6;
+        Spacing = Gaps.Small;
         First = new StrokeField(passesDialogKeys: true);
         Second = new StrokeField(passesDialogKeys: false) { IsEnabled = false };
-        SecondStroke = new CheckBox { Content = secondLabel, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+        SecondStroke = new CheckBox { Content = secondLabel, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, Gaps.Normal, 0) };
         DockPanel second = new();
         DockPanel.SetDock(SecondStroke, Dock.Left);
         second.Children.Add(SecondStroke);
@@ -84,7 +84,6 @@ public sealed class StrokeField : TextBox
     {
         this.passesDialogKeys = passesDialogKeys;
         IsReadOnly = true;
-        Classes.Add(StyleClasses.Search);
         if (passesDialogKeys)
         {
             InnerRightContent = SpecialKeys();
@@ -98,7 +97,7 @@ public sealed class StrokeField : TextBox
         set
         {
             stroke = value;
-            Text = value is { IsModifierAlone: true } alone ? new Shortcut(alone, alone).Display() : value?.Display() ?? string.Empty;
+            Text = value is { IsModifierAlone: true } alone ? KeyWords.Of(new Shortcut(alone, alone)) : value is { } pressed ? KeyWords.Of(pressed) : string.Empty;
             CaretIndex = Text.Length;
             StrokeChanged?.Invoke(this, EventArgs.Empty);
         }
@@ -172,18 +171,16 @@ public sealed class StrokeField : TextBox
         Keystroke[] keys = [new(Key.Enter, KeyModifiers.None), new(Key.Escape, KeyModifiers.None), new(Key.Tab, KeyModifiers.None), new(Key.Tab, KeyModifiers.Shift)];
         PathIcon plus = new() { Width = 12, Height = 12 };
         plus.Bind(PathIcon.DataProperty, plus.GetResourceObservable(IconKeys.Add));
-        Button set = new() { Classes = { ShellClasses.TabPin }, Content = plus, Focusable = false, Margin = new Thickness(0, 0, 6, 0) };
-        ToolButtons.Tip(set, $"Set shortcuts with {string.Join(", ", keys.Where(k => k.Modifiers == KeyModifiers.None).Select(k => k.Display()))} keys");
+        Button set = new() { Classes = { ShellClasses.TabPin }, Content = plus, Focusable = false, Margin = new Thickness(0, 0, Gaps.Small, 0) };
+        ToolButtons.Tip(set, $"Set shortcuts with {string.Join(", ", keys.Where(k => k.Modifiers == KeyModifiers.None).Select(KeyWords.Of))} keys");
         List<MenuItem> items = [];
         foreach (Keystroke key in keys)
         {
-            MenuItem item = new() { Header = $"Set {key.Display()}" };
-            item.Click += (_, _) =>
+            items.Add(ToolWindows.ListMenus.Item($"Set {KeyWords.Of(key)}", null, () =>
             {
                 Stroke = key;
                 Focus();
-            };
-            items.Add(item);
+            }));
         }
         ContextMenu menu = new() { ItemsSource = items };
         set.Click += (_, _) => menu.Open(set);

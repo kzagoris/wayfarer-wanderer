@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Theme/ThemeFiles.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Theme/ThemeFiles.cs, MIT (notices/Passenger/LICENSE).
 using System.Globalization;
 using System.Text.Json;
 using Passenger.Core;
@@ -207,7 +207,7 @@ public static partial class ThemeFiles
         Dictionary<string, TokenValue>[] sections = TokenSections(file, root, tokens, code, null, plain, problems);
         if (!code)
         {
-            WorkOutButtonGrounds(sections, tokens);
+            WorkOutLaterTokens(sections, tokens);
         }
         (BackgroundValue? dark, BackgroundValue? light) = code ? (null, null) : Background(file, JsonMembers.Value(root, "background"), problems);
         return new ThemeFile(name, description, sections[0], sections[1], sections[2])
@@ -276,11 +276,11 @@ public static partial class ThemeFiles
         return sections;
     }
 
-    /// <summary>The buttons' grounds under the pointer and pressed that a file written before they were tokens leaves out,
-    /// worked out in each variant from its own colours there as Passenger's themes work them out: a plain button's, its
-    /// hover and pressed washes laid over its ground, and the default button's pressed, as far past its hover as that is
-    /// from its accent; so the file's buttons answer the pointer in its own colours.</summary>
-    private static void WorkOutButtonGrounds(Dictionary<string, TokenValue>[] sections, IReadOnlyDictionary<string, ThemeTokenKind> tokens)
+    /// <summary>The tokens a file written before them leaves out, worked out in each variant from its own colours there: the
+    /// buttons' grounds under the pointer and pressed as Passenger's themes work them out (a plain button's hover and
+    /// pressed washes laid over its ground, the default button's pressed as far past its hover as that is from its
+    /// accent), and the Debug button's colours, its icons'; so the file draws them in its own colours.</summary>
+    private static void WorkOutLaterTokens(Dictionary<string, TokenValue>[] sections, IReadOnlyDictionary<string, ThemeTokenKind> tokens)
     {
         foreach (Dictionary<string, TokenValue> section in sections[1..])
         {
@@ -297,6 +297,9 @@ public static partial class ThemeFiles
             Work("ButtonHover", button is { } under && Given("Hover") is { } hover ? ThemeColours.Over(hover, ThemeColours.Opaque(under)) : null);
             Work("ButtonPressed", button is { } ground && Given("Selected") is { } selected ? ThemeColours.Over(selected, ThemeColours.Opaque(ground)) : null);
             Work("AccentPressed", Given("Accent") is { } accent && Given("AccentHover") is { } accentHover ? ThemeColours.Past(accent, accentHover) : null);
+            // The Debug button in the file's own icon colours, legible where its icons are.
+            Work("Debug", Given("Icon"));
+            Work("TitleBar.Debug", Given("TitleBar.Icon"));
         }
     }
 
@@ -425,7 +428,7 @@ public static partial class ThemeFiles
         if (value is not { ValueKind: JsonValueKind.String } text || text.GetString() is not { } words || words.Trim().Length == 0
             || words.Length > longest || words.Any(char.IsControl))
         {
-            throw new FormatException($"gives {(value is null ? "no " + member : $"{member} as {ThemeJson.Shown(value.Value)}")}: its {member} is words on one line, at most {longest} characters");
+            throw new FormatException($"gives {(value is null ? "no " + member : $"{member} as {ThemeJson.Shown(value.Value)}")}: its {member} is words on one line, at most {Numbers.Said(longest)} characters");
         }
         return words;
     }
@@ -439,7 +442,7 @@ public static partial class ThemeFiles
         }
         if (value.Value.ValueKind != JsonValueKind.Array || value.Value.GetArrayLength() > MostEntries)
         {
-            throw new FormatException($"gives {member} as {ThemeJson.Shown(value.Value)}: {member} is a list of paths inside the source, at most {MostEntries}");
+            throw new FormatException($"gives {member} as {ThemeJson.Shown(value.Value)}: {member} is a list of paths inside the source, at most {Numbers.Said(MostEntries)}");
         }
         List<string> paths = [];
         foreach (JsonElement item in value.Value.EnumerateArray())
@@ -472,11 +475,11 @@ public static partial class ThemeFiles
     {
         ThemeTokenKind.Colour => "a colour: \"#RRGGBB\", \"#AARRGGBB\" or {\"colour\": \"#RRGGBB\", \"opacity\": 0 to 1}",
         ThemeTokenKind.Gradient => $"a gradient, {{\"start\": [x, y], \"end\": [x, y], \"stops\": [{{\"offset\": 0, \"colour\": \"#RRGGBB\"}}, …]}} "
-            + $"with 2 to {MostStops} stops in order from 0 to 1, or a colour: \"#RRGGBB\", \"#AARRGGBB\" or {{\"colour\": \"#RRGGBB\", \"opacity\": 0 to 1}}",
-        ThemeTokenKind.Shadow => $"shadows: \"X Y BLUR SPREAD #AARRGGBB\" each (BLUR and SPREAD may be left out, \"inset\" may lead), up to {MostShadows} joined by commas, or \"none\"",
-        ThemeTokenKind.Radius => $"a radius: a number for every corner, or four [top left, top right, bottom right, bottom left], each 0 to {Farthest}",
-        ThemeTokenKind.Thickness => $"a thickness: a number for every side, or four [left, top, right, bottom], each -{Farthest} to {Farthest}",
-        ThemeTokenKind.Number => $"a number, 0 to {Farthest}",
+            + $"with 2 to {Numbers.Said(MostStops)} stops in order from 0 to 1, or a colour: \"#RRGGBB\", \"#AARRGGBB\" or {{\"colour\": \"#RRGGBB\", \"opacity\": 0 to 1}}",
+        ThemeTokenKind.Shadow => $"shadows: \"X Y BLUR SPREAD #AARRGGBB\" each (BLUR and SPREAD may be left out, \"inset\" may lead), up to {Numbers.Said(MostShadows)} joined by commas, or \"none\"",
+        ThemeTokenKind.Radius => string.Create(CultureInfo.InvariantCulture, $"a radius: a number for every corner, or four [top left, top right, bottom right, bottom left], each 0 to {Farthest}"),
+        ThemeTokenKind.Thickness => string.Create(CultureInfo.InvariantCulture, $"a thickness: a number for every side, or four [left, top, right, bottom], each -{Farthest} to {Farthest}"),
+        ThemeTokenKind.Number => string.Create(CultureInfo.InvariantCulture, $"a number, 0 to {Farthest}"),
         ThemeTokenKind.TextStyle => Listed(Styles),
         _ => kind.ToString(),
     };

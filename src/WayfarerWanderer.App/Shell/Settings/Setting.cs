@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Settings/Setting.cs, MIT (notices/Passenger/LICENSE): .editorconfig cut.
+// From Passenger 8a1df7e4 src/Passenger.App/Settings/Setting.cs, MIT (notices/Passenger/LICENSE): .editorconfig cut.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -127,11 +127,10 @@ public sealed class SizeSetting(Func<AppSettings, double> get, Func<AppSettings,
     {
         double value = get(now);
         double[] offered = sizes.Contains(value) ? [.. sizes] : [.. sizes.Append(value).Order()];
-        ComboBox box = new()
+        FormDropDown box = new()
         {
             ItemsSource = offered.Select(Percent).ToArray(),
             SelectedIndex = Array.IndexOf(offered, value),
-            Classes = { StyleClasses.Form },
         };
         box.SelectionChanged += (_, _) =>
         {
@@ -175,11 +174,10 @@ public sealed class ChoiceSetting<T> : Setting where T : struct, Enum
     public ComboBox Box(AppSettings now, Action<Func<AppSettings, AppSettings>> change)
     {
         T value = get(now);
-        ComboBox box = new()
+        FormDropDown box = new()
         {
             ItemsSource = choices.Select(c => c.Name).ToArray(),
             SelectedIndex = choices.Select(c => c.Value).ToList().IndexOf(value),
-            Classes = { StyleClasses.Form },
         };
         box.SelectionChanged += (_, _) => change(s => set(s, choices[Math.Max(0, box.SelectedIndex)].Value));
         return box;
@@ -201,11 +199,10 @@ public sealed class ThemedChoiceSetting<T>(Func<AppSettings, T?> own, Func<AppSe
     {
         T themes = inForce(set(now, null));
         string[] names = [$"Theme default ({NameOf(themes)})", .. choices.Select(c => c.Name)];
-        ComboBox box = new()
+        FormDropDown box = new()
         {
             ItemsSource = names,
             SelectedIndex = own(now) is { } chosen ? 1 + choices.Select(c => c.Value).ToList().IndexOf(chosen) : 0,
-            Classes = { StyleClasses.Form },
         };
         box.SelectionChanged += (_, _) => change(s => set(s, box.SelectedIndex > 0 ? choices[box.SelectedIndex - 1].Value : null));
         return box;
@@ -243,7 +240,7 @@ public sealed class FontSetting(string property, Func<AppSettings, string?> get,
     public override Control Editor(AppSettings now, Action<Func<AppSettings, AppSettings>> change)
     {
         string? chosen = Trimmed(get(now));
-        ComboBox box = new() { Classes = { StyleClasses.Form, StyleClasses.Faces }, MaxDropDownHeight = 360 };
+        FormDropDown box = new() { Classes = { StyleClasses.Faces }, MaxDropDownHeight = 360 };
         ReusedRows.Use(box, () =>
         {
             TextBlock shown = new() { VerticalAlignment = VerticalAlignment.Center };
