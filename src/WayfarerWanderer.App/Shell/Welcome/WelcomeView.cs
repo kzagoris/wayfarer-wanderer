@@ -47,9 +47,9 @@ public sealed class WelcomeView : UserControl
         hero.Children.Add(mark);
         hero.Children.Add(new StackPanel { [Grid.ColumnProperty] = 1, VerticalAlignment = VerticalAlignment.Center, Children = { title, subtitle } });
 
-        NewProjectButton = Action(IconKeys.Add, "New Project", "Maven or Gradle, from a template");
+        NewProjectButton = Action(IconKeys.Add, "New Project", "From a template");
         NewProjectButton.Click += (_, _) => NewProjectRequested?.Invoke(this, EventArgs.Empty);
-        OpenFolderButton = Action(IconKeys.FolderOpen, "Open Folder", "A Maven, Gradle or IntelliJ project");
+        OpenFolderButton = Action(IconKeys.FolderOpen, "Open Folder", "A folder of code");
         OpenFolderButton.Click += (_, _) => OpenFolderRequested?.Invoke(this, EventArgs.Empty);
         OpenFileButton = Action(IconKeys.DocumentText, "Open File", "Any file, on its own");
         OpenFileButton.Click += (_, _) => OpenFileRequested?.Invoke(this, EventArgs.Empty);
