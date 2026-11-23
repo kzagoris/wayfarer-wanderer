@@ -146,6 +146,9 @@ public abstract class SearchPopup<T> : UserControl, IAnswers<T?>
     {
     }
 
+    /// <summary>A key of the popup's own in its query, beyond those every search popup has; whether it was taken.</summary>
+    protected virtual bool TakesKey(KeyEventArgs e) => false;
+
     /// <summary>Chooses the row at an index of those listed, brought into sight.</summary>
     protected void ChooseAt(int index)
     {
@@ -176,7 +179,7 @@ public abstract class SearchPopup<T> : UserControl, IAnswers<T?>
 
     private void OnQueryKeyDown(object? sender, KeyEventArgs e)
     {
-        if (ListKeys.Move(results, e))
+        if (ListKeys.Move(results, e) || TakesKey(e))
         {
             e.Handled = true;
             return;

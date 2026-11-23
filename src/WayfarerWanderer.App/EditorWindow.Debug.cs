@@ -52,6 +52,7 @@ public sealed partial class EditorWindow
         SourcePath = path;
         ShowBlameOf(source);
         Breakpoints.Select(path);
+        SwitcherFollowsFile(source);
         Title = $"Wayfarer Wanderer - {path}";
         Visited(path, source.Document, opened);
     }
