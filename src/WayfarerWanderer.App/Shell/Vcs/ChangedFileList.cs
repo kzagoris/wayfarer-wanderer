@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Vcs/ChangedFileList.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Vcs/ChangedFileList.cs, MIT (notices/Passenger/LICENSE).
 using System.Collections.ObjectModel;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -44,11 +44,11 @@ public sealed class ChangedFileList
         });
         ListMenus.Attach(List, () => Chosen is not { } change ? [] :
         [
-            ListMenus.Item("Show Diff", "Enter", () => DiffRequested?.Invoke(this, change)),
+            ListMenus.Open("Show Diff", () => DiffRequested?.Invoke(this, change)),
             .. beside?.Invoke(change) ?? [],
-            ListMenus.Item("Jump to Source", "F4", () => OpenRequested?.Invoke(this, change.Path), change.Kind is not ChangeKind.Deleted),
+            ListMenus.Source(() => OpenRequested?.Invoke(this, change.Path), change.Kind is ChangeKind.Deleted ? Refusals.FileDeleted : null),
             new Separator(),
-            ListMenus.Item("Copy Path", null, () => IdeErrors.Observe(ListMenus.CopyAsync(List, change.Path))),
+            ListMenus.Item("Copy Path", () => IdeErrors.Observe(ListMenus.CopyAsync(List, change.Path))),
         ]);
     }
 

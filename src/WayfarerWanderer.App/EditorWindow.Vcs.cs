@@ -26,7 +26,7 @@ public sealed partial class EditorWindow
     private FileSystemWatcher? workingTree;
     private Timer? treeQuiet;
     private readonly TextBlock statusText = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-    private readonly Button branchButton = new() { Classes = { StyleClasses.StatusItem }, IsVisible = false };
+    private readonly GitBranchWidget branchButton = new();
 
     /// <summary>The open folder's Git: in no working tree until a folder in one opens.</summary>
     public VcsController Vcs { get; } = new();
@@ -48,7 +48,7 @@ public sealed partial class EditorWindow
     /// opens the branches, and the shown file's widgets.</summary>
     private Control StatusLine()
     {
-        branchButton.Click += (_, _) => ShowAllBranches();
+        branchButton.Click += (_, _) => IdeErrors.Observe(ShowBranchPopupAsync());
         statusText.Classes.Add(StyleClasses.Status);
         return StatusBar();
     }
@@ -115,6 +115,7 @@ public sealed partial class EditorWindow
         view.IgnoreRequested += (_, path) => IdeErrors.Observe(IgnoreAsync(path));
         view.ResolveRequested += (_, _) => ShowConflicts();
         view.MergeRequested += (_, path) => IdeErrors.Observe(MergeAsync(path));
+        view.StageRequested += (_, asked) => IdeErrors.Observe(StageFilesAsync(asked.Changes, asked.Stage));
         view.Confirm = (title, text, yes) => new ConfirmDialog(title, text, yes).ShowDialog<bool>(this);
         return view;
     }
@@ -126,7 +127,8 @@ public sealed partial class EditorWindow
         view.DiffRequested += (_, chosen) => IdeErrors.Observe(ShowCommitDiffAsync(chosen.Commit, chosen.File));
         view.CompareRequested += (_, chosen) => IdeErrors.Observe(CompareWithAsync(chosen.Local, chosen.Commit.Hash, chosen.Commit.Short, chosen.File.Path));
         view.WorkingTreeDiffRequested += (_, chosen) =>
-            IdeErrors.Observe(CompareWithAsync(chosen.File.Path, chosen.Branch.Ref.FullName, chosen.Branch.Name, chosen.File.From ?? chosen.File.Path));
+            IdeErrors.Observe(CompareWithAsync(chosen.File.Path, chosen.Branch.Ref.FullName, chosen.Branch.Name, chosen.File.From ?? chosen.File.Path,
+                added: chosen.File.Kind == ChangeKind.Added));
         view.OpenRequested += (_, path) => OpenFromExplorer(path);
         view.ActionRequested += (_, action) => Actions.TryExecute(action);
         view.NewBranchRequested += (_, commit) =>
@@ -167,11 +169,20 @@ public sealed partial class EditorWindow
     private bool vcsClosed;
 
     /// <summary>The branch in the status line, the change bars and the Explorer follow what Git read.</summary>
-    private void OnVcsChanged()
+    private void OnVcsChanged() => branchButton.Show(Vcs);
+
+    /// <summary>The branch the status bar shows, null while it shows none (outside a working tree).</summary>
+    public string? BranchShown => branchButton.Shown;
+
+    /// <summary>The status bar's branch popup: what is done next, then the local branches, each with its own menu.</summary>
+    private async Task ShowBranchPopupAsync()
     {
-        branchButton.IsVisible = Vcs.Repository is not null;
-        branchButton.Content = Vcs.Branch ?? "Detached HEAD";
-        ToolTip.SetTip(branchButton, Vcs.Repository is null ? Vcs.Refused ?? "Version control" : $"Git branch: {Vcs.Branch ?? "Detached HEAD"}");
+        ActionContext context = Actions.Registry.Context();
+        BranchesPanel? branches = GitWindow.Log.Branches;
+        IReadOnlyList<Control> items = await GitBranchWidget.PopupAsync(Vcs, action => FlyoutEntry(new MenuEntry(action), context),
+            () => Ask(ClosingAsking(new NamePopup("Create New Branch", string.Empty, async name => (await Vcs.NewBranchAsync(name)).Problem))),
+            ShowAllBranches, branch => branches?.Menu(branch) ?? [], branches?.Favorites ?? new GitBranchesState());
+        ShowOver(branchButton, items);
     }
 
     // Watching the folder: what changes on disk (a build, a terminal's commit) is read again once it pauses.
@@ -276,7 +287,27 @@ public sealed partial class EditorWindow
         Add(AppActions.Unstash, "Unstash Changes…", () => IdeErrors.Observe(ShowUnstashAsync()));
         Add(AppActions.ShowDiff, "Show Diff", () => IdeErrors.Observe(ShowDiffAsync(SourcePath!)), onFile: true);
         Add(AppActions.Annotate, "Annotate with Git Blame", () => IdeErrors.Observe(ToggleAnnotationsAsync()), onFile: true);
-        Add(AppActions.RollbackLines, "Rollback Lines", () => IdeErrors.Observe(RollbackLinesAsync()), onFile: true);
+        // In a diff, the change at the caret of the side with the keys, as its band's arrow puts it back.
+        Actions.Registry.Add(new IdeAction(AppActions.RollbackLines, "Rollback Lines", "Git", context =>
+            IdeErrors.Observe(DiffWithKeys(context) is { } diff ? RollBackInDiffAsync(diff) : RollbackLinesAsync()))
+        {
+            WhyNot = context => DiffWithKeys(context) is { } diff ? diff.WhyNotRollBack : WhyNotGit(onFile: true, remote: false, null),
+        });
+        // In a diff, the changes (or lines) at its carets; in the Commit window, the files chosen there.
+        Actions.Registry.Add(new IdeAction(AppActions.Stage, "Stage", "Git", context => Staging(context, stage: true))
+        {
+            WhyNot = context => WhyNotStaging(context, stage: true),
+        });
+        Actions.Registry.Add(new IdeAction(AppActions.Unstage, "Unstage", "Git", context => Staging(context, stage: false))
+        {
+            WhyNot = context => WhyNotStaging(context, stage: false),
+        });
+        // The Commit window's Group By › Directory: its files under their folders, else listed flat.
+        Actions.Registry.Add(new IdeAction(AppActions.GroupByDirectory, "Group by Directory", "Git", _ => Vcs.GroupsByDirectory = !Vcs.GroupsByDirectory)
+        {
+            WhyNot = _ => Vcs.Repository is null ? Vcs.NoRepository : null,
+            IsChecked = _ => Vcs.GroupsByDirectory,
+        });
         Add(AppActions.NextChange, "Next Change", () => GoToChange(1), onFile: true);
         Add(AppActions.PreviousChange, "Previous Change", () => GoToChange(-1), onFile: true);
         Add(AppActions.ResolveConflicts, "Resolve Conflicts…", () => ShowConflicts(), () => Vcs.Conflicts.Count == 0 ? "No files are in conflict" : null);
@@ -334,6 +365,30 @@ public sealed partial class EditorWindow
     private const string NoDiff = "No diff has the keys";
 
     private static DiffView? DiffWithKeys(ActionContext context) => (context.Focused as Visual)?.FindAncestorOfType<DiffView>(includeSelf: true);
+
+    /// <summary>Stage or Unstage: in a diff that stages, the changes at its carets (Stage's keys turning to Unstage where the
+    /// index holds them whole already, as the change's own button turns); in the Commit window, the files chosen there.</summary>
+    private void Staging(ActionContext context, bool stage)
+    {
+        if (DiffWithKeys(context) is { } diff)
+        {
+            if (diff.StageAtCarets(stage ? null : false) is { } refused)
+            {
+                StatusText = refused;
+            }
+            return;
+        }
+        IdeErrors.Observe(StageFilesAsync(CommitView.SelectedChanges, stage && !CommitView.SelectedStaged));
+    }
+
+    /// <summary>Why Stage (or Unstage) can't run: no diff that stages nor the Commit window has the keys, or nothing chosen
+    /// there can be.</summary>
+    private string? WhyNotStaging(ActionContext context, bool stage) =>
+        Session is null ? Refusals.NoFolder
+        : DiffWithKeys(context) is { } diff ? diff.Stages ? null : "Only a diff of the working tree against the last commit stages its changes"
+        : commitView is { } commit && (context.Focused as Visual)?.FindAncestorOfType<CommitView>(includeSelf: true) == commit
+            ? commit.WhyNotStage(commit.SelectedChanges, stage)
+        : $"No diff or Commit window has the keys to {(stage ? "stage" : "unstage")} what they show";
 
     private static string? WhyNotJump(DiffView diff) => diff.Source is { } file && File.Exists(file) ? null : $"{Path.GetFileName(diff.Source)} is not on disk";
 

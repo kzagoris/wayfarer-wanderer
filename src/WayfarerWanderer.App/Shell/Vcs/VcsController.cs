@@ -1,5 +1,6 @@
-// From Passenger 2044e49b src/Passenger.App/Vcs/VcsController.cs, MIT (notices/Passenger/LICENSE): without agents' calls,
-// containers' secrets or .NET's gitignore, its Git folders watched by Wayfarer's own GitWatcher.
+// From Passenger 8a1df7e4 src/Passenger.App/Vcs/VcsController.cs, MIT (notices/Passenger/LICENSE): without agents' calls,
+// containers' secrets or .NET's gitignore, its Git folders watched by Wayfarer's own GitWatcher,
+// its change bars' typing pause its own (Wayfarer has no TypingPauses).
 using WayfarerWanderer.App.Shell.Workspace;
 using Passenger.Core;
 using Passenger.Editor;
@@ -14,7 +15,8 @@ namespace WayfarerWanderer.App.Shell.Vcs;
 /// UI-thread object.</summary>
 public sealed class VcsController : IDisposable
 {
-    /// <summary>How long typing pauses before a file's change bars are worked out again.</summary>
+    /// <summary>How long typing pauses before a file's change bars are worked out again (upstream's TypingPauses.ChangeBars,
+    /// which Wayfarer has not taken).</summary>
     private static readonly TimeSpan MarksDelay = TimeSpan.FromMilliseconds(120);
 
     /// <summary>How long typing pauses before an annotated file is blamed again: a git each time, so longer.</summary>
@@ -72,15 +74,32 @@ public sealed class VcsController : IDisposable
             if (signOff != value)
             {
                 signOff = value;
-                SignOffChanged?.Invoke(this, EventArgs.Empty);
+                KeptChanged?.Invoke(this, EventArgs.Empty);
             }
         }
     }
 
     private bool signOff;
 
-    /// <summary>Raised when <see cref="SignOff"/> changes, for the folder to keep it.</summary>
-    public event EventHandler? SignOffChanged;
+    /// <summary>Whether the Commit window lists its files under their folders, as the folder keeps it (Group by
+    /// Directory).</summary>
+    public bool GroupsByDirectory
+    {
+        get => groupsByDirectory;
+        set
+        {
+            if (groupsByDirectory != value)
+            {
+                groupsByDirectory = value;
+                KeptChanged?.Invoke(this, EventArgs.Empty);
+            }
+        }
+    }
+
+    private bool groupsByDirectory;
+
+    /// <summary>Raised when <see cref="SignOff"/> or <see cref="GroupsByDirectory"/> changes, for the folder to keep them.</summary>
+    public event EventHandler? KeptChanged;
 
     /// <summary>Why git cannot read the folder's repository: it refused the one the folder is in (one another user owns,
     /// until safe.directory names it), in git's words, or it is not installed (<see cref="GitMissing"/>); null when it
@@ -253,6 +272,13 @@ public sealed class VcsController : IDisposable
     /// Rollback, Update from VCS): what it changes is kept under that name until the hold is disposed.</summary>
     public Func<string, IDisposable?>? Activity { get; set; }
 
+    /// <summary>Has Local History read the files a Git operation is about to write (a checkout's, an update's, a stash's, a
+    /// resolution's, a rollback's: <see cref="Git.Writing"/>) as they stand, so what it writes over each is kept as a change
+    /// from that, under its activity's name.</summary>
+    public Func<IReadOnlyList<string>, Task>? LookFirst { get; set; }
+
+    private Task LookedFirstAsync(IReadOnlyList<string> paths) => LookFirst?.Invoke(paths) ?? Task.CompletedTask;
+
     /// <summary>Moves the files an operation takes away that git has nothing of (a rollback's unversioned files) to the
     /// Trash, as one command of Undo named as the operation, which brings them back: each that stayed, saying why. With
     /// none, they stay, said so.</summary>
@@ -300,6 +326,10 @@ public sealed class VcsController : IDisposable
     private void Take(string folder, GitLookup found)
     {
         git = found.Tree;
+        if (git is not null)
+        {
+            git.Writing = LookedFirstAsync;
+        }
         Refused = found.Refused;
         GitMissing = found.Missing;
         lookIn = folder;
@@ -902,13 +932,13 @@ public sealed class VcsController : IDisposable
         : message.Trim().Length == 0 ? Refusals.EmptyCommitMessage
         : null;
 
-    /// <summary>Commits the chosen files with a message, signed as <paramref name="signing"/> says (as git's config says
-    /// where it is null), a key's passphrase asked in the window, then pushes when asked (the remote asked for as
-    /// <see cref="PushAsync"/> asks): the commit's outcome with the commit made, and the push's. A commit not signed says
-    /// why. Given <paramref name="movesFirst"/>, the moves of the files chosen whole are a commit of their own first, with
-    /// that message (<see cref="Git.CommitMovesAsync"/>), unless amending or finishing a merge.</summary>
+    /// <summary>Commits the chosen files (what git's index holds, <paramref name="staged"/>) with a message, signed as
+    /// <paramref name="signing"/> says (as git's config says where it is null), then pushes when asked (as <see cref="PushAsync"/>
+    /// asks): the commit's outcome with the commit made, and the push's. A commit not signed says why. Given
+    /// <paramref name="movesFirst"/>, the moves of the files chosen whole are a commit of their own first, with that message
+    /// (<see cref="Git.CommitMovesAsync"/>), unless amending or finishing a merge.</summary>
     public async Task<CommitResult> CommitAsync(IReadOnlyList<FileChange> chosen, string message, bool amend, bool push, bool ask = true, CommitSigning? signing = null,
-        IReadOnlyDictionary<string, PartialCommit>? partial = null, string? movesFirst = null)
+        IReadOnlyDictionary<string, PartialCommit>? partial = null, string? movesFirst = null, bool staged = false)
     {
         UiThread.Check();
         if (git is not { } repository)
@@ -935,7 +965,7 @@ public sealed class VcsController : IDisposable
             string[] excluded = merging ? [.. Paths(Changes.Where(c => c.Kind is not ChangeKind.Unversioned && !chosen.Contains(c)))] : [];
             (Signer signer, SigningSetup setup) = await SignerAsync(repository, signing ?? CommitSigning.AsConfigured);
             CommitSigning given = signer.Signing;
-            List<(string From, string To)> moved = movesFirst is null || amend || merging ? [] : [.. Moves(chosen, partial)];
+            List<(string From, string To)> moved = movesFirst is null || amend || merging || staged ? [] : [.. Moves(chosen, partial)];
             CommitInfo? first = null;
             if (moved.Count > 0)
             {
@@ -949,7 +979,9 @@ public sealed class VcsController : IDisposable
                 // The last commit has them where they went now, and their old names no more.
                 paths = [.. paths.Except(moved.Select(m => m.From), PathNames.Comparer)];
             }
-            if (Failed(await repository.CommitAsync(paths, message, amend, merging, excluded, given, signer.Asker, partial), given, setup) is { } unmade)
+            GitResult commit = staged ? await repository.CommitIndexAsync(message, amend, given, signer.Asker)
+                : await repository.CommitAsync(paths, message, amend, merging, excluded, given, signer.Asker, partial);
+            if (Failed(commit, given, setup) is { } unmade)
             {
                 VcsOutcome failed = Report(false, first is null ? unmade : $"The moves were committed as {first.Short}, but not the rest: {unmade}");
                 await RefreshAsync();
@@ -961,7 +993,7 @@ public sealed class VcsController : IDisposable
             {
                 0 => "Committed",
                 1 => "1 file committed",
-                _ => $"{count} files committed",
+                _ => $"{Numbers.Said(count)} files committed",
             };
             if (moved.Count > 0)
             {
@@ -1012,7 +1044,8 @@ public sealed class VcsController : IDisposable
     }
 
     /// <summary>Push: the branch to the one it tracks, or where it tracks none, to the only remote or the one of several
-    /// the person chooses (<see cref="ChooseRemote"/>, never asked of an agent: <paramref name="ask"/> false).</summary>
+    /// the person chooses (<see cref="ChooseRemote"/>, never asked of an agent: <paramref name="ask"/> false). Its work
+    /// begins before anything is asked of git, so an agent's action hears where it went or why it did not.</summary>
     public async Task<VcsOutcome> PushAsync(bool ask = true)
     {
         UiThread.Check();
@@ -1024,6 +1057,11 @@ public sealed class VcsController : IDisposable
         {
             return Report(false, untrusted);
         }
+        if (!Begin(AppActions.Push, $"Pushing {Branch}…", out Working? work, stoppable: true))
+        {
+            return Report(false, UnderWay(AppActions.Push));
+        }
+        using Working? held = work;
         string? remote = null;
         if (!await repository.TracksAsync())
         {
@@ -1037,11 +1075,6 @@ public sealed class VcsController : IDisposable
                 return Report(false, refused);
             }
         }
-        if (!Begin(AppActions.Push, $"Pushing {Branch}…", out Working? work, stoppable: true))
-        {
-            return Report(false, UnderWay(AppActions.Push));
-        }
-        using Working? held = work;
         if (await RemoteAsync(work, (stopping, asker) => repository.PushAsync(remote, stopping, asker)) is not { } pushed)
         {
             return Report(false, "Push stopped");
@@ -1068,7 +1101,7 @@ public sealed class VcsController : IDisposable
         }
         if (!ask || ChooseRemote is not { } choose)
         {
-            return (null, $"{branch} tracks no remote's branch, and there are {remotes.Count} remotes to push it to ({string.Join(", ", remotes)}): Push… in the window asks which");
+            return (null, $"{branch} tracks no remote's branch, and there are {Numbers.Said(remotes.Count)} remotes to push it to ({string.Join(", ", remotes)}): Push… in the window asks which");
         }
         return await choose(branch, remotes) is { } chosen ? (chosen, null) : (null, $"{branch} was not pushed: no remote was chosen");
     }
@@ -1358,11 +1391,10 @@ public sealed class VcsController : IDisposable
     }
 
     /// <summary>The allowed signers file Commit Signing… lists the person's key in where it sets signing up for all their
-    /// repositories: git's own folder in the person's config folder (XDG_CONFIG_HOME, else ~/.config).</summary>
-    public static string GlobalAllowedSigners => Path.Combine(
-        Environment.GetEnvironmentVariable("XDG_CONFIG_HOME") is { Length: > 0 } config && Path.IsPathRooted(config) ? config
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config"),
-        "git", "allowed_signers");
+    /// repositories: git's own folder in the person's config folder (XDG_CONFIG_HOME, else ~/.config); null where the person
+    /// has no home to find it in.</summary>
+    public static string? GlobalAllowedSigners =>
+        XdgFolders.Config(XdgFolders.Own) is { } config ? Path.Combine(config, "git", "allowed_signers") : null;
 
     /// <summary>Who answers git through <paramref name="ask"/>: this build's own executable, run by git as its helper, asking
     /// over a socket in the state's socket folder; null where that folder cannot be had, when git asks nobody.</summary>
@@ -1601,6 +1633,105 @@ public sealed class VcsController : IDisposable
     public Task<VcsOutcome> DropStashAsync(StashInfo stash) =>
         SwitchAsync(repository => repository.DropStashAsync(stash), $"Dropped {stash.Message}", "Git stash");
 
+    /// <summary>Whether git's index holds changes beyond moves Passenger keeps there, staged by the person or another of
+    /// git's tools: a commit then takes what the index holds, the Commit window listing those changes apart. Never while
+    /// a merge's commit, which takes files whole, is under way.</summary>
+    public bool HoldsStaged => !Merge.CommitsWhole && Changes.Any(c => c.HoldsStaged);
+
+    /// <summary>Why files cannot be staged or unstaged: none chosen, one in conflict (resolved first), or a folder of no
+    /// repository.</summary>
+    public string? WhyNotStage(IReadOnlyList<FileChange> changes) =>
+        git is null ? NoRepository
+        : changes.Count == 0 ? "No changed file is chosen"
+        : changes.FirstOrDefault(c => c.Kind is ChangeKind.Conflicted) is { } conflicted ? $"{conflicted.Name} is in conflict: resolve it first"
+        : null;
+
+    /// <summary>Stages files whole (<see cref="Git.StageAsync"/>), or unstages them (<see cref="Git.UnstageAsync"/>), a
+    /// rename's old name with it, every open file saved first, then reads the status again.</summary>
+    public Task<VcsOutcome> StageAsync(IReadOnlyList<FileChange> changes, bool stage) =>
+        IndexChangeAsync(stage, repository =>
+        {
+            string[] paths = [.. changes.SelectMany(c => c.From is { } from ? new[] { c.Path, from } : [c.Path])];
+            return stage ? repository.StageAsync(paths) : repository.UnstageAsync(paths);
+        }, Plural.Of(changes.Count, "file"));
+
+    /// <summary>Stages some of a file's changes (<see cref="Git.StageChangesAsync"/>), then reads the status again.</summary>
+    public Task<VcsOutcome> StageChangesAsync(string path, PartialCommit chosen) =>
+        IndexChangeAsync(stage: true, repository => repository.StageChangesAsync(path, chosen), $"{Said(chosen.Diff, chosen.Hunks)} of {Path.GetFileName(path)}");
+
+    /// <summary>Unstages some of a file's changes, by their lines in the last commit (<see cref="Git.UnstageChangesAsync"/>),
+    /// then reads the status again.</summary>
+    public Task<VcsOutcome> UnstageChangesAsync(FileChange change, FileDiff diff, IReadOnlyList<DiffHunk> changes) =>
+        IndexChangeAsync(stage: false, repository => repository.UnstageChangesAsync(change.Path, change.From, changes), $"{Said(diff, changes)} of {change.Name}");
+
+    /// <summary>Changes of a diff as a person names them: "change 2", "2 changes", or "3 lines" where some are parts of one.</summary>
+    public static string Said(FileDiff diff, IReadOnlyList<DiffHunk> changes) =>
+        changes.All(diff.Hunks.Contains) ? changes.Count == 1 ? $"change {diff.Hunks.ToList().IndexOf(changes[0]) + 1}" : Plural.Of(changes.Count, "change")
+        : Plural.Of(changes.Sum(c => Math.Max(c.OldCount, c.NewCount)), "line");
+
+    private async Task<VcsOutcome> IndexChangeAsync(bool stage, Func<Git, Task<GitResult>> change, string what)
+    {
+        UiThread.Check();
+        if (git is not { } repository)
+        {
+            return Report(false, NoRepository);
+        }
+        return await OneAtATimeAsync(async () =>
+        {
+            // Staged as the editor shows it.
+            if (await SavedFirstAsync() is { } unsaved)
+            {
+                return Report(false, unsaved);
+            }
+            GitResult changed = await change(repository);
+            await RefreshAsync();
+            return changed.Succeeded ? Report(true, $"{(stage ? "Staged" : "Unstaged")} {what}")
+                : Report(false, $"{what} could not be {(stage ? "staged" : "unstaged")}: {changed.Message}");
+        }, refused => refused);
+    }
+
+    /// <summary>What git's index holds at each path (its mode and blob, or none), for putting it back as it was.</summary>
+    public async Task<IReadOnlyList<(string Path, (string Mode, string Blob)? Entry)>> IndexEntriesAsync(IReadOnlyList<string> paths)
+    {
+        List<(string, (string, string)?)> entries = [];
+        if (git is { } repository)
+        {
+            foreach (string path in paths.Distinct(PathNames.Comparer))
+            {
+                entries.Add((path, await repository.IndexEntryAsync(path)));
+            }
+        }
+        return entries;
+    }
+
+    /// <summary>Puts git's index's entries back as <paramref name="entries"/> has them, then reads the status again: null
+    /// once put, else why not.</summary>
+    public async Task<string?> PutIndexEntriesAsync(IReadOnlyList<(string Path, (string Mode, string Blob)? Entry)> entries)
+    {
+        UiThread.Check();
+        if (git is not { } repository)
+        {
+            return NoRepository;
+        }
+        VcsOutcome put = await OneAtATimeAsync(async () =>
+        {
+            foreach ((string path, (string Mode, string Blob)? entry) in entries)
+            {
+                if (await repository.PutIndexEntryAsync(path, entry) is { Succeeded: false } refused)
+                {
+                    await RefreshAsync();
+                    return new VcsOutcome(false, refused.Message);
+                }
+            }
+            await RefreshAsync();
+            return new VcsOutcome(true, string.Empty);
+        }, refused => refused);
+        return put.Succeeded ? null : put.Message;
+    }
+
+    /// <summary>A file's text as git's index holds it, read as checking it out would write it, or null where it holds none.</summary>
+    public async Task<string?> IndexTextAsync(string path) => (await VersionAsync(string.Empty, path, path))?.Text;
+
     /// <summary>Puts files back as the last commit has them, the unversioned ones moved to the Trash once git has put
     /// back the rest (<see cref="MoveToTrash"/>); the open ones take their text from disk again.</summary>
     public async Task<VcsOutcome> RollbackAsync(IReadOnlyList<FileChange> changes)
@@ -1749,6 +1880,7 @@ public sealed class VcsController : IDisposable
             {
                 return Report(false, unsaved);
             }
+            using IDisposable? named = Activity?.Invoke(yours ? "Accept Yours" : "Accept Theirs");
             GitResult accepted = await repository.AcceptAsync(conflicts, theirs);
             ReloadOpenFiles();
             await RefreshAsync();
@@ -1812,6 +1944,7 @@ public sealed class VcsController : IDisposable
             {
                 return Report(false, unsaved);
             }
+            using IDisposable? named = Activity?.Invoke("Resolve Conflict");
             try
             {
                 if (InConflict(path) is { } before)
@@ -1840,15 +1973,10 @@ public sealed class VcsController : IDisposable
     public async Task<VcsOutcome> AbortAsync()
     {
         MergeOperation operation = Merge.Operation;
-        if (operation is MergeOperation.None)
+        if (operation.Command() is not { } name)
         {
             return Report(false, "Nothing is under way to abort");
         }
-        string name = operation switch
-        {
-            MergeOperation.CherryPick => "cherry-pick",
-            _ => operation.ToString().ToLowerInvariant(),
-        };
         string id = operation switch
         {
             MergeOperation.Rebase => AppActions.AbortRebase,
@@ -1915,6 +2043,35 @@ public sealed class VcsController : IDisposable
         }
         return read.Version;
     }
+
+    /// <summary>Whether git stores a file's lines alike whichever of LF and CRLF ends them, as it stores the last commit's
+    /// (<see cref="Git.BreaksStoredAlikeAsync"/>): asked once of the last commit's text as read, until HEAD moves or the
+    /// open file's encoding changes, never of an edit.</summary>
+    public async Task<bool> BreaksStoredAlikeAsync(string path)
+    {
+        UiThread.Check();
+        Task<FileVersion?> version = HeadAsync(path);
+        if (git is not { } repository || !heads.TryGetValue(path, out HeadBytes? head))
+        {
+            return false;
+        }
+        if (head.Breaks is not { } asked || asked.Of != version)
+        {
+            head.Breaks = asked = (version, BreaksStoredAlikeAsync(repository, textsOf ?? "HEAD", [path, Origin(path)], path, version));
+        }
+        return await asked.Alike;
+    }
+
+    /// <summary>Whether git stores a file's lines alike whichever of LF and CRLF ends them, as it stores a revision's
+    /// <paramref name="version"/> of it, which it has at <paramref name="stored"/>.</summary>
+    public async Task<bool> BreaksStoredAlikeAsync(string revision, string stored, FileVersion version, string path)
+    {
+        UiThread.Check();
+        return git is { } repository && await BreaksStoredAlikeAsync(repository, revision, [stored], path, Task.FromResult<FileVersion?>(version));
+    }
+
+    private static async Task<bool> BreaksStoredAlikeAsync(Git repository, string revision, IReadOnlyList<string> paths, string path, Task<FileVersion?> version) =>
+        await version is { Stored: { } text } && await repository.BreaksStoredAlikeAsync(revision, paths, path, text);
 
     /// <summary>How a file's bytes differ from the last commit's where either is binary, which have no lines to compare;
     /// null where both are text, or the file is in neither. The disk's are read as they come, and a binary file's in the
@@ -2169,6 +2326,9 @@ public sealed class VcsController : IDisposable
     {
         public Task<StoredBytes?> Bytes { get; } = bytes;
         public (System.Text.Encoding? In, Task<FileVersion?> Version)? Read { get; set; }
+
+        /// <summary>Whether git stores the file's lines alike whichever of LF and CRLF ends them, asked of the version read.</summary>
+        public (Task<FileVersion?> Of, Task<bool> Alike)? Breaks { get; set; }
     }
 }
 

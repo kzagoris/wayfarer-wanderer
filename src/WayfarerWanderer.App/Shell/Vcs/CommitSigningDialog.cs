@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Vcs/CommitSigningDialog.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Vcs/CommitSigningDialog.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -25,10 +25,10 @@ public sealed class CommitSigningDialog : IdeWindow
     private readonly RadioButton everywhere;
     private readonly CheckBox every;
     private readonly TextBlock listed;
-    private readonly string globalSigners;
+    private readonly string? globalSigners;
     private int finding;
 
-    public CommitSigningDialog(SigningSetup setup, Git? repository, string globalSigners)
+    public CommitSigningDialog(SigningSetup setup, Git? repository, string? globalSigners)
     {
         FormRows.Scope(this);
         this.repository = repository;
@@ -37,13 +37,15 @@ public sealed class CommitSigningDialog : IdeWindow
         ssh = Radio("format", "SSH key", !configured || setup.Format is SigningFormat.Ssh);
         gpg = Radio("format", "GPG key", configured && setup.Format is SigningFormat.OpenPgp);
         x509 = Radio("format", "X.509 certificate", configured && setup.Format is SigningFormat.X509);
-        key = new TextBox { Name = "SigningKey", Classes = { StyleClasses.Search }, Text = setup.Key ?? string.Empty };
-        found = new WrapPanel { ItemSpacing = 12, Margin = new Thickness(0, 6, 0, 0) };
+        key = new TextBox { Name = "SigningKey", Text = setup.Key ?? string.Empty };
+        found = new WrapPanel { ItemSpacing = Gaps.Wide, Margin = new Thickness(0, Gaps.Small, 0, 0) };
         foundNone = MutedText.Of(string.Empty);
         foundNone.TextWrapping = TextWrapping.Wrap;
-        foundNone.Margin = new Thickness(0, 6, 0, 0);
-        here = Radio("scope", "This repository", setup.KeyScope is not "global");
-        everywhere = Radio("scope", "All your repositories (your global git config)", setup.KeyScope is "global");
+        foundNone.Margin = new Thickness(0, Gaps.Small, 0, 0);
+        // With no home to find git's own folder in, there is no global allowed signers file to list the key in.
+        here = Radio("scope", "This repository", setup.KeyScope is not "global" || globalSigners is null);
+        everywhere = Radio("scope", "All your repositories (your global git config)", setup.KeyScope is "global" && globalSigners is not null);
+        everywhere.IsEnabled = globalSigners is not null;
         every = new CheckBox { Content = $"Sign every commit ({GitConfigKeys.CommitGpgSign})", IsChecked = setup.Signs || !configured };
         listed = MutedText.Of(string.Empty);
         listed.TextWrapping = TextWrapping.Wrap;
@@ -63,12 +65,12 @@ public sealed class CommitSigningDialog : IdeWindow
 
         StackPanel fields = new()
         {
-            Spacing = 10,
+            Spacing = FormRows.Between,
             Children =
             {
-                FormRows.Of("Sign with:", new StackPanel { Orientation = Orientation.Horizontal, Spacing = 16, Children = { ssh, gpg, x509 } }),
-                new StackPanel { Children = { FormRows.Of("Key:", key), FormRows.Of(null, found), FormRows.Of(null, foundNone) } },
-                FormRows.Of("Set in:", new StackPanel { Spacing = 6, Children = { here, everywhere } }, top: true),
+                FormRows.Of("Sign with", new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gaps.Group, Children = { ssh, gpg, x509 } }),
+                new StackPanel { Children = { FormRows.Of("Key", key), FormRows.Of(null, found), FormRows.Of(null, foundNone) } },
+                FormRows.Of("Set in", new StackPanel { Spacing = Gaps.Small, Children = { here, everywhere } }, top: true),
                 FormRows.Of(null, every),
             },
         };

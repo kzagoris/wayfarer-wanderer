@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Vcs/DiffView.cs, MIT (notices/Passenger/LICENSE): without Find, which Wayfarer's editor has not yet.
+// From Passenger 8a1df7e4 src/Passenger.App/Vcs/DiffView.cs, MIT (notices/Passenger/LICENSE): without Find, which Wayfarer's editor has not yet.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -13,10 +13,11 @@ namespace WayfarerWanderer.App.Shell.Vcs;
 /// <summary>The side-by-side diff: the last commit's text on the left (read-only), the file as it is on the right (the
 /// open file's own text, so an edit there is an edit to it), each change tinted on both sides and joined by a band
 /// between them, the words that changed inside its lines marked stronger, the two kept level as either scrolls. A band's
-/// arrow puts that change back; F7 and Shift+F7 (F8 and Shift+F8 too off the Mac) go to the next and previous one; F4 asks
-/// for its file at the caret's line (Jump to Source); Settings (its keys <see cref="AppActions.DiffSettings"/>'s) chooses
-/// how differences are highlighted, by words at first.
-/// Made by <see cref="DiffPanes"/>.</summary>
+/// arrow puts that change back in the open file's text, or writes it to a file not open, as Rollback Lines does to the
+/// change at the caret (<see cref="RollBackAtCaretAsync"/>); F7 and Shift+F7 (F8 and Shift+F8 too off the Mac) go to the
+/// next and previous one; F4 asks for its file at the caret's line (Jump to Source); Settings (its keys
+/// <see cref="AppActions.DiffSettings"/>'s) chooses how differences are highlighted, by words at first; Find searches the
+/// side with the caret (<see cref="ShowFind"/>). Made by <see cref="DiffPanes"/>.</summary>
 public sealed class DiffView : DockPanel, IOwnKeys
 {
     /// <summary>How long editing pauses before the differences are worked out again.</summary>
@@ -28,7 +29,7 @@ public sealed class DiffView : DockPanel, IOwnKeys
     private readonly Canvas hunkBoxes = new() { Width = 28, ClipToBounds = true, IsVisible = false };
     private readonly List<int> boxedHunks = [];
     private bool[] hunksTaken = [];
-    private Func<FileDiff, bool[]>? hunksChosen;
+    private Func<FileDiff, bool[]?>? hunksChosen;
     private Action<FileDiff, int, bool>? chooseHunk;
     private bool settingHunkBoxes;
 
@@ -58,6 +59,7 @@ public sealed class DiffView : DockPanel, IOwnKeys
     public DiffView(string name, FileDiff diff, TextDocument mine, bool editable, (string Left, string Right)? titles = null,
         DiffHighlighting highlighting = DiffHighlighting.Words)
     {
+        Subject = name;
         shown = diff;
         this.highlighting = highlighting;
         IsEditable = editable;
@@ -66,10 +68,24 @@ public sealed class DiffView : DockPanel, IOwnKeys
         Left.Show(head, SelectionSet.Single(0), default);
         Right = new CodeEditor { IsReadOnly = !editable, ChangeBackgrounds = true };
         Right.Show(mine, SelectionSet.Single(0), default);
-        bands = new DiffStrip(Bands, MergeSide.Left, Left, () => IsEditable, ignores: false, (band, _, _) => Revert(Hunks[band.Index])) { Width = 36 };
+        DiffSigns.Give(Left);
+        DiffSigns.Give(Right);
+        named = (titles?.Left ?? "HEAD", titles?.Right ?? (editable ? "Your version" : "Your version (read-only)"));
+        bands = new DiffStrip(Bands, MergeSide.Left, Left, () => RollsBack, ignores: false,
+            (band, stage) => (stage ? $"{(HeldAt(band.Index) == true ? "Unstage" : "Stage")} change {band.Index + 1}" : $"Roll back change {band.Index + 1} to {named.Left}", null),
+            (band, stage, _) =>
+            {
+                if (!stage)
+                {
+                    Revert(Hunks[band.Index]);
+                }
+                else if (HeldAt(band.Index) is { } held)
+                {
+                    StageRequested?.Invoke(this, ([Hunks[band.Index]], !held));
+                }
+            }, AppActions.RollbackLines, band => HeldAt(band.Index), AppActions.Stage) { Width = 36 };
 
         Grid sides = new() { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,*"), RowDefinitions = new RowDefinitions("Auto,*") };
-        named = (titles?.Left ?? "HEAD", titles?.Right ?? (editable ? "Your version" : "Your version (read-only)"));
         Left.ReadOnlyWhy = Refusals.ReadOnly(named.Left);
         Right.ReadOnlyWhy = editable ? null : Refusals.ReadOnly(named.Right);
         sides.Children.Add(DiffLines.Title(named.Left, 0));
@@ -90,7 +106,7 @@ public sealed class DiffView : DockPanel, IOwnKeys
         count = new TextBlock();
         settings = ToolButtons.Of(AppActions.DiffSettings, IconKeys.Settings, "Settings", _ => ShowSettings());
         settings.ContextMenu = SettingsMenu();
-        Button jump = ToolButtons.Of(IconKeys.Edit, "Jump to Source (F4)", AskForSource);
+        Button jump = ToolButtons.Of(IconKeys.Edit, ActionTips.Named("Jump to Source", KeyWords.Of(ListKeys.SourceKey)), AskForSource);
         jump.Name = AppActions.DiffJumpToSource;
         Children.Add(DiffLines.Bar(name, Step, count, [jump], settings));
         Children.Add(sides);
@@ -142,12 +158,12 @@ public sealed class DiffView : DockPanel, IOwnKeys
     }
 
     /// <summary>A box beside each change for whether it goes into the next commit: <paramref name="chosen"/> asked once for
-    /// each diff shown and each change of the choice, <paramref name="choose"/> told of a box the person turns.</summary>
-    public void ChooseForCommit(Func<FileDiff, bool[]> chosen, Action<FileDiff, int, bool> choose)
+    /// each diff shown and each change of the choice, null while no change is chosen apart (the boxes hidden),
+    /// <paramref name="choose"/> told of a box the person turns.</summary>
+    public void ChooseForCommit(Func<FileDiff, bool[]?> chosen, Action<FileDiff, int, bool> choose)
     {
         hunksChosen = chosen;
         chooseHunk = choose;
-        hunkBoxes.IsVisible = true;
         RefreshCommitChoices();
     }
 
@@ -158,8 +174,124 @@ public sealed class DiffView : DockPanel, IOwnKeys
         {
             return;
         }
-        hunksTaken = hunksChosen(shown);
+        bool[]? taken = hunksChosen(shown);
+        hunkBoxes.IsVisible = taken is not null;
+        hunksTaken = taken ?? [];
         PlaceHunkBoxes();
+    }
+
+    /// <summary>A stage button beside each change, a plus that stages it and a minus that unstages it as git's index holds
+    /// it whole: <paramref name="held"/> asked which changes of each diff shown the index holds whole (null where it can't
+    /// say), again on <see cref="RefreshStaged"/>.</summary>
+    public void StageWith(Func<FileDiff, Task<bool[]?>> held)
+    {
+        heldIn = held;
+        RefreshStaged();
+    }
+
+    private Func<FileDiff, Task<bool[]?>>? heldIn;
+    private (FileDiff Of, bool[] Held)? staged;
+    private int stagings;
+
+    /// <summary>Whether the diff stages its changes (<see cref="StageWith"/>).</summary>
+    public bool Stages => heldIn is not null;
+
+    /// <summary>Asks again which changes git's index holds, after it changed.</summary>
+    public void RefreshStaged() => IdeErrors.Observe(AskStagedAsync());
+
+    private async Task AskStagedAsync()
+    {
+        if (heldIn is null)
+        {
+            return;
+        }
+        FileDiff of = shown;
+        int generation = ++stagings;
+        bool[]? held = await heldIn(of);
+        if (generation == stagings && ReferenceEquals(of, shown))
+        {
+            staged = held is null ? null : (of, held);
+            bands.Refresh();
+            StagedShown?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>Which changes git's index holds, worked out for the differences shown.</summary>
+    public event EventHandler? StagedShown;
+
+    /// <summary>Whether git's index holds a change of the differences shown whole; null while that is not known (or the diff
+    /// stages nothing).</summary>
+    public bool? HeldAt(int index) => staged is { } known && ReferenceEquals(known.Of, shown) && index < known.Held.Length ? known.Held[index] : null;
+
+    /// <summary>Changes to stage (true) or unstage, by a change's stage button or Stage's keys.</summary>
+    public event EventHandler<(IReadOnlyList<DiffHunk> Changes, bool Stage)>? StageRequested;
+
+    /// <summary>The changes the side with the keys has its selections over (the file's side unless the last commit's has
+    /// them), each change a selection's lines touch, else the one at its caret, as the differences stand.</summary>
+    public IReadOnlyList<DiffHunk> ChangesAtCarets()
+    {
+        bool head = Left.IsKeyboardFocusWithin;
+        CodeEditor side = head ? Left : Right;
+        TextSnapshot text = side.Document.Snapshot;
+        HashSet<DiffHunk> found = [];
+        foreach (Selection selection in side.Selections.Items)
+        {
+            int first = text.GetLineFromOffset(selection.Start);
+            int last = Math.Max(first, text.GetLineFromOffset(selection.End) - (selection.End > selection.Start && text.GetLineStart(text.GetLineFromOffset(selection.End)) == selection.End ? 1 : 0));
+            for (int line = first; line <= last; line++)
+            {
+                if ((head ? shown.HeadHunkAt(line) : shown.HunkAt(line)) is { } hunk)
+                {
+                    found.Add(hunk);
+                }
+            }
+        }
+        return [.. Hunks.Where(found.Contains)];
+    }
+
+    /// <summary>What Stage takes at the carets of the side with the keys: the lines a selection spans, each its own part of
+    /// a change (<see cref="PartialCommit.LinesChosen"/>), and the whole change at a caret with nothing selected.</summary>
+    public IReadOnlyList<DiffHunk> ChosenAtCarets()
+    {
+        bool head = Left.IsKeyboardFocusWithin;
+        CodeEditor side = head ? Left : Right;
+        TextSnapshot text = side.Document.Snapshot;
+        List<(int First, int Last)> file = [];
+        List<(int First, int Last)> last = [];
+        foreach (Selection selection in side.Selections.Items)
+        {
+            int first = text.GetLineFromOffset(selection.Start);
+            if (selection.Length > 0)
+            {
+                int end = text.GetLineFromOffset(selection.End);
+                // A selection ending at a line's start takes none of that line.
+                (head ? last : file).Add((first, Math.Max(first, text.GetLineStart(end) == selection.End ? end - 1 : end)));
+            }
+            else if ((head ? shown.HeadHunkAt(first) : shown.HunkAt(first)) is { } hunk)
+            {
+                // The whole change: every line of the file it has, or for one that only deletes lines a line beside them.
+                file.Add(hunk.NewCount == 0 ? (Math.Max(0, hunk.NewStart - 1), hunk.NewStart) : (hunk.NewStart, hunk.NewStart + hunk.NewCount - 1));
+            }
+        }
+        return PartialCommit.LinesChosen(shown, file, last);
+    }
+
+    /// <summary>Asks to stage the changes or lines at the carets (<see cref="ChosenAtCarets"/>), or to unstage them where
+    /// git's index holds every change they are of whole (Stage's keys, turning as the change's own button turns): why not,
+    /// else null once asked.</summary>
+    public string? StageAtCarets(bool? stage = null)
+    {
+        if (!Stages)
+        {
+            return "Only a diff of the working tree against the last commit stages its changes";
+        }
+        if (ChosenAtCarets() is not { Count: > 0 } changes)
+        {
+            return "No change here to stage";
+        }
+        bool[] held = [.. ChangesAtCarets().Select(c => HeldAt(Hunks.ToList().IndexOf(c)) == true)];
+        StageRequested?.Invoke(this, (changes, stage ?? !(held.Length > 0 && held.All(h => h))));
+        return null;
     }
 
     /// <summary>A box beside the first line of each change in view, as the file's side scrolls: only the changes in view
@@ -190,7 +322,7 @@ public sealed class DiffView : DockPanel, IOwnKeys
                     boxedHunks.Add(index);
                 }
                 boxedHunks[used] = index;
-                Avalonia.Automation.AutomationProperties.SetName(box, $"Include change {index + 1} in commit");
+                ToolButtons.Tip(box, $"Include change {index + 1} in commit");
                 box.IsChecked = hunksTaken[index];
                 box.IsVisible = true;
                 Canvas.SetTop(box, top + ((line - box.Height) / 2));
@@ -212,7 +344,6 @@ public sealed class DiffView : DockPanel, IOwnKeys
     private CheckBox HunkBox(int slot)
     {
         CheckBox box = new() { MinHeight = 0, Height = 24 };
-        ToolTip.SetTip(box, "Include this change in commit");
         box.IsCheckedChanged += (_, _) =>
         {
             if (!settingHunkBoxes && slot < boxedHunks.Count)
@@ -234,7 +365,7 @@ public sealed class DiffView : DockPanel, IOwnKeys
     /// Shift+F7), and Jump to Source's.</summary>
     public bool TakesKey(KeyEventArgs e) => DiffLines.Step(e) != 0 || IsJump(e);
 
-    private static bool IsJump(KeyEventArgs e) => e.Key == Key.F4 && e.KeyModifiers == KeyModifiers.None;
+    private static bool IsJump(KeyEventArgs e) => e.Key == ListKeys.SourceKey && e.KeyModifiers == KeyModifiers.None;
 
     /// <summary>The file the right side is a version of, which Jump to Source opens.</summary>
     public string? Source { get; init; }
@@ -252,6 +383,49 @@ public sealed class DiffView : DockPanel, IOwnKeys
         : Right.CaretPosition;
 
     public bool IsEditable { get; }
+
+    /// <summary>Where the file's side is a copy of a file not open, how a change put back is written to the file: given the
+    /// text it was found in, the edit that puts it back and the change named ("change 2"), null once written, else why not.
+    /// Null where the file's side is the open file's own text, or a version nothing is put back to (a commit's).</summary>
+    public Func<TextSnapshot, TextEdit, string, Task<string?>>? PutsBackOnDisk
+    {
+        get => putsBackOnDisk;
+        set
+        {
+            putsBackOnDisk = value;
+            bands.Refresh();
+        }
+    }
+
+    private Func<TextSnapshot, TextEdit, string, Task<string?>>? putsBackOnDisk;
+
+    /// <summary>Whether a change can be put back: in the open file's text, or written to a file not open.</summary>
+    public bool RollsBack => IsEditable || putsBackOnDisk is not null;
+
+    /// <summary>Why no change of the diff can be put back: its file's side is a version of its own.</summary>
+    public string? WhyNotRollBack => RollsBack ? null : Refusals.ReadOnly(named.Right);
+
+    /// <summary>The copy of a file not open takes its text from disk (<paramref name="text"/>, null where it can't be read)
+    /// where that differs, after something wrote it: a change put back, its Undo, another program.</summary>
+    public void FollowDisk(string? text)
+    {
+        if (IsEditable || text is null || away is not null || text == Right.Document.Snapshot.ToString())
+        {
+            return;
+        }
+        taking = true;
+        try
+        {
+            Right.Document.SetText(text, Right.Selections);
+        }
+        finally
+        {
+            taking = false;
+        }
+    }
+
+    /// <summary>The copy is taking its text from disk, no edit of this view's.</summary>
+    private bool taking;
 
     /// <summary>The file changed from this view: typed in on its side, or a difference put back by its band.</summary>
     public event EventHandler? Edited;
@@ -288,25 +462,90 @@ public sealed class DiffView : DockPanel, IOwnKeys
     /// <summary>The differences as they stand.</summary>
     public IReadOnlyList<DiffHunk> Hunks => shown.Hunks;
 
-    /// <summary>Puts one difference back as the last commit has it (the band's arrow), unless the file was edited since
-    /// the differences were found, which may have moved it.</summary>
-    public void Revert(DiffHunk hunk)
+    /// <summary>The comparison shown, whose texts the differences are of.</summary>
+    public FileDiff Compared => shown;
+
+    /// <summary>Puts one difference back as the other side has it (the band's arrow), unless the file was edited since the
+    /// differences were found, which may have moved it (<see cref="RevertAsync"/>).</summary>
+    public void Revert(DiffHunk hunk) => IdeErrors.Observe(RevertAsync(hunk));
+
+    /// <summary>Puts one difference back as the other side has it: an edit of the open file its Undo takes back, or written to
+    /// a file not open (<see cref="PutsBackOnDisk"/>), the copy taking it. Null once put back, else why not (a version of its
+    /// own, edited since the differences were found, which may have moved it, or the write refused).</summary>
+    public async Task<string?> RevertAsync(DiffHunk hunk)
     {
-        if (!IsEditable || !ReferenceEquals(Right.Document.Snapshot, shown.Text))
+        if (WhyNotRollBack is { } readOnly)
         {
-            return;
+            return readOnly;
+        }
+        TextSnapshot compared = shown.Text;
+        if (!ReferenceEquals(Right.Document.Snapshot, compared) || !Hunks.Contains(hunk))
+        {
+            return "The file changed since its differences were found: roll the change back again";
+        }
+        TextEdit edit = shown.Restore(hunk);
+        if (!IsEditable)
+        {
+            if (await putsBackOnDisk!(compared, edit, $"change {Hunks.ToList().IndexOf(hunk) + 1}") is { } refused)
+            {
+                return refused;
+            }
+            // The copy shows what was written, unless it took the disk's text meanwhile.
+            if (!ReferenceEquals(Right.Document.Snapshot, compared))
+            {
+                return null;
+            }
         }
         reverting = true;
         try
         {
-            Right.ApplyEdits([shown.Restore(hunk)]);
+            if (IsEditable)
+            {
+                Right.ApplyEdits([edit]);
+            }
+            else
+            {
+                SelectionSet carets = Right.Selections;
+                Right.Document.Edit([edit], carets, TextEditing.MapThrough(carets, [edit]));
+            }
         }
         finally
         {
             reverting = false;
         }
-        IdeErrors.Observe(CompareAsync());
+        await CompareAsync();
+        return null;
     }
+
+    /// <summary>Rollback Lines in the diff: the change at the caret of the side with the keys (the file's, unless the last
+    /// commit's has them) put back as the other side has it, once the differences are of the file's text as it is now.
+    /// What came of it, in words.</summary>
+    public async Task<(bool RolledBack, string Said)> RollBackAtCaretAsync()
+    {
+        if (WhyNotRollBack is { } readOnly)
+        {
+            return (false, readOnly);
+        }
+        bool head = Left.IsKeyboardFocusWithin;
+        // Typed in just before, the differences shown are of an older text, whose changes may stand elsewhere now.
+        while (!ReferenceEquals(Right.Document.Snapshot, shown.Text) && away is null)
+        {
+            await CompareAsync();
+        }
+        if (away is not null)
+        {
+            return (false, "The diff was closed");
+        }
+        if ((head ? shown.HeadHunkAt(Left.CaretPosition.Line) : shown.HunkAt(Right.CaretPosition.Line)) is not { } hunk)
+        {
+            return (false, NoChangeHere);
+        }
+        int index = Hunks.ToList().IndexOf(hunk) + 1;
+        return await RevertAsync(hunk) is { } refused ? (false, refused) : (true, $"Rolled back change {index} to {named.Left}");
+    }
+
+    /// <summary>What Rollback Lines says with no change at the caret.</summary>
+    public const string NoChangeHere = "No change here to roll back";
 
     /// <summary>The next or previous difference from the right side's caret, shown on both sides.</summary>
     public void Step(int step)
@@ -325,7 +564,7 @@ public sealed class DiffView : DockPanel, IOwnKeys
     private void OnMineChanged(object? sender, DocumentChangedEventArgs e)
     {
         rediff.Restart();
-        if (reverting || Right.IsKeyboardFocusWithin)
+        if (reverting || Right.IsKeyboardFocusWithin && !taking)
         {
             Edited?.Invoke(this, EventArgs.Empty);
         }
@@ -353,13 +592,14 @@ public sealed class DiffView : DockPanel, IOwnKeys
     {
         shown = diff;
         RefreshCommitChoices();
+        RefreshStaged();
         bool off = highlighting == DiffHighlighting.None;
         Left.SetChangeMarks(off ? [] : [.. Hunks.Select(h => h.OldCount == 0 ? new ChangeMark(h.OldStart, 0, ChangeMarkKind.Added)
             : h.NewCount == 0 ? new ChangeMark(h.OldStart, h.OldCount, ChangeMarkKind.Deleted)
             : new ChangeMark(h.OldStart, h.OldCount, ChangeMarkKind.Modified))]);
         Right.SetChangeMarks(off ? [] : diff.Marks);
         Count();
-        bands.InvalidateVisual();
+        bands.Refresh();
         IdeErrors.Observe(ShowWordsAsync(diff));
         IdeErrors.Observe(ShowSeparatorsAsync(diff));
     }
@@ -380,13 +620,47 @@ public sealed class DiffView : DockPanel, IOwnKeys
     /// lines do not.</summary>
     public string Said => count.Text ?? string.Empty;
 
+    /// <summary>What is compared, as the bar names it.</summary>
+    public string Subject { get; }
+
+    /// <summary>The differences as plain text (Read as Text): what the bar says of them, then each change by where it stands
+    /// on both sides, the lines the left side has marked "-" and those the right has "+".</summary>
+    public string ChangesAsText()
+    {
+        TextSnapshot left = Left.Document.Snapshot;
+        TextSnapshot right = shown.Text;
+        System.Text.StringBuilder text = new(Said);
+        for (int i = 0; i < Hunks.Count; i++)
+        {
+            DiffHunk hunk = Hunks[i];
+            string where = hunk.OldCount == 0 ? $"{Lines(hunk.NewStart, hunk.NewCount)} of {named.Right} added"
+                : hunk.NewCount == 0 ? $"{Lines(hunk.OldStart, hunk.OldCount)} of {named.Left} removed"
+                : $"{Lines(hunk.OldStart, hunk.OldCount)} of {named.Left} changed to {Lines(hunk.NewStart, hunk.NewCount)} of {named.Right}";
+            text.Append("\n\nChange ").Append(i + 1).Append(" of ").Append(Hunks.Count).Append(": ").Append(where);
+            Append(left, hunk.OldStart, hunk.OldCount, "- ");
+            Append(right, hunk.NewStart, hunk.NewCount, "+ ");
+        }
+        return text.ToString();
+
+        static string Lines(int start, int count) => count == 1 ? $"Line {start + 1}" : $"Lines {start + 1} to {start + count}";
+
+        void Append(TextSnapshot side, int start, int count, string mark)
+        {
+            for (int line = start; line < Math.Min(start + count, side.LineCount); line++)
+            {
+                LineSpan span = side.GetLine(line);
+                text.Append('\n').Append(mark).Append(side.GetText(span.Start, span.Length));
+            }
+        }
+    }
+
     private void Count()
     {
         string lines = highlighting == DiffHighlighting.None ? "Differences highlighting is off" : Hunks.Count switch
         {
             0 => "No differences",
             1 => "1 difference",
-            _ => $"{Hunks.Count} differences",
+            _ => $"{Numbers.Said(Hunks.Count)} differences",
         };
         string[] besides = [.. new[] { separators, note }.OfType<string>()];
         count.Text = besides.Length == 0 ? lines : string.Join("; ", Hunks.Count == 0 && highlighting != DiffHighlighting.None ? besides : [lines, .. besides]);
@@ -437,12 +711,10 @@ public sealed class DiffView : DockPanel, IOwnKeys
     /// <summary>The diff's settings: Highlighting Differences, the way in use ticked.</summary>
     private ContextMenu SettingsMenu()
     {
-        List<Control> items = [new MenuItem { Header = "Highlighting Differences", IsEnabled = false }];
+        List<Control> items = [ToolWindows.ListMenus.Heading("Highlighting Differences")];
         foreach ((DiffHighlighting way, string title) in HighlightingWays)
         {
-            MenuItem item = new() { Header = title, ToggleType = MenuItemToggleType.Radio, IsChecked = way == highlighting };
-            item.Click += (_, _) => Highlighting = way;
-            items.Add(item);
+            items.Add(MenuChoice.Of(title, way == highlighting, () => Highlighting = way));
         }
         return new ContextMenu { ItemsSource = items, Placement = PlacementMode.BottomEdgeAlignedRight };
     }
@@ -454,7 +726,7 @@ public sealed class DiffView : DockPanel, IOwnKeys
     /// differences above it to the other's.</summary>
     private void Follow(CodeEditor from, CodeEditor to, bool toLeft)
     {
-        bands.InvalidateVisual();
+        bands.Refresh();
         PlaceHunkBoxes();
         if (following)
         {

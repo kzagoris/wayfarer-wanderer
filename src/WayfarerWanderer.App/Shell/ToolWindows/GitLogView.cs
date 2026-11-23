@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/ToolWindows/GitLogView.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/ToolWindows/GitLogView.cs, MIT (notices/Passenger/LICENSE).
 using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
@@ -31,8 +31,7 @@ public sealed class GitLogView : DockPanel, IOwnKeys
     private readonly TextBox details;
     private readonly TextBox filter;
     private readonly EmptyState placeholder;
-    private readonly Border branchFilter;
-    private readonly TextBlock branchFilterText;
+    private readonly FilterChip branchFilter;
     private readonly EventHandler onHistoryChanged;
     private readonly EventHandler onSignatures;
 
@@ -84,26 +83,26 @@ public sealed class GitLogView : DockPanel, IOwnKeys
         [
             .. FileChangeOf(commit) is { } change ? new Control[]
             {
-                ListMenus.Item("Show Diff", null, () => DiffRequested?.Invoke(this, (commit, change))),
-                ListMenus.Item("Compare with Local", null, () => CompareRequested?.Invoke(this, (Scope!.Path, commit, change))),
+                ListMenus.Open("Show Diff", () => DiffRequested?.Invoke(this, (commit, change))),
+                ListMenus.Item("Compare with Local", () => CompareRequested?.Invoke(this, (Scope!.Path, commit, change))),
                 new Separator(),
             } : [],
-            ListMenus.Item("Copy Revision Number", null, () => IdeErrors.Observe(ListMenus.CopyAsync(this, commit.Hash))),
+            ListMenus.Item("Copy Revision Number", () => IdeErrors.Observe(ListMenus.CopyAsync(this, commit.Hash))),
             new Separator(),
-            ListMenus.Item("Checkout Revision", null, () => IdeErrors.Observe(vcs.CheckoutRevisionAsync(commit.Hash))),
-            ListMenus.Item("New Branch…", null, () => NewBranchRequested?.Invoke(this, commit)),
+            ListMenus.Item("Checkout Revision", () => IdeErrors.Observe(vcs.CheckoutRevisionAsync(commit.Hash))),
+            ListMenus.Item("New Branch…", () => NewBranchRequested?.Invoke(this, commit)),
             new Separator(),
-            ListMenus.Item("Cherry-Pick", null, () => IdeErrors.Observe(vcs.CherryPickAsync(commit.Hash))),
-            ListMenus.Item("Revert Commit", null, () => IdeErrors.Observe(vcs.RevertAsync(commit.Hash))),
+            ListMenus.Item("Cherry-Pick", () => IdeErrors.Observe(vcs.CherryPickAsync(commit.Hash))),
+            ListMenus.Item("Revert Commit", () => IdeErrors.Observe(vcs.RevertAsync(commit.Hash))),
             ListMenus.Sub("Reset Current Branch to Here",
-                ListMenus.Item("Soft: the changes since kept staged", null, () => ResetRequested?.Invoke(this, (commit, ResetMode.Soft))),
-                ListMenus.Item("Mixed: the changes since kept in the files", null, () => ResetRequested?.Invoke(this, (commit, ResetMode.Mixed))),
-                ListMenus.Item("Hard: the changes since dropped…", null, () => ResetRequested?.Invoke(this, (commit, ResetMode.Hard)))),
+                ListMenus.Item("Soft: the changes since kept staged", () => ResetRequested?.Invoke(this, (commit, ResetMode.Soft))),
+                ListMenus.Item("Mixed: the changes since kept in the files", () => ResetRequested?.Invoke(this, (commit, ResetMode.Mixed))),
+                ListMenus.Item("Hard: the changes since dropped…", () => ResetRequested?.Invoke(this, (commit, ResetMode.Hard)))),
         ]);
         // A commit's file offers what the Commit window's changed files do.
         files = new ChangedFileList(() => vcs.Repository, change => Selected is not { } commit ? [] :
         [
-            ListMenus.Item("Compare with Local", null, () => CompareRequested?.Invoke(this, (change.Path, commit, change)), change.Kind is not ChangeKind.Deleted),
+            ListMenus.Item("Compare with Local", () => CompareRequested?.Invoke(this, (change.Path, commit, change)), change.Kind is ChangeKind.Deleted ? Refusals.DeletedByCommit : null),
         ]);
         files.DiffRequested += (_, change) =>
         {
@@ -115,39 +114,27 @@ public sealed class GitLogView : DockPanel, IOwnKeys
         files.OpenRequested += (_, path) => OpenRequested?.Invoke(this, path);
         details = new TextBox
         {
+            [Avalonia.Automation.AutomationProperties.NameProperty] = "Commit details",
             IsReadOnly = true,
             AcceptsReturn = true,
             TextWrapping = TextWrapping.Wrap,
             BorderThickness = new Thickness(0),
             Background = Brushes.Transparent,
-            Padding = new Thickness(10, 8),
-            FontSize = 12,
+            Padding = new Thickness(ListRow.TextStart, Gaps.Normal),
+            Classes = { StyleClasses.Caption },
         };
         placeholder = new EmptyState();
         placeholder.ActionRequested += (_, action) => ActionRequested?.Invoke(this, action);
 
-        filter = new TextBox { Classes = { StyleClasses.Search }, PlaceholderText = "Text or hash", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
-        ToolFlow.SetFills(filter, new ToolLayout.Fills(120, 246));
+        filter = SearchBox.Of("Filter commits");
+        filter.Margin = new Thickness(0, 0, Gaps.Small, 0);
+        ToolTip.SetTip(filter, "Commits whose message, author or branch holds the words, or whose hash starts with them");
         filter.TextChanged += (_, _) => Filter();
         Button refresh = ToolButtons.Of(AppActions.GitLogRefresh, IconKeys.Rerun, "Refresh", action => ActionRequested?.Invoke(this, action));
         // The Branch filter, shown while the log is filtered to a branch, its x showing every branch again.
-        branchFilterText = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
-        PathIcon clearGlyph = new() { Classes = { StyleClasses.Small } };
-        clearGlyph.Bind(PathIcon.DataProperty, clearGlyph.GetResourceObservable(IconKeys.Close));
-        Button clearBranch = new() { Classes = { ShellClasses.TabPin }, Content = clearGlyph, Margin = new Thickness(6, 0, 0, 0) };
-        ToolButtons.Tip(clearBranch, "Clear Branch Filter");
-        clearBranch.Click += (_, _) => FilterBranch(null, all: true);
-        branchFilter = new Border
-        {
-            IsVisible = false,
-            Classes = { StyleClasses.Tag },
-            Padding = new Thickness(8, 2, 4, 2),
-            Margin = new Thickness(0, 0, 8, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            Child = new StackPanel { Orientation = Orientation.Horizontal, Children = { branchFilterText, clearBranch } },
-        };
-        branchFilter.Bind(Border.BackgroundProperty, branchFilter.GetResourceObservable(TokenKeys.Selected));
-        Border top = ToolBars.Top(new ToolFlow { Margin = new Thickness(8, 2), Children = { filter, branchFilter, refresh } });
+        branchFilter = new FilterChip("Clear Branch Filter") { Margin = new Thickness(0, 0, Gaps.Normal, 0) };
+        branchFilter.Cleared += (_, _) => FilterBranch(null, all: true);
+        Border top = ToolBars.Top(new ToolFlow { Margin = new Thickness(Gaps.Normal, Gaps.Hair), Children = { filter, branchFilter, refresh } });
 
         Grid right = new() { RowDefinitions = new RowDefinitions("*,1,*") };
         HairlineDivider between = new(GridResizeDirection.Rows) { [Grid.RowProperty] = 1 };
@@ -217,8 +204,7 @@ public sealed class GitLogView : DockPanel, IOwnKeys
     private void ShowBranchFilter((string? Revision, string? Name) filter)
     {
         (BranchFilter, BranchFilterName) = filter;
-        branchFilter.IsVisible = BranchFilter is not null;
-        branchFilterText.Text = $"Branch: {BranchFilterName}";
+        branchFilter.Words = BranchFilter is null ? null : $"Branch: {BranchFilterName}";
     }
 
     /// <summary>A history's tab closed: it stops following the history.</summary>
@@ -238,7 +224,7 @@ public sealed class GitLogView : DockPanel, IOwnKeys
         vcs.Signatures.Landed += onSignatures;
         Branches?.Bind(next);
         (BranchFilter, BranchFilterName) = (null, null);
-        branchFilter.IsVisible = false;
+        branchFilter.Words = null;
         most = Git.LogLength;
         onHistoryChanged(this, EventArgs.Empty);
     }
@@ -343,7 +329,7 @@ public sealed class GitLogView : DockPanel, IOwnKeys
             {
                 // The branch filtered to is gone (deleted, renamed): every branch again.
                 (BranchFilter, BranchFilterName) = (null, null);
-                branchFilter.IsVisible = false;
+                branchFilter.Words = null;
             }
         }
         IReadOnlyList<HistoryCommit> history = repository is null || Scope is null ? [] : await repository.HistoryAsync(Scope);
@@ -383,18 +369,8 @@ public sealed class GitLogView : DockPanel, IOwnKeys
         }
     }
 
-    /// <summary>Gives the commits the keys on the chosen one, as a click on it does.</summary>
-    public void FocusRows()
-    {
-        int index = Math.Max(0, list.SelectedIndex);
-        if (rows.Count == 0)
-        {
-            return;
-        }
-        list.ScrollIntoView(index);
-        list.UpdateLayout();
-        list.ContainerFromIndex(index)?.Focus();
-    }
+    /// <summary>Gives the commits the keys on the chosen one, the first chosen where none is, as a click on it does.</summary>
+    public void FocusRows() => ListKeys.Hold(list, chooseFirst: true);
 
     /// <summary>The file a file's or some lines' history follows, as a commit had it; null in the Log or a folder's
     /// history, whose commits change many.</summary>
@@ -487,7 +463,7 @@ public sealed class GitLogView : DockPanel, IOwnKeys
         then[DockProperty] = Dock.Right;
         then.MaxWidth = 280;
         TextBlock words = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-        RowIcon mark = new() { [DockProperty] = Dock.Right, Width = 14, Height = 14, IsVisible = false, Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        RowIcon mark = new() { [DockProperty] = Dock.Right, IsVisible = false, Margin = new Thickness(Gaps.Small, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         string? marked = null;
         subject.Children.Add(mark);
         subject.Children.Add(then);
@@ -495,17 +471,19 @@ public sealed class GitLogView : DockPanel, IOwnKeys
         List<(Border Tag, TextBlock Text)> tags = [];
         TextBlock author = Muted();
         TextBlock date = Muted();
+        // The graph leads the subject's column, so the author and date stand alike on every row whatever its lanes.
+        DockPanel lead = new();
+        DockPanel.SetDock(graph, Dock.Left);
+        lead.Children.Add(graph);
+        lead.Children.Add(subject);
         // The author and the date at most 150 and 180 wide, and never more than half of a narrow log between them.
         Grid line = new() { Height = RowHeight };
-        line.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
         line.ColumnDefinitions.Add(new ColumnDefinition(2, GridUnitType.Star));
         line.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star) { MaxWidth = 150 });
         line.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star) { MaxWidth = 180 });
-        Grid.SetColumn(subject, 1);
-        Grid.SetColumn(author, 2);
-        Grid.SetColumn(date, 3);
-        line.Children.Add(graph);
-        line.Children.Add(subject);
+        Grid.SetColumn(author, 1);
+        Grid.SetColumn(date, 2);
+        line.Children.Add(lead);
         line.Children.Add(author);
         line.Children.Add(date);
         EventHandler landed = (_, _) => Mark();
@@ -519,12 +497,12 @@ public sealed class GitLogView : DockPanel, IOwnKeys
             while (tags.Count < refs.Count)
             {
                 // A long branch's name ends in an ellipsis and leaves the subject room.
-                TextBlock text = new() { FontSize = 11, TextTrimming = TextTrimming.CharacterEllipsis };
-                text.Bind(TextBlock.ForegroundProperty, text.GetResourceObservable(TokenKeys.Vcs_RefText));
-                Border tag = new() { [DockProperty] = Dock.Left, Classes = { StyleClasses.Tag }, Padding = new Thickness(5, 1), Margin = new Thickness(0, 0, 6, 0), Child = text, VerticalAlignment = VerticalAlignment.Center, MaxWidth = 160 };
-                tag.Bind(Border.BackgroundProperty, tag.GetResourceObservable(TokenKeys.Vcs_Ref));
+                Border tag = Tags.Of(null, TokenKeys.Vcs_RefText, TokenKeys.Vcs_Ref);
+                tag.Margin = new Thickness(0, 0, Gaps.Small, 0);
+                tag.MaxWidth = 160;
+                DockPanel.SetDock(tag, Dock.Left);
                 subject.Children.Insert(tags.Count, tag);
-                tags.Add((tag, text));
+                tags.Add((tag, Tags.WordsOf(tag)));
             }
             for (int i = 0; i < tags.Count; i++)
             {
@@ -566,7 +544,7 @@ public sealed class GitLogView : DockPanel, IOwnKeys
         static TextBlock Muted()
         {
             TextBlock block = MutedText.Of(string.Empty);
-            block.Margin = new Thickness(8, 0);
+            block.Margin = new Thickness(Gaps.Normal, 0);
             return block;
         }
     }
@@ -634,7 +612,7 @@ public sealed class GitLogView : DockPanel, IOwnKeys
                     // A lane that waited for this commit comes into its dot.
                     context.DrawLine(lanes.Lines[i % Keys.Length], new Point(X(i), 0), new Point(X(row.Lane), mid));
                 }
-                else if (IndexOf(row.Below, waiting) is int j and >= 0)
+                else if (Below(i, waiting) is int j and >= 0)
                 {
                     context.DrawLine(lanes.Lines[i % Keys.Length], new Point(X(i), 0), new Point(X(i), mid));
                     context.DrawLine(lanes.Lines[i % Keys.Length], new Point(X(i), mid), new Point(X(j), bottom));
@@ -642,7 +620,7 @@ public sealed class GitLogView : DockPanel, IOwnKeys
             }
             for (int p = 0; p < row.Joins.Count; p++)
             {
-                if (IndexOf(row.Below, row.Joins[p]) is int j and >= 0)
+                if ((p == 0 ? Below(row.Lane, row.Joins[p]) : IndexOf(row.Below, row.Joins[p])) is int j and >= 0)
                 {
                     context.DrawLine(lanes.Lines[j % Keys.Length], new Point(X(row.Lane), mid), new Point(X(j), bottom));
                 }
@@ -688,6 +666,10 @@ public sealed class GitLogView : DockPanel, IOwnKeys
         }
 
         private static double X(int lane) => 10 + (lane * LaneWidth);
+
+        /// <summary>The lane below the row that goes on from a lane waiting for a commit: its own where it still waits for
+        /// it, as two lanes may wait for one commit until its row joins them, else the first that does; -1 for none.</summary>
+        private int Below(int lane, string hash) => lane < row!.Below.Count && row.Below[lane] == hash ? lane : IndexOf(row.Below, hash);
 
         private static int IndexOf(IReadOnlyList<string?> lanes, string hash)
         {

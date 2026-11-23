@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/ToolWindows/BranchesPanel.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/ToolWindows/BranchesPanel.cs, MIT (notices/Passenger/LICENSE).
 using System.Text.Json.Nodes;
 using Avalonia;
 using Avalonia.Controls;
@@ -132,7 +132,8 @@ public sealed class BranchesPanel : DockPanel
             }
         };
         ListMenus.Attach(list, () => Selected is { Branch: { } branch } ? Menu(branch) : []);
-        search = new TextBox { Classes = { StyleClasses.Search }, PlaceholderText = "Branch or tag", Margin = new Thickness(6, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center };
+        search = SearchBox.Of("Filter branches and tags");
+        search.Margin = new Thickness(Gaps.Small, 0, Gaps.Tight, 0);
         search.TextChanged += (_, _) => Show();
         newBranch = ToolButtons.Of(IconKeys.Add, "New Branch…", () => Request(NewBranchRequested, WhyNotFrom));
         update = ToolButtons.Of(IconKeys.Update, "Update Selected", () =>
@@ -205,7 +206,8 @@ public sealed class BranchesPanel : DockPanel
         string it = Quoted(branch.Name);
         bool isCurrent = branch.IsCurrent;
         List<Control> items = [];
-        void Add(string header, Action run, bool enabled = true) => items.Add(ListMenus.Item(header, null, run, enabled));
+        void Add(string header, Action run, string? whyNot = null) => items.Add(ListMenus.Item(header, run, whyNot));
+        string? detached = current is null ? Refusals.Detached : null;
         void Separate()
         {
             if (items.Count > 0 && items[^1] is not Separator)
@@ -221,7 +223,7 @@ public sealed class BranchesPanel : DockPanel
         Add($"New Branch from {it}…", () => NewBranchRequested?.Invoke(this, branch));
         if (branch.Kind == RefKind.Local && !isCurrent)
         {
-            Add(current is null ? "Checkout and Rebase onto Current" : $"Checkout and Rebase onto {here}", () => IdeErrors.Observe(vcs.CheckoutAndRebaseAsync(branch)), current is not null);
+            Add(current is null ? "Checkout and Rebase onto Current" : $"Checkout and Rebase onto {here}", () => IdeErrors.Observe(vcs.CheckoutAndRebaseAsync(branch)), detached);
         }
         Separate();
         if (!isCurrent)
@@ -232,7 +234,7 @@ public sealed class BranchesPanel : DockPanel
         Separate();
         if (!isCurrent && branch.Kind != RefKind.Tag)
         {
-            Add(current is null ? "Rebase Current onto Selected" : $"Rebase {here} onto {it}", () => IdeErrors.Observe(vcs.RebaseOntoAsync(branch)), current is not null);
+            Add(current is null ? "Rebase Current onto Selected" : $"Rebase {here} onto {it}", () => IdeErrors.Observe(vcs.RebaseOntoAsync(branch)), detached);
         }
         if (!isCurrent)
         {
@@ -242,11 +244,8 @@ public sealed class BranchesPanel : DockPanel
         if (branch.Kind == RefKind.Local)
         {
             string? notUpdated = WhyNotUpdate(branch);
-            Add("Update", () => IdeErrors.Observe(vcs.UpdateBranchAsync(branch)), notUpdated is null);
-            ToolTip.SetTip(items[^1], notUpdated);
-            string? notPushed = vcs.WhyNotRemote;
-            Add("Push…", () => IdeErrors.Observe(vcs.PushBranchAsync(branch)), notPushed is null);
-            ToolTip.SetTip(items[^1], notPushed);
+            Add("Update", () => IdeErrors.Observe(vcs.UpdateBranchAsync(branch)), notUpdated);
+            Add("Push…", () => IdeErrors.Observe(vcs.PushBranchAsync(branch)), vcs.WhyNotRemote);
             Separate();
             Add("Rename…", () => RenameRequested?.Invoke(this, branch));
         }
@@ -267,8 +266,7 @@ public sealed class BranchesPanel : DockPanel
     {
         if (await refused is { } why)
         {
-            item.IsEnabled = false;
-            ToolTip.SetTip(item, why);
+            ListMenus.Grey(item, why);
         }
     }
 
@@ -318,16 +316,7 @@ public sealed class BranchesPanel : DockPanel
     }, Avalonia.Threading.DispatcherPriority.Loaded);
 
     /// <summary>Gives the chosen row the keys, as a click on it does.</summary>
-    public void FocusRows()
-    {
-        if (list.SelectedIndex < 0)
-        {
-            return;
-        }
-        list.ScrollIntoView(list.SelectedIndex);
-        list.UpdateLayout();
-        list.ContainerFromIndex(list.SelectedIndex)?.Focus();
-    }
+    public void FocusRows() => ListKeys.Hold(list);
 
     /// <summary>Opens or closes a group, as a click on its arrow does.</summary>
     public void Toggle(BranchNode node)
@@ -608,34 +597,23 @@ public sealed class BranchesPanel : DockPanel
     /// tag's mark (a favourite's star, the current branch's in the accent), its name, and where a local branch pushes.</summary>
     private Control Row()
     {
-        RowIcon chevron = new() { Width = 10, Height = 10, Margin = new Thickness(4, 0, 4, 0) };
-        Border hit = new() { Background = Brushes.Transparent, Child = chevron, VerticalAlignment = VerticalAlignment.Center };
-        Border gap = new() { Width = 18 };
-        RowIcon mark = new() { Width = 13, Height = 13, Margin = new Thickness(0, 0, 6, 0) };
+        RowExpander chevron = RowExpander.Of<BranchNode>(Toggle);
+        RowIcon mark = new() { Margin = new Thickness(0, 0, Gaps.Small, 0) };
         TextBlock name = new() { VerticalAlignment = VerticalAlignment.Center };
         // Where it pushes and pulls, muted after its name.
-        TextBlock tracked = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+        TextBlock tracked = new() { Classes = { StyleClasses.Caption }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(Gaps.Normal, 0, 0, 0) };
         tracked.Classes.Add(StyleClasses.Muted);
-        ShrinkingRow row = new() { Height = ListRow.Height, Children = { hit, gap, mark, name, tracked } };
-        hit.PointerPressed += (_, e) =>
-        {
-            if (row.DataContext is BranchNode node)
-            {
-                Toggle(node);
-                e.Handled = true;
-            }
-        };
+        ShrinkingRow row = new() { Height = ListRow.Height, Children = { chevron, mark, name, tracked } };
         return row.Showing<BranchNode>(node =>
         {
-            row.Margin = new Thickness(node.Depth * 16, 0, 0, 0);
-            hit.IsVisible = node.IsGroup;
-            gap.IsVisible = !node.IsGroup;
-            chevron.DataKey = node.IsExpanded ? IconKeys.ChevronDown : IconKeys.ChevronRight;
+            row.Margin = new Thickness(node.Depth * Gaps.Indent, 0, 0, 0);
+            chevron.Expands = node.IsGroup;
+            chevron.IsOpen = node.IsExpanded;
             mark.IsVisible = node.Kind is BranchNodeKind.Ref or BranchNodeKind.Head;
             mark.DataKey = node.Branch?.Kind == RefKind.Tag ? IconKeys.Label : node.IsFavorite ? IconKeys.StarFilled : IconKeys.Branch;
             mark.ForegroundKey = node.IsFavorite ? TokenKeys.Vcs_Favorite : node.Branch?.IsCurrent == true || node.Kind == BranchNodeKind.Head ? TokenKeys.Accent : null;
             name.Text = node.Title;
-            name.FontWeight = node.Kind is BranchNodeKind.Group ? FontWeight.SemiBold : FontWeight.Normal;
+            name.Classes.Set(StyleClasses.Strong, node.Kind is BranchNodeKind.Group);
             tracked.IsVisible = node.Branch is { Kind: RefKind.Local, Upstream: not null };
             tracked.Text = node.Branch?.Upstream;
         });

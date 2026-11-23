@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Vcs/DiffLines.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Vcs/DiffLines.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -44,30 +44,37 @@ public static class DiffLines
     public static void ScrollTo(CodeEditor pane, double line, CodeEditor across) =>
         pane.ScrollTo(new Vector(across.ScrollOffset.X, line * pane.LineHeight));
 
-    /// <summary>Next Difference (1) or Previous Difference (-1) for a key, 0 for any other: F7 and Shift+F7, and F8 and
-    /// Shift+F8 too off the Mac, as Rider's Visual Studio keymap binds them.</summary>
+    /// <summary>Next Difference's keys: F7, and F8 too off the Mac, as Rider's Visual Studio keymap binds them; Previous
+    /// Difference's are each with Shift held.</summary>
+    private static readonly Key[] StepKeys = OperatingSystem.IsMacOS() ? [Key.F7] : [Key.F7, Key.F8];
+
+    /// <summary>Next Difference (1) or Previous Difference (-1) for a key, 0 for any other (<see cref="StepKeys"/>).</summary>
     public static int Step(KeyEventArgs e) =>
-        (e.Key == Key.F7 || (!OperatingSystem.IsMacOS() && e.Key == Key.F8)) && e.KeyModifiers is KeyModifiers.None or KeyModifiers.Shift
+        StepKeys.Contains(e.Key) && e.KeyModifiers is KeyModifiers.None or KeyModifiers.Shift
             ? (e.KeyModifiers == KeyModifiers.Shift ? -1 : 1)
             : 0;
+
+    /// <summary>The keys of a step (1 Next Difference, -1 Previous Difference) in words, as its button's tip names them.</summary>
+    private static string StepKeysShown(int step) =>
+        KeyWords.Either(StepKeys.Select(key => new Keystroke(key, step < 0 ? KeyModifiers.Shift : KeyModifiers.None)));
 
     /// <summary>The bar over the panes: <paramref name="tools"/> first, then Previous and Next Difference, the file's
     /// name and <paramref name="status"/>, with <paramref name="end"/> at its right.</summary>
     public static Border Bar(string name, Action<int> step, TextBlock status, IEnumerable<Control> tools, Control? end = null)
     {
-        StackPanel start = new()
+        // In a narrow diff the count, then the file's name, give way, ending in an ellipsis, before the arrows and Settings.
+        ShrinkingRow start = new()
         {
-            Orientation = Orientation.Horizontal,
-            Spacing = 2,
-            Margin = new Thickness(6, 0),
+            Spacing = Gaps.Hair,
+            Margin = new Thickness(Gaps.Small, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
         start.Children.AddRange(tools);
-        start.Children.Add(ToolButtons.Of(IconKeys.ArrowUp, $"Previous Difference ({Keys("Shift+F7")})", () => step(-1)));
-        start.Children.Add(ToolButtons.Of(IconKeys.ArrowDown, $"Next Difference ({Keys("F7")})", () => step(1)));
-        start.Children.Add(new TextBlock { Text = name, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) });
+        start.Children.Add(ToolButtons.Of(IconKeys.ArrowUp, ActionTips.Named("Previous Difference", StepKeysShown(-1)), () => step(-1)));
+        start.Children.Add(ToolButtons.Of(IconKeys.ArrowDown, ActionTips.Named("Next Difference", StepKeysShown(1)), () => step(1)));
+        start.Children.Add(new TextBlock { Classes = { StyleClasses.Strong }, Text = name, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(Gaps.Normal, 0, 0, 0) });
         status.VerticalAlignment = VerticalAlignment.Center;
-        status.Margin = new Thickness(12, 0);
+        status.Margin = new Thickness(Gaps.Wide, 0);
         status.TextTrimming = TextTrimming.CharacterEllipsis;
         status.Classes.Add(StyleClasses.Muted);
         start.Children.Add(status);
@@ -75,20 +82,18 @@ public static class DiffLines
         if (end is not null)
         {
             DockPanel.SetDock(end, Dock.Right);
-            end.Margin = new Thickness(0, 0, 6, 0);
+            end.Margin = new Thickness(0, 0, Gaps.Small, 0);
             end.VerticalAlignment = VerticalAlignment.Center;
             row.Children.Add(end);
         }
         row.Children.Add(start);
         return ToolBars.OverEditor(row);
-
-        static string Keys(string shown) => OperatingSystem.IsMacOS() ? shown : $"{shown}, {shown.Replace("F7", "F8", StringComparison.Ordinal)}";
     }
 
     /// <summary>What a pane shows, over it in its column, ending in an ellipsis where it has no room.</summary>
     public static Control Title(string text, int column)
     {
-        TextBlock label = new() { Text = text, FontSize = 12, Margin = new Thickness(12, 4), TextTrimming = TextTrimming.CharacterEllipsis };
+        TextBlock label = new() { Classes = { StyleClasses.Caption }, Text = text, Margin = new Thickness(Gaps.Wide, Gaps.Tight), TextTrimming = TextTrimming.CharacterEllipsis };
         label.Classes.Add(StyleClasses.Muted);
         Grid.SetColumn(label, column);
         return label;

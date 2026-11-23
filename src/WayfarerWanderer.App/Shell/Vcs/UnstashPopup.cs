@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Vcs/UnstashPopup.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Vcs/UnstashPopup.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -51,16 +51,16 @@ public sealed class UnstashPopup : UserControl
             {
                 Children =
                 {
-                    new TextBlock { Classes = { ShellClasses.PopupTitle }, Text = "Unstash Changes", Margin = new Thickness(12, 10, 12, 6) },
+                    new TextBlock { Classes = { StyleClasses.PaneTitle }, Text = "Unstash Changes", Margin = new Thickness(Gaps.Wide, Gaps.Wide, Gaps.Wide, Gaps.Small) },
                     stashes.Count == 0
-                        ? new TextBlock { Classes = { StyleClasses.Muted }, Text = "Nothing is stashed", Margin = new Thickness(12, 0, 12, 10) }
+                        ? new TextBlock { Classes = { StyleClasses.Muted }, Text = "Nothing is stashed", Margin = new Thickness(Gaps.Wide, 0, Gaps.Wide, Gaps.Wide) }
                         : list,
                     new StackPanel
                     {
                         Orientation = Orientation.Horizontal,
                         HorizontalAlignment = HorizontalAlignment.Right,
-                        Spacing = 6,
-                        Margin = new Thickness(12, 8, 12, 10),
+                        Spacing = Gaps.Small,
+                        Margin = new Thickness(Gaps.Wide, Gaps.Normal, Gaps.Wide, Gaps.Wide),
                         IsVisible = stashes.Count > 0,
                         Children = { remove, apply, pop },
                     },
@@ -123,16 +123,7 @@ public sealed class UnstashPopup : UserControl
 
     /// <summary>Gives the keys to the chosen row, as a click on it does: a ListBox takes no focus of its own, and the
     /// editor under the popup would take Enter and Delete.</summary>
-    private void FocusRow()
-    {
-        if (list.SelectedIndex < 0)
-        {
-            return;
-        }
-        list.ScrollIntoView(list.SelectedIndex);
-        list.UpdateLayout();
-        list.ContainerFromIndex(list.SelectedIndex)?.Focus();
-    }
+    private void FocusRow() => ListKeys.Hold(list);
 
     private void Run(bool now)
     {
@@ -177,11 +168,9 @@ public sealed class UnstashPopup : UserControl
     /// <summary>A stash's row: its message, and when it was made at the right, muted.</summary>
     private static Control Row()
     {
-        TextBlock when = new() { VerticalAlignment = VerticalAlignment.Center, FontSize = 12, Margin = new Thickness(12, 0, 4, 0) };
-        when.Classes.Add(StyleClasses.Muted);
+        TextBlock when = ListRow.DetailText();
         TextBlock message = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-        DockPanel row = new() { Height = ListRow.Height, Margin = new Thickness(8, 0) };
-        DockPanel.SetDock(when, Dock.Right);
+        DockPanel row = new() { Height = ListRow.Height, Margin = ListRow.Inset };
         row.Children.Add(when);
         row.Children.Add(message);
         return row.Showing<StashInfo>(stash =>
