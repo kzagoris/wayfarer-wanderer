@@ -656,7 +656,7 @@ public sealed class WorkspaceImportTests
         new(1, root, JvmBuildSystem.Maven, Path.Combine(root, "pom.xml"), new JvmToolchain(null, 21, null), []);
 
     internal static string FixtureFolder(string fixture) =>
-        Path.Combine(ProjectHostTests.RepositoryRoot(), "tests", "fixtures", "jvm", fixture);
+        Path.Combine(Repo.Root, "tests", "fixtures", "jvm", fixture);
 
     /// <summary>A fixture copied to a folder of its own, without what a build of it left (build, target, .gradle, out).</summary>
     internal static string Copy(string fixture)

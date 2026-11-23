@@ -9,7 +9,7 @@ namespace WayfarerWanderer.Tests;
 /// <see cref="Allowed"/>, each with why.</summary>
 public sealed partial class NoPassengerInUiTests
 {
-    private static readonly string Root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../"));
+    private static readonly string Root = Repo.At("");
 
     /// <summary>The word as shown: on its own, not the start of a longer name, and not a resource key's or namespace's first part.</summary>
     [GeneratedRegex(@"\bPassenger\b(?!\.\w)")]

@@ -1,6 +1,6 @@
 # JDK step 2 handoff — projects ask for a JDK, and a missing one can be fixed
 
-Implement step 2 of [JDKs, libraries and Project Structure](jdks-and-project-structure.md) (§3.2 and §4, item 2).
+Implement step 2 of [JDKs, libraries and Project Structure](../jdks-and-project-structure.md) (§3.2 and §4, item 2).
 Start from `main` at `23e4df9` or later, on a branch of its own (for example `jdk-requirements`). The design doc is
 the specification. This note adds what's needed to start without rediscovering it.
 
@@ -18,7 +18,7 @@ the button, but don't build it.
 
 ## Read first
 
-- [The design doc](jdks-and-project-structure.md), §3.1 and §3.2 (the resolution order is the spec).
+- [The design doc](../jdks-and-project-structure.md), §3.1 and §3.2 (the resolution order is the spec).
 - `src/WayfarerWanderer.Jvm/JdkRegistry.cs` (step 1): `All()`, `Named()`, `Add()`, `Distribution()`, `SuggestName()`.
 - `src/WayfarerWanderer.Jvm/ProjectJdk.cs`: `Recorded`, `HomeOf`, `Serialize`, `Apply`, `MavenProfiles`.
 - `jvm/project-host/host/src/main/java/wayfarer/host/ImportJvms.java`: `forMaven`, `forGradle`, `named`, `candidates`.

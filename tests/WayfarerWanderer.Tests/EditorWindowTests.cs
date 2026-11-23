@@ -217,7 +217,7 @@ public class EditorWindowTests
     [AvaloniaFact]
     public async Task OpenWorkspaceConnectsBuildTestRunAndDebugActionsToOneSession()
     {
-        string source = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../tests/fixtures/jvm/maven"));
+        string source = Repo.At("tests/fixtures/jvm/maven");
         string root = Directory.CreateTempSubdirectory("wayfarer-editor-workspace-").FullName;
         CopyTree(source, root);
         string trust = WorkspaceTrust.FolderToTrust(root) ?? root;

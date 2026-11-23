@@ -4,7 +4,7 @@ Start with the `milestone-1` branch of Wayfarer Wanderer. The verified app and t
 
 ## Establish the baseline
 
-Read the [Milestone 1 verification record](validation/milestone-1/README.md), the [product specification](initial-spec.md), and tasks 4–6 of the [implementation plan](superpowers/plans/2026-11-18-wayfarer-wanderer-implementation.md). The [README](../README.md) gives the locked Debug build and self-contained publish commands. These commands create a fresh checkout of the local branch on this workstation.
+Read the [Milestone 1 verification record](../validation/milestone-1/README.md), the [product specification](../initial-spec.md), and tasks 4–6 of the [implementation plan](../superpowers/plans/2026-11-18-wayfarer-wanderer-implementation.md). The [README](../../README.md) gives the locked Debug build and self-contained publish commands. These commands create a fresh checkout of the local branch on this workstation.
 
 ```sh
 git clone --branch milestone-1 --recurse-submodules /home/kzagoris/Projects/wayfarer-wanderer wayfarer-m2

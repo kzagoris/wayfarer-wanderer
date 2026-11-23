@@ -100,7 +100,7 @@ public sealed class JvmMeasurementTests
                 ["peakServerWorkingSetMiB"] = peak / (1024 * 1024),
                 ["serverProcesses"] = processes,
             };
-            string results = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../artifacts/test-results"));
+            string results = Repo.At("artifacts/test-results");
             Directory.CreateDirectory(results);
             string json = JsonSerializer.Serialize(record, new JsonSerializerOptions { WriteIndented = true });
             await File.WriteAllTextAsync(Path.Combine(results, $"jvm-measurements-{buildTool}.json"), json, cancel);
@@ -196,7 +196,7 @@ public sealed class JvmMeasurementTests
                 ["warmReopenMs"] = (long)warmReopen.TotalMilliseconds,
                 ["peakHostWorkingSetMiB"] = peak / (1024 * 1024),
             };
-            string results = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../artifacts/test-results"));
+            string results = Repo.At("artifacts/test-results");
             Directory.CreateDirectory(results);
             string json = JsonSerializer.Serialize(record, new JsonSerializerOptions { WriteIndented = true });
             await File.WriteAllTextAsync(Path.Combine(results, $"jvm-host-measurements-{buildTool}.json"), json, cancel);

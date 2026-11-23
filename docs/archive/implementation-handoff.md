@@ -6,8 +6,8 @@ Implement Wayfarer Wanderer, a standalone .NET and Avalonia IDE for Java and Kot
 
 Read these first:
 
-- [Product specification](initial-spec.md) at `docs/initial-spec.md`
-- [Implementation plan](superpowers/plans/2026-11-18-wayfarer-wanderer-implementation.md) at `docs/superpowers/plans/2026-11-18-wayfarer-wanderer-implementation.md`
+- [Product specification](../initial-spec.md) at `docs/initial-spec.md`
+- [Implementation plan](../superpowers/plans/2026-11-18-wayfarer-wanderer-implementation.md) at `docs/superpowers/plans/2026-11-18-wayfarer-wanderer-implementation.md`
 - Passenger’s local development guide at `/home/kzagoris/Projects/passenger/CLAUDE.md`
 
 The implementation plan incorporates a Claude Code CLI review with Opus 5.5 at high effort. The spec and plan exist and the Passenger revision history has been checked. Runtime validation is still open. Inspect the worktree before editing and preserve any work already present.

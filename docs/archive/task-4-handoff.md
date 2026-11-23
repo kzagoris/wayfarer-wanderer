@@ -1,6 +1,6 @@
 # Task 4 handoff — external JVM project host
 
-Implement task 4 of the [implementation plan](superpowers/plans/2026-11-18-wayfarer-wanderer-implementation.md), "Import the same project model that tools actually use". Start from `main` at `7cb75bc` or later, on a branch of its own (for example `task-4-project-host`). The plan's task 4 text is the specification. This note adds the context needed to start without rediscovering it.
+Implement task 4 of the [implementation plan](../superpowers/plans/2026-11-18-wayfarer-wanderer-implementation.md), "Import the same project model that tools actually use". Start from `main` at `7cb75bc` or later, on a branch of its own (for example `task-4-project-host`). The plan's task 4 text is the specification. This note adds the context needed to start without rediscovering it.
 
 ## What changes and why
 
@@ -10,12 +10,12 @@ The decision of 2026-11-20 replaces this with an external JVM process that asks 
 
 ## Read first
 
-- Task 4 of the plan (all seven steps) and the [specification](initial-spec.md), section on the JVM project host (line 59).
+- Task 4 of the plan (all seven steps) and the [specification](../initial-spec.md), section on the JVM project host (line 59).
 - Passenger's host, as a pattern only. Wayfarer doesn't reference these projects.
   - `vendor/passenger/src/Passenger.Host/Program.cs`: one process per folder. The first line says what it loaded or why not. Stdout is the protocol's alone, and everything else goes to stderr.
   - `vendor/passenger/src/Passenger.Host/Protocol.cs`: one JSON object per line, `HostRequest(Id, Method, Params)`. Replies are `{"id":N,"partial":…}`, `{"id":N,"result":…}` or `{"id":N,"error":"…"}`. It has `cancel`.
   - `vendor/passenger/src/Passenger.Workspace/ProjectHost.cs`: the client. It covers startup, pending requests, partial results, crash detection (`ProjectHostFailed`) and stderr capture.
-- [`docs/validation/jvm-backends.md`](validation/jvm-backends.md) for the current measurements and how JDT LS and the Kotlin server import on their own.
+- [`docs/validation/jvm-backends.md`](../validation/jvm-backends.md) for the current measurements and how JDT LS and the Kotlin server import on their own.
 
 ## Seams that already exist
 

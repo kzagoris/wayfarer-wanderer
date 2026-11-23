@@ -22,7 +22,7 @@ namespace WayfarerWanderer.Tests;
 public class WelcomeTests
 {
     private static string Fixture(string relative) =>
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../tests/fixtures/jvm", relative));
+        Repo.At("tests/fixtures/jvm", relative);
 
     [AvaloniaFact]
     public void WelcomeShowsWhileNothingIsOpenAndSaysWayfarer()

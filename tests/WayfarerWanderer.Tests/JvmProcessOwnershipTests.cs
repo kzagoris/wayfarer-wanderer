@@ -223,7 +223,7 @@ internal static class JvmFixtures
 {
     public static void Copy(string buildTool, string destination)
     {
-        string fixture = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../tests/fixtures/jvm", buildTool));
+        string fixture = Repo.At("tests/fixtures/jvm", buildTool);
         foreach (string file in Directory.EnumerateFiles(fixture, "*", SearchOption.AllDirectories))
         {
             string relative = Path.GetRelativePath(fixture, file);

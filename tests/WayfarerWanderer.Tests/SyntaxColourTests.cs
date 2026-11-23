@@ -107,7 +107,7 @@ public sealed class SyntaxColourTests
     [AvaloniaFact]
     public void OpenedFilesShowTheirLanguagesColours()
     {
-        string source = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../tests/fixtures/jvm/maven/app/src/main/java/example/Main.java"));
+        string source = Repo.At("tests/fixtures/jvm/maven/app/src/main/java/example/Main.java");
         string folder = Directory.CreateTempSubdirectory("wayfarer-colours-").FullName;
         string notes = Path.Combine(folder, "notes.txt");
         File.WriteAllText(notes, "class is only a word here");
@@ -143,7 +143,7 @@ public sealed class SyntaxColourTests
             Assert.Same(highlighter, window.Editor.Highlighter);
 
             // A POM's elements fold, and what was folded stays folded across a switch to another file and back.
-            string pom = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../tests/fixtures/jvm/maven/pom.xml"));
+            string pom = Repo.At("tests/fixtures/jvm/maven/pom.xml");
             window.OpenSource(pom);
             waited.Restart();
             while (window.Editor.FoldRegions.Count == 0 && waited.Elapsed < TimeSpan.FromSeconds(30))

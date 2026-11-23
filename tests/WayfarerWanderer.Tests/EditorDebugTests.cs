@@ -247,7 +247,7 @@ public sealed class EditorDebugTests
     [AvaloniaFact(SkipUnless = nameof(RunGradle), Skip = "Set WAYFARER_DEBUG_ACCEPTANCE=1 to run the Gradle wrapper and debug JVM.")]
     public async Task DebugGradleMainAndStepFromKotlinIntoJava()
     {
-        string fixture = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../tests/fixtures/jvm/gradle"));
+        string fixture = Repo.At("tests/fixtures/jvm/gradle");
         string root = Directory.CreateTempSubdirectory("wayfarer-debug-ui-").FullName;
         var window = EditorApplication.CreateWindow(null);
         try

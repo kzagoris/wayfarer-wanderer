@@ -16,7 +16,7 @@ public sealed class JvmDebugTests
     [InlineData("maven", "kotlin", "Greeting.kt", 3)]
     public async Task DebugHttpHandlerAndRestartOnTheSamePort(string buildTool, string language, string filename, int line)
     {
-        string fixture = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../tests/fixtures/jvm", buildTool));
+        string fixture = Repo.At("tests/fixtures/jvm", buildTool);
         string root = Directory.CreateTempSubdirectory("wayfarer boot debug ").FullName;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         deadline.CancelAfter(TimeSpan.FromMinutes(6));

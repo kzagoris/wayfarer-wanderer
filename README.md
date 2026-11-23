@@ -23,8 +23,6 @@ python3 tools/check-trx.py artifacts/test-results/editorhost.trx \
   WayfarerWanderer.Tests.EditorHostTests.PasteShortcutUsesWindowClipboard
 ```
 
-On this workstation, `mise exec dotnet@11.0.100 -- dotnet` selects the pinned SDK.
-
 ## Passenger copy
 
 `vendor/passenger` is an ordinary folder of Wayfarer's history, not a

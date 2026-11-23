@@ -227,19 +227,7 @@ public sealed class ProjectHostTests
     }
 
     internal static string Example(string file) =>
-        Path.Combine(RepositoryRoot(), "jvm", "project-host", "protocol", file);
-
-    internal static string RepositoryRoot()
-    {
-        for (DirectoryInfo? folder = new(AppContext.BaseDirectory); folder is not null; folder = folder.Parent)
-        {
-            if (File.Exists(Path.Combine(folder.FullName, "WayfarerWanderer.slnx")))
-            {
-                return folder.FullName;
-            }
-        }
-        throw new InvalidOperationException("the repository root was not found above " + AppContext.BaseDirectory);
-    }
+        Repo.At("jvm", "project-host", "protocol", file);
 
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
