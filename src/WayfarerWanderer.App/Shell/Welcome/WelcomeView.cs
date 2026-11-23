@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Welcome/WelcomeView.cs, MIT (notices/Passenger/LICENSE): its solutions and
+// From Passenger 8a1df7e4 src/Passenger.App/Welcome/WelcomeView.cs, MIT (notices/Passenger/LICENSE): its solutions and
 // projects cut to folders, with Wayfarer's mark, New Project, Open Folder and Clone Repository.
 using Avalonia;
 using Avalonia.Controls;
@@ -47,9 +47,9 @@ public sealed class WelcomeView : UserControl
         hero.Children.Add(mark);
         hero.Children.Add(new StackPanel { [Grid.ColumnProperty] = 1, VerticalAlignment = VerticalAlignment.Center, Children = { title, subtitle } });
 
-        NewProjectButton = Action(IconKeys.Add, "New Project", "Maven or Gradle, from a template");
+        NewProjectButton = Action(IconKeys.Add, "New Project", "From a template");
         NewProjectButton.Click += (_, _) => NewProjectRequested?.Invoke(this, EventArgs.Empty);
-        OpenFolderButton = Action(IconKeys.FolderOpen, "Open Folder", "A Maven, Gradle or IntelliJ project");
+        OpenFolderButton = Action(IconKeys.FolderOpen, "Open Folder", "A folder of code");
         OpenFolderButton.Click += (_, _) => OpenFolderRequested?.Invoke(this, EventArgs.Empty);
         OpenFileButton = Action(IconKeys.DocumentText, "Open File", "Any file, on its own");
         OpenFileButton.Click += (_, _) => OpenFileRequested?.Invoke(this, EventArgs.Empty);
@@ -94,11 +94,11 @@ public sealed class WelcomeView : UserControl
         ListKeys.Search(search, list, OpenChosen);
         ListMenus.Attach(list, () => list.SelectedItem is not RecentRow chosen ? [] :
         [
-            ListMenus.Item("Open", "Enter", () => Chosen?.Invoke(this, chosen)),
-            ListMenus.Item(FileManager.Showing, null, () => RevealRequested?.Invoke(this, chosen), !chosen.Missing),
-            ListMenus.Item("Copy Path", null, () => IdeErrors.Observe(ListMenus.CopyAsync(this, chosen.Path))),
+            ListMenus.Open("Open", () => Chosen?.Invoke(this, chosen)),
+            ListMenus.Item(FileManager.Showing, () => RevealRequested?.Invoke(this, chosen), chosen.Missing ? Refusals.RecentGone : null),
+            ListMenus.Item("Copy Path", () => IdeErrors.Observe(ListMenus.CopyAsync(this, chosen.Path))),
             new Separator(),
-            ListMenus.Item("Remove from Recent Folders", OperatingSystem.IsMacOS() ? "Back" : "Delete", () => RemoveRequested?.Invoke(this, chosen)),
+            ListMenus.Remove("Remove from Recent Folders", () => RemoveRequested?.Invoke(this, chosen)),
         ]);
         empty = new EmptyState();
 
@@ -284,8 +284,7 @@ public sealed class WelcomeView : UserControl
     /// longer on disk, its name and badge muted.</summary>
     private static Control Row()
     {
-        TextBlock letters = new() { Classes = { ShellClasses.WelcomeBadgeText }, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-        Border badge = new() { Classes = { ShellClasses.WelcomeBadge }, Child = letters, VerticalAlignment = VerticalAlignment.Center };
+        Border badge = Tags.Initials(out TextBlock letters);
         TextBlock name = new() { Classes = { StyleClasses.WelcomeRowName }, TextTrimming = TextTrimming.CharacterEllipsis };
         TextBlock where = new() { Classes = { StyleClasses.Muted, StyleClasses.WelcomeRowPath }, TextTrimming = TextTrimming.PathSegmentEllipsis };
         DockPanel line = new() { Classes = { StyleClasses.WelcomeRow } };
@@ -295,8 +294,8 @@ public sealed class WelcomeView : UserControl
         gone.Text = "Missing";
         gone.Bind(TextBlock.ForegroundProperty, gone.GetResourceObservable(TokenKeys.Warning));
         line.Children.Add(gone);
-        TextBlock kindText = new() { Classes = { ShellClasses.WelcomeKindText } };
-        Border kind = new() { Classes = { ShellClasses.WelcomeKind }, Child = kindText, VerticalAlignment = VerticalAlignment.Center };
+        Border kind = Tags.Of(null, TokenKeys.Text, TokenKeys.Hover);
+        kind.Margin = new Thickness(Gaps.Wide, 0, Gaps.Tight, 0);
         DockPanel.SetDock(kind, Dock.Right);
         line.Children.Add(kind);
         line.Children.Add(new StackPanel { VerticalAlignment = VerticalAlignment.Center, Spacing = Gaps.Hair, Children = { name, where } });
@@ -308,7 +307,7 @@ public sealed class WelcomeView : UserControl
             name.Classes.Set(StyleClasses.Muted, row.Missing);
             where.Text = row.Shown;
             gone.IsVisible = row.Missing;
-            kindText.Text = RecentRow.Kind(row.Path);
+            Tags.WordsOf(kind).Text = RecentRow.Kind(row.Path);
         });
     }
 

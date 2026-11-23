@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Workspace/FileSearch.cs and SearchScope.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Workspace/FileSearch.cs and SearchScope.cs, MIT (notices/Passenger/LICENSE).
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -55,7 +55,7 @@ public sealed record FilesFound(IReadOnlyList<SearchMatch> Matches, IReadOnlyLis
 
     /// <summary>Where the search stopped, each file named as <paramref name="name"/> gives it; null when it stopped nowhere.</summary>
     public string? StoppedIn(Func<string, string> name) =>
-        Stopped.Count == 0 ? null : $"the regex took too long and stopped in {string.Join(", ", Stopped.Select(name))}";
+        Stopped.Count == 0 ? null : Refusals.RegexStoppedIn(string.Join(", ", Stopped.Select(name)));
 
     /// <summary>How many matches in how many files.</summary>
     public static string Said(IReadOnlyCollection<SearchMatch> matches)
@@ -176,7 +176,7 @@ public static class FileSearch
     public const string ReadOnlyWhy = "read-only";
 
     /// <summary>Why a file a regex ran too long in is left as it was.</summary>
-    public const string StoppedWhy = "the regex took too long there";
+    public const string StoppedWhy = Refusals.RegexStopped;
 
     /// <summary>Why a link, or a file a link in the folder leads out of it to, is left as it was.</summary>
     public const string OutsideWhy = "a link, or outside the folder where a link leads";

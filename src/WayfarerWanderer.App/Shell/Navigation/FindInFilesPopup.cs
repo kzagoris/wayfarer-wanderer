@@ -1,4 +1,6 @@
-// From Passenger 2044e49b src/Passenger.App/Navigation/FindInFilesPopup.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Navigation/FindInFilesPopup.cs, MIT (notices/Passenger/LICENSE), without
+// the Find window's button and key (Wayfarer has no Find window), the projects' labels (its scope is a module) and the
+// replace boxes shared with the editor's find bar.
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -51,7 +53,7 @@ public sealed class FindInFilesPopup : UserControl, IAnswers<SearchMatch?>
     private readonly ToggleButton matchCase;
     private readonly ToggleButton words;
     private readonly ToggleButton regex;
-    private readonly Dictionary<SearchScopeKind, ToggleButton> tabs = [];
+    private readonly Segments<SearchScopeKind> kinds = new() { Margin = new Thickness(0, 0, Gaps.Normal, 0) };
     private readonly Dictionary<SearchScopeKind, Control> details = [];
     private readonly IReadOnlyList<SearchModule> modules;
     private readonly ComboBox moduleBox;
@@ -134,15 +136,11 @@ public sealed class FindInFilesPopup : UserControl, IAnswers<SearchMatch?>
         details[SearchScopeKind.Module] = moduleBox;
         details[SearchScopeKind.Directory] = directory;
         details[SearchScopeKind.Scope] = scopeBox;
-        StackPanel kinds = new() { Orientation = Orientation.Horizontal, Spacing = Gaps.Hair, Margin = new Thickness(0, 0, Gaps.Normal, 0) };
         foreach ((SearchScopeKind each, string name, Key key) in Kinds)
         {
-            ToggleButton tab = new() { Classes = { StyleClasses.Segment, StyleClasses.Caption }, Content = name };
-            ToolTip.SetTip(tab, ActionTips.Named(name, KeyWords.Of(key, KeyModifiers.Alt)));
-            tab.Click += (_, _) => ScopeKind = each;
-            tabs[each] = tab;
-            kinds.Children.Add(tab);
+            ToolTip.SetTip(kinds.Add(each, name), ActionTips.Named(name, KeyWords.Of(key, KeyModifiers.Alt)));
         }
+        kinds.Chosen += (_, each) => ScopeKind = each;
         Panel shown = new();
         foreach (Control detail in details.Values)
         {
@@ -165,11 +163,11 @@ public sealed class FindInFilesPopup : UserControl, IAnswers<SearchMatch?>
         ListKeys.Act(results, new ListActs { Open = Choose });
         ListMenus.Attach(results, () => results.SelectedItem is not SearchLine chosen ? [] :
         [
-            ListMenus.Item("Go to", "Enter", Choose),
-            ListMenus.Item("Copy Path", null, () => IdeErrors.Observe(ListMenus.CopyAsync(this, chosen.Path))),
-            ListMenus.Item("Copy Line", null, () => IdeErrors.Observe(ListMenus.CopyAsync(this, chosen.LineText.Trim()))),
+            ListMenus.Open("Go to", Choose),
+            ListMenus.Item("Copy Path", () => IdeErrors.Observe(ListMenus.CopyAsync(this, chosen.Path))),
+            ListMenus.Item("Copy Line", () => IdeErrors.Observe(ListMenus.CopyAsync(this, chosen.LineText.Trim()))),
         ]);
-        preview = new CodeEditor { IsReadOnly = true, ReadOnlyWhy = "The preview is read-only", ShowErrorStripe = false, Height = PreviewHeight, Focusable = false, Ligatures = ligatures };
+        preview = new CodeEditor { IsReadOnly = true, ReadOnlyWhy = Refusals.PreviewReadOnly, ShowErrorStripe = false, Height = PreviewHeight, Focusable = false, Ligatures = ligatures };
         // Clear of the frame's rounded foot, which the editor's square corners would cover.
         Border previewFrame = new() { BorderThickness = Hairlines.Above, Padding = new Thickness(0, 0, 0, Gaps.Normal), Child = preview };
         previewFrame.Bind(Border.BorderBrushProperty, previewFrame.GetResourceObservable(TokenKeys.Divider));
@@ -439,10 +437,7 @@ public sealed class FindInFilesPopup : UserControl, IAnswers<SearchMatch?>
     private void Show(SearchScopeKind shown)
     {
         kind = shown;
-        foreach ((SearchScopeKind each, ToggleButton tab) in tabs)
-        {
-            tab.IsChecked = each == shown;
-        }
+        kinds.Choice = shown;
         foreach ((SearchScopeKind each, Control detail) in details)
         {
             detail.IsVisible = each == shown;

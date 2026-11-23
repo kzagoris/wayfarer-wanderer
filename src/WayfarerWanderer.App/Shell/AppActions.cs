@@ -1,4 +1,5 @@
-// From Passenger 2044e49b src/Passenger.App/AppActions.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/AppActions.cs, MIT (notices/Passenger/LICENSE), without the macOS shell
+// command's actions, Parameter Info's overload steps and the completion list's kind filters (Wayfarer has none of them).
 using Passenger.Editor;
 
 namespace WayfarerWanderer.App.Shell;

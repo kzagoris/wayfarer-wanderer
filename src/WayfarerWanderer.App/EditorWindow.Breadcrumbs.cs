@@ -1,5 +1,6 @@
-// From Passenger 2044e49b src/Passenger.App/MainWindow.Breadcrumbs.cs, MIT (notices/Passenger/LICENSE): the outline asked of
-// the JVM language servers.
+// From Passenger 8a1df7e4 src/Passenger.App/MainWindow.Breadcrumbs.cs, MIT (notices/Passenger/LICENSE): the outline asked of
+// the JVM language servers, and asked even where the navigation bar names the caret's place, since the bar is given it
+// from here; its pause is its own (Wayfarer has no TypingPauses).
 using System.Text.Json;
 using Avalonia.Controls;
 using Avalonia.Layout;
