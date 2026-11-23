@@ -53,6 +53,7 @@ public sealed partial class EditorWindow : Window
         TrustBanner = TrustWorkspaceBanner();
         AddNavigation();
         AddSwitcher();
+        AddDeclarations();
         AddFindInFiles();
         AddToolWindows(new Grid { Children = { EditorWithBar(), Welcome } });
         AddExplorerActions();

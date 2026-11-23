@@ -49,8 +49,9 @@ public static class MainMenuPlaces
         [AppActions.GoToLine] = [new("Navigate", 1, 3)],
         [AppActions.FileStructure] = [new("Navigate", 1, 4)],
         [AppActions.JumpToNavigationBar] = [new("Navigate", 1, 5)],
-        [AppActions.RecentFiles] = [new("Navigate", 2, 0)],
-        [AppActions.RecentChangedFiles] = [new("Navigate", 2, 1)],
+        [AppActions.GoToDeclaration] = [new("Navigate", 2, 0)],
+        [AppActions.RecentFiles] = [new("Navigate", 3, 0)],
+        [AppActions.RecentChangedFiles] = [new("Navigate", 3, 1)],
 
         // Code and Refactor: the language servers'.
         [EditorWindow.CompleteAction] = [new("Code", 0, 0)],

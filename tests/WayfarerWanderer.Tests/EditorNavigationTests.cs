@@ -167,6 +167,70 @@ public sealed class EditorNavigationTests : IDisposable
         }
     }
 
+    [AvaloniaFact]
+    public async Task CtrlClickGoesToTheDeclarationUnderlinedAndOpensAnAddressWritten()
+    {
+        string links = Write("src/main/java/demo/Links.java", "package demo;\n\n// See https://example.com/docs for more.\nclass Links {\n    OrderService orders;\n}\n");
+        EditorWindow window = await OpenAsync();
+        try
+        {
+            // The Java server's answer: OrderService is declared in its file, nothing else is.
+            window.DeclarationFinder = (path, at, _) => Task.FromResult<(string, TextPosition)?>(
+                PathNames.Same(path, links) && at.Line == 4 && at.Column is >= 4 and <= 16 ? (service, new TextPosition(2, 6)) : null);
+            window.OpenSource(links);
+            window.UpdateLayout();
+            CodeEditor editor = window.Editor;
+            RawInputModifiers click = OperatingSystem.IsMacOS() ? RawInputModifiers.Meta : RawInputModifiers.Control;
+
+            // The address in the comment is a link, underlined as it is drawn.
+            int address = editor.Document.Snapshot.GetOffset(new TextPosition(2, 10));
+            // Found as the comment's line is coloured and drawn.
+            await Settled(window, () =>
+            {
+                using var frame = window.CaptureRenderedFrame();
+                return editor.LinkOn(address) is not null;
+            });
+            Assert.Equal("https://example.com/docs", editor.Document.Snapshot.GetText(Assert.IsType<TextLink>(editor.LinkOn(address)).Range));
+
+            // The click's keys held over a name the server declares: underlined, the hand shown.
+            int name = editor.Document.Snapshot.GetOffset(new TextPosition(4, 8));
+            Point over = PointAt(window, name);
+            window.MouseMove(over, click);
+            await Settled(window, () => editor.PointedRange is not null);
+            Assert.Equal("OrderService", editor.Document.Snapshot.GetText(editor.PointedRange!.Value));
+            Assert.True(editor.ShowsHand);
+            // Over a name it declares nothing for: none.
+            window.MouseMove(PointAt(window, editor.Document.Snapshot.GetOffset(new TextPosition(4, 18))), click);
+            await Task.Delay(250, TestContext.Current.CancellationToken);
+            Dispatcher.UIThread.RunJobs();
+            Assert.Null(editor.PointedRange);
+
+            // Ctrl+click on the name goes to its declaration.
+            window.MouseDown(over, MouseButton.Left, click);
+            window.MouseUp(over, MouseButton.Left, click);
+            await Settled(window, () => window.SourcePath == service);
+            Assert.Equal(new TextPosition(2, 6), window.Editor.CaretPosition);
+
+            // Back, then Ctrl+click on the address opens it in the browser.
+            window.OpenSource(links);
+            window.UpdateLayout();
+            Point on = PointAt(window, address);
+            window.MouseDown(on, MouseButton.Left, click);
+            window.MouseUp(on, MouseButton.Left, click);
+            await Settled(window, () => window.Browsed.Count == 1);
+            Assert.Equal(new Uri("https://example.com/docs"), window.Browsed[0]);
+            Assert.Equal(links, window.SourcePath);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>A point over the character at an offset of the window's editor, in the window.</summary>
+    private static Point PointAt(EditorWindow window, int offset) =>
+        window.Editor.TranslatePoint(window.Editor.PointOf(offset) + new Vector(2, window.Editor.LineHeight / 2), window)!.Value;
+
     private const string MainOutline = """
         [{ "name": "demo", "kind": 4, "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 13 } },
            "selectionRange": { "start": { "line": 0, "character": 8 }, "end": { "line": 0, "character": 12 } } },
