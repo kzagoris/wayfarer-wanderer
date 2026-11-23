@@ -54,6 +54,7 @@ public sealed partial class EditorWindow : Window
         AddNavigation();
         AddSwitcher();
         AddDeclarations();
+        AddReadAsText();
         AddFindInFiles();
         AddToolWindows(new Grid { Children = { EditorWithBar(), Welcome } });
         AddExplorerActions();

@@ -65,7 +65,7 @@ public sealed partial class EditorWindow
     private void SwitcherFollowsFile(OpenDocument shown) => filesUsed.Came(shown);
 
     private string? NothingToSwitchTo() =>
-        documents.Count > 0 || SwitchableWindows().Any() ? null : "Nothing is open to switch to";
+        documents.Count > 0 || SwitchableWindows().Any() ? null : Refusals.NothingToSwitchTo;
 
     private IEnumerable<Shell.Docking.ToolWindow> SwitchableWindows() => ToolDock.Windows.Where(w => w.Unserved is null && w.Action is not null);
 

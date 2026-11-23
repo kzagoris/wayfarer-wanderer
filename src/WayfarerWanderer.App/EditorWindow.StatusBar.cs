@@ -108,6 +108,7 @@ public sealed partial class EditorWindow
             Child = new DockPanel { Margin = new Thickness(12, 0), Children = { widgets, line } },
         };
         DockPanel.SetDock(bar, Dock.Bottom);
+        statusBarFrame = bar;
         AddStatusBar();
         return bar;
     }

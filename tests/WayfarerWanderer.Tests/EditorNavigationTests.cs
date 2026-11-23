@@ -10,6 +10,7 @@ using Passenger.Core;
 using Passenger.Editor;
 using Passenger.Text;
 using WayfarerWanderer.App;
+using WayfarerWanderer.App.Shell;
 using WayfarerWanderer.App.Shell.Navigation;
 
 namespace WayfarerWanderer.Tests;
@@ -225,6 +226,68 @@ public sealed class EditorNavigationTests : IDisposable
         {
             window.Close();
         }
+    }
+
+    [AvaloniaFact]
+    public async Task ReadAsTextShowsWhatTheCaretIsOnOrTheLastMessageAndEscapeGivesTheKeysBack()
+    {
+        EditorWindow window = await OpenAsync();
+        try
+        {
+            // No file shown: the status bar's last message.
+            window.StatusText = "Build finished with 2 errors";
+            Assert.True(window.RunFromMenu(WayfarerWanderer.App.Shell.AppActions.ReadAsText));
+            PlainTextView message = await Shown<PlainTextView>(window);
+            Assert.Equal(("Last message", "Build finished with 2 errors"), (message.Title, message.Text));
+            message.Close();
+            Assert.Null(window.PlainText);
+
+            // In the editor: what the Java server's hover says of the caret.
+            window.HoverFinder = (_, at, _) => Task.FromResult(at.Line == 3 ? "int count" + "\n\n" + "How many times run ran." : null);
+            window.OpenSource(main);
+            window.Editor.GoTo(new TextPosition(3, 8));
+            window.Editor.Focus();
+            Assert.True(window.RunFromMenu(WayfarerWanderer.App.Shell.AppActions.ReadAsText));
+            PlainTextView view = await Shown<PlainTextView>(window);
+            Assert.Equal("Main.java, line 4, column 9", view.Title);
+            Assert.Equal("int count" + "\n\n" + "How many times run ran.", view.Text);
+            Assert.True(view.Editor.IsReadOnly);
+            await Settled(window, () => view.Editor.IsFocused);
+            // Asked again in the view: it is open already.
+            Assert.False(window.RunFromMenu(WayfarerWanderer.App.Shell.AppActions.ReadAsText));
+            window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, null);
+            Assert.Null(window.PlainText);
+            Assert.True(window.Editor.IsFocused);
+
+            // Where the server says nothing, the status bar says so.
+            window.Editor.GoTo(new TextPosition(0, 0));
+            Assert.True(window.RunFromMenu(WayfarerWanderer.App.Shell.AppActions.ReadAsText));
+            await Settled(window, () => window.StatusText == WayfarerWanderer.App.Shell.Refusals.NothingAtCaret);
+            Assert.Null(window.PlainText);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [Fact]
+    public void TheServersDefinitionAndHoverAnswersAreRead()
+    {
+        string file = new Uri(main).AbsoluteUri;
+        // A Location, LocationLinks (the name's place, not the whole declaration's), and a library's class with no file.
+        Assert.Equal((main, new TextPosition(3, 8)), EditorWindow.FirstDeclaration(JsonDocument.Parse(
+            $$"""{ "uri": "{{file}}", "range": { "start": { "line": 3, "character": 8 }, "end": { "line": 3, "character": 13 } } }""").RootElement));
+        Assert.Equal((main, new TextPosition(2, 6)), EditorWindow.FirstDeclaration(JsonDocument.Parse(
+            $$"""[{ "targetUri": "{{file}}", "targetRange": { "start": { "line": 2, "character": 0 }, "end": { "line": 8, "character": 1 } }, "targetSelectionRange": { "start": { "line": 2, "character": 6 }, "end": { "line": 2, "character": 10 } } }]""").RootElement));
+        Assert.Null(EditorWindow.FirstDeclaration(JsonDocument.Parse(
+            """[{ "uri": "jdt://contents/rt.jar/java.lang/String.class", "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } } }]""").RootElement));
+        Assert.Null(EditorWindow.FirstDeclaration(JsonDocument.Parse("null").RootElement));
+
+        Assert.Equal("int count", EditorWindow.HoverText(JsonDocument.Parse("""{ "contents": { "kind": "markdown", "value": "int count" } }""").RootElement));
+        Assert.Equal("demo.Main" + "\n\n" + "The program.", EditorWindow.HoverText(JsonDocument.Parse(
+            """{ "contents": [{ "language": "java", "value": "demo.Main" }, "The program."] }""").RootElement));
+        Assert.Equal("", EditorWindow.HoverText(JsonDocument.Parse("null").RootElement));
     }
 
     /// <summary>A point over the character at an offset of the window's editor, in the window.</summary>
