@@ -53,16 +53,15 @@ public sealed class TrustedFoldersTable : EditableTable
 
     private void Add(string folder, bool trusted)
     {
-        TextBlock name = new() { Text = folder, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0), TextTrimming = TextTrimming.PathSegmentEllipsis };
+        TextBlock name = new() { Text = folder, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(Gaps.Normal, 0), TextTrimming = TextTrimming.PathSegmentEllipsis };
         ToolTip.SetTip(name, folder);
         CheckBox box = CheckRows.Box();
         box.IsChecked = trusted;
         Avalonia.Automation.AutomationProperties.SetLabeledBy(box, name);
         box.HorizontalAlignment = HorizontalAlignment.Center;
         ToolTip.SetTip(box, "Checked, Passenger runs the folder's code; cleared, it runs none of it, and the folder opens without asking");
-        Button forget = ToolButtons.Of(IconKeys.Close, "Forget: the folder is asked of again the next time it opens");
+        Button forget = ToolButtons.Glyph(IconKeys.Close, "Forget: the folder is asked of again the next time it opens");
         forget.VerticalAlignment = VerticalAlignment.Center;
-        ((PathIcon)forget.Content!).Classes.Add(StyleClasses.Small);
         Border view = Ruled(name, box, forget);
         Row row = new(folder, box, forget, view);
         rows.Add(row);

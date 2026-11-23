@@ -246,7 +246,7 @@ public sealed class ContainerDetailsPane : DetailsTables
         [
             ("Image", Words(details.Image)),
             ("State", State(details.State, details.Health)),
-            ("Restarts", Words(details.RestartPolicy is { } policy ? $"{details.RestartCount} (restarted {Policy(policy)})" : $"{details.RestartCount}")),
+            ("Restarts", Words(details.RestartPolicy is { } policy ? $"{Numbers.Said(details.RestartCount)} (restarted {Policy(policy)})" : Numbers.Said(details.RestartCount))),
         ];
         if (details.LastExit is { } exit)
         {
@@ -307,12 +307,8 @@ public sealed class ContainerDetailsPane : DetailsTables
         : Words($"Host port {port.HostPort}");
 
     /// <summary>A health check's state as a tag in its colour.</summary>
-    internal static Border HealthTag(string health)
-    {
-        TextBlock said = new() { Text = health, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
-        said.Bind(TextBlock.ForegroundProperty, said.GetResourceObservable(health == "healthy" ? TokenKeys.Test_Passed : health == "unhealthy" ? TokenKeys.Error : TokenKeys.Warning));
-        return new Border { Classes = { StyleClasses.Tag }, Padding = new Thickness(5, 0), VerticalAlignment = VerticalAlignment.Center, Child = said };
-    }
+    internal static Border HealthTag(string health) =>
+        Tags.Of(health, health == "healthy" ? TokenKeys.Test_Passed : health == "unhealthy" ? TokenKeys.Error : TokenKeys.Warning);
 
     private static string Condition(string condition) => condition switch
     {

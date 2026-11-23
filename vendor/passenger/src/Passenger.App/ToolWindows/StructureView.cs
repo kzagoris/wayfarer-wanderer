@@ -18,11 +18,9 @@ namespace Passenger.App.ToolWindows;
 /// did not change; a file with none says why.</summary>
 public sealed class StructureView : DockPanel
 {
-    private static readonly TimeSpan Pause = TimeSpan.FromMilliseconds(600);
-
     private readonly ListBox list;
-    private readonly TextBlock placeholder;
-    private readonly TextBlock unoutlined;
+    private readonly EmptyState placeholder;
+    private readonly EmptyState unoutlined;
     private readonly Debounce settle;
     private Func<(string Path, string Name, int CaretLine)?>? source;
     private Func<FileOutline?>? outlineOf;
@@ -54,15 +52,15 @@ public sealed class StructureView : DockPanel
         };
         list.Tapped += (_, _) => GoToChosen();
         ListKeys.Act(list, new ListActs { Open = GoToChosen, Source = GoToChosen });
-        placeholder = new TextBlock { Classes = { StyleClasses.EmptyText } };
-        ActionTips.SetWords(placeholder, AppActions.GoToFile, keys => $"The open file's outline shows here: open one with {ActionTips.Named("Go to File", keys)}");
-        unoutlined = new TextBlock { Classes = { StyleClasses.EmptyText }, IsVisible = false };
-        settle = new Debounce(Pause, Refresh);
+        placeholder = new EmptyState();
+        placeholder.SayWithKeys(AppActions.GoToFile, keys => $"The open file's outline shows here: open one with {ActionTips.Named("Go to File", keys)}");
+        unoutlined = new EmptyState { IsVisible = false };
+        settle = new Debounce(Editors.TypingPauses.Structure, Refresh);
         ListMenus.Attach(list, () => list.SelectedItem is not SymbolRow chosen ? [] :
         [
-            ListMenus.Item("Go to", "F4", () => GoToRequested?.Invoke(this, chosen)),
-            ListMenus.Item("Find Usages", null, () => UsagesRequested?.Invoke(this, chosen)),
-            ListMenus.Item("Copy Name", null, () => IdeErrors.Observe(ListMenus.CopyAsync(this, chosen.Name))),
+            ListMenus.Source(() => GoToRequested?.Invoke(this, chosen)),
+            ListMenus.Item("Find Usages", () => UsagesRequested?.Invoke(this, chosen)),
+            ListMenus.Item("Copy Name", () => IdeErrors.Observe(ListMenus.CopyAsync(this, chosen.Name))),
         ]);
         HairlineDivider split = new(GridResizeDirection.Rows) { [Grid.RowProperty] = 1, IsVisible = false };
         details = new ContentControl { IsVisible = false, [Grid.RowProperty] = 2 };

@@ -94,7 +94,7 @@ public sealed class WelcomeView : UserControl
             new Separator(),
             ListMenus.Item("Remove from Recent Folders", OperatingSystem.IsMacOS() ? "Back" : "Delete", () => RemoveRequested?.Invoke(this, chosen)),
         ]);
-        empty = new TextBlock { Classes = { StyleClasses.EmptyText, StyleClasses.WelcomeEmpty } };
+        empty = new TextBlock { Classes = { StyleClasses.EmptyText, ShellClasses.WelcomeEmpty } };
 
         Page page = new() { Classes = { StyleClasses.WelcomePage } };
         foreach (Control top in (Control[])[hero, actions, bar, notice])
@@ -272,8 +272,8 @@ public sealed class WelcomeView : UserControl
     /// longer on disk, its name and badge muted.</summary>
     private static Control Row()
     {
-        TextBlock letters = new() { Classes = { StyleClasses.WelcomeBadgeText }, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-        Border badge = new() { Classes = { StyleClasses.WelcomeBadge }, Child = letters, VerticalAlignment = VerticalAlignment.Center };
+        TextBlock letters = new() { Classes = { ShellClasses.WelcomeBadgeText }, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        Border badge = new() { Classes = { ShellClasses.WelcomeBadge }, Child = letters, VerticalAlignment = VerticalAlignment.Center };
         TextBlock name = new() { Classes = { StyleClasses.WelcomeRowName }, TextTrimming = TextTrimming.CharacterEllipsis };
         TextBlock where = new() { Classes = { StyleClasses.Muted, StyleClasses.WelcomeRowPath }, TextTrimming = TextTrimming.PathSegmentEllipsis };
         DockPanel line = new() { Classes = { StyleClasses.WelcomeRow } };
@@ -283,8 +283,8 @@ public sealed class WelcomeView : UserControl
         gone.Bind(TextBlock.ForegroundProperty, gone.GetResourceObservable(TokenKeys.Warning));
         DockPanel.SetDock(gone, Dock.Right);
         line.Children.Add(gone);
-        TextBlock kindText = new() { Classes = { StyleClasses.WelcomeKindText } };
-        Border kind = new() { Classes = { StyleClasses.WelcomeKind }, Child = kindText, VerticalAlignment = VerticalAlignment.Center };
+        TextBlock kindText = new() { Classes = { ShellClasses.WelcomeKindText } };
+        Border kind = new() { Classes = { ShellClasses.WelcomeKind }, Child = kindText, VerticalAlignment = VerticalAlignment.Center };
         DockPanel.SetDock(kind, Dock.Right);
         line.Children.Add(kind);
         line.Children.Add(new StackPanel { VerticalAlignment = VerticalAlignment.Center, Spacing = 2, Children = { name, where } });

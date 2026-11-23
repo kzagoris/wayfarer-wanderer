@@ -35,7 +35,7 @@ public partial class App : Application
         if (OperatingSystem.IsMacOS())
         {
             // macOS takes the application's menu as setup ends, before any window: none set, it shows Avalonia's About.
-            NativeMenu.SetMenu(this, new NativeMenu());
+            NativeMenus.Of(this, NativeMenu.MenuProperty);
         }
         Themes.TakeAccentFromTokens(this);
         Passenger.Editor.FallbackFonts.Install(PlatformFallback.Named, FaceTracking.Set);
@@ -59,7 +59,7 @@ public partial class App : Application
         {
             if (item.InputGesture is { } keys && e.NameScope.Find<TextBlock>("PART_InputGestureText") is { } shown)
             {
-                shown.Text = new Passenger.Editor.Keystroke(keys.Key, keys.KeyModifiers).Display();
+                shown.Text = KeyWords.Of(keys.Key, keys.KeyModifiers);
             }
         });
     }
@@ -70,6 +70,11 @@ public partial class App : Application
         BackgroundWork.Install(work => Dispatcher.UIThread.Post(work));
         IdeErrors.Install();
         SystemMotion.LookAgain();
+        if (!PassengerApp.ShowsNoWindow)
+        {
+            ScreenReaders.LookAgain();
+        }
+        SystemContrast.LookAgain();
         if (MacTextElements.Install() is { } unread)
         {
             IdeErrors.Write($"VoiceOver reads the editor and the terminal by their caret's line alone: {unread}");

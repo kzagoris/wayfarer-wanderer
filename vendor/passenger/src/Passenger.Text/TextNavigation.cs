@@ -205,6 +205,11 @@ public static class TextNavigation
         return TextRange.FromBounds(start, end);
     }
 
+    /// <summary>Whether a range is one whole word, as a double-click chooses it: no word character carries on from
+    /// either end, and nothing but a word's characters lies between. Reads the word at its start, never past it.</summary>
+    public static bool IsWholeWord(TextSnapshot text, TextRange range) =>
+        range.Length > 0 && range.End <= text.Length && WordCharacters.IsWordAt(text, range.Start) && WordAt(text, range.Start) == range;
+
     /// <summary>Home: to the line's first non-space character, or to column 0 if the caret is already
     /// there (or the line is only spaces).</summary>
     public static int SmartHome(TextSnapshot text, int offset)
@@ -252,6 +257,14 @@ public static class TextNavigation
     {
         int start = LineStart(text, offset);
         return text[start..IndentEnd(text, start)];
+    }
+
+    /// <summary>The spaces and tabs the line of a string holding an offset begins with, those before the offset alone (the
+    /// indentation of what starts there).</summary>
+    public static string IndentBefore(string text, int offset)
+    {
+        int start = LineStart(text, offset);
+        return text[start..Math.Min(offset, IndentEnd(text, start))];
     }
 
     /// <summary>Where the line of a string holding an offset starts, lines broken at each '\n'; an offset past the text's

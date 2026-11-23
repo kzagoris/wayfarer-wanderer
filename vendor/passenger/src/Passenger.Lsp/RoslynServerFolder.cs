@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography;
 using System.Text;
 using Passenger.Core;
 
@@ -18,23 +17,37 @@ public static class RoslynServerFolder
     /// <summary>Where the app carries the server.</summary>
     public static string Carried => Path.Combine(AppContext.BaseDirectory, "roslyn");
 
-    /// <summary>The variable a program on Linux takes its temporary folder from.</summary>
+    /// <summary>The variable naming, by its full path, a folder to run the server from in place of <see cref="Carried"/>: a
+    /// test's stand-in for an app whose server is missing or broken.</summary>
+    [IdentifierHome]
+    public const string ServerVariable = "PASSENGER_ROSLYN_SERVER";
+
+    /// <summary>Where the server Passenger runs is: <see cref="Carried"/>, or the folder <see cref="ServerVariable"/> names;
+    /// a value that is no full path is fatal as Passenger starts, as a malformed flag is.</summary>
+    public static string ServerFrom => Environment.GetEnvironmentVariable(ServerVariable) switch
+    {
+        null or "" => Carried,
+        { } named when Path.IsPathFullyQualified(named) => named,
+        { } other => throw new FormatException($"{ServerVariable} is \"{other}\": it names a folder by its full path, or is unset"),
+    };
+
+    /// <summary>The variable a program on macOS and Linux takes its temporary folder from.</summary>
     public const string TemporaryVariable = "TMPDIR";
 
-    /// <summary>The temporary folder the server takes (TMPDIR), where it writes what Go to Declaration opens of a library
-    /// (MetadataAsSource): on Linux, whose /tmp every user shares, a folder of the person's own for the state's cache
-    /// (<see cref="UserTemporary.Of"/>, made theirs by <see cref="UserTemporary.Own"/>), so another user's folder there
-    /// neither takes its writes nor fails it; null where the server takes Passenger's own, the person's alone elsewhere,
-    /// or where none of theirs could be made.</summary>
-    public static string? Temporary(string stateCache)
+    /// <summary>The folder holding each server's temporary folder (<see cref="TemporaryOf"/>), where it writes what Go to
+    /// Declaration opens of a library (MetadataAsSource): off Windows, a folder of the person's own for the state's cache
+    /// (<see cref="UserTemporary.Of"/>, made theirs by <see cref="UserTemporary.Own"/>), so another user's folder on a
+    /// shared /tmp neither takes its writes nor fails it; null on Windows, where each server takes Passenger's own, the
+    /// person's alone, or where none of theirs could be made.</summary>
+    public static string? Temporaries(string stateCache)
     {
-        if (!OperatingSystem.IsLinux())
+        if (OperatingSystem.IsWindows())
         {
             return null;
         }
         try
         {
-            return UserTemporary.Own(UserTemporary.Of(stateCache, "roslyn"));
+            return UserTemporary.Own(UserTemporary.Of(stateCache, TemporariesKind));
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
@@ -42,6 +55,49 @@ public static class RoslynServerFolder
             return null;
         }
     }
+
+    /// <summary>A server's own temporary folder (TMPDIR) in <see cref="Temporaries"/>, named for this process first, those
+    /// of a process no longer running removed as it is made: a server clears away, as it first writes a library's code,
+    /// every other's code it cannot see running, and on macOS and Linux sees none in another session, where Passenger
+    /// starts each. Null where there is no <see cref="Temporaries"/>.</summary>
+    public static string? TemporaryOf(string stateCache)
+    {
+        if (Temporaries(stateCache) is not { } temporaries)
+        {
+            return null;
+        }
+        foreach (string left in Directory.EnumerateDirectories(temporaries))
+        {
+            string name = Path.GetFileName(left);
+            int dash = name.IndexOf('-', StringComparison.Ordinal);
+            if (dash > 0 && int.TryParse(name.AsSpan(0, dash), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int owner)
+                && owner != Environment.ProcessId && !DotnetProcesses.Runs(owner))
+            {
+                try
+                {
+                    Directory.Delete(left, recursive: true);
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    PassengerLog.Write($"A C# language server's temporary folder stays, {left}: {error.Message}");
+                }
+            }
+        }
+        try
+        {
+            return UserTemporary.Own(Path.Combine(temporaries, $"{Environment.ProcessId}-{Interlocked.Increment(ref temporariesMade)}"));
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            PassengerLog.Write($"The C# language server takes the state's temporary folder: {error.Message}");
+            return temporaries;
+        }
+    }
+
+    private static int temporariesMade;
+
+    /// <summary>The kind of a state's own temporary folder (<see cref="UserTemporary.Of"/>) that holds its servers'.</summary>
+    public const string TemporariesKind = "roslyn";
 
     /// <summary>The folder the server writes its caches to, under the one it runs from: never part of a copy or its stamp.</summary>
     private const string Written = "cache";
@@ -63,9 +119,9 @@ public static class RoslynServerFolder
     /// carried folder: under the cache's roslyn/, made if this build has none yet (an APFS clone on macOS, else a plain
     /// copy, either made in a temporary folder renamed into place, so a Passenger starting meanwhile never runs half a
     /// copy), copies of other builds left unused for a day removed. Null where it runs from the carried folder.</summary>
-    internal static async Task<string?> CopyAsync(string? stateCache, CancellationToken cancel)
+    internal static async Task<string?> CopyAsync(string from, string? stateCache, CancellationToken cancel)
     {
-        string carried = PathNames.Canonical(Carried);
+        string carried = PathNames.Canonical(from);
         // A file added inside a macOS app bundle breaks its seal.
         if (stateCache is null || (!(OperatingSystem.IsMacOS() && MacBundles.Holds(carried)) && CanWrite(carried)))
         {
@@ -147,7 +203,7 @@ public static class RoslynServerFolder
             FileInfo each = new(Path.Combine(carried, file));
             listed.Append(file).Append('\0').Append(each.Length).Append('\0').Append(each.LastWriteTimeUtc.Ticks).Append('\n');
         }
-        string hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(listed.ToString())))[..12];
+        string hash = FileNames.Hash(listed.ToString(), 12);
         return $"{new string([.. version.Select(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' ? c : '-')])}-{hash}";
     }
 

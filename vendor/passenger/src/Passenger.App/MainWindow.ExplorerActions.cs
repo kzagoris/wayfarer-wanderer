@@ -117,7 +117,7 @@ public partial class MainWindow
         });
         ActionButtons.Bind(Explorer.ViewSwitchButton, A.SwitchExplorerView, actions, id => Request(id));
 
-        static string? Holds(ExplorerNode row) => NewGoesIn(row) is null ? $"Nothing new goes in {row.Name}" : null;
+        static string? Holds(ExplorerNode row) => NewGoesIn(row) is { } into ? ExplorerNode.KeptOut(into) : $"Nothing new goes in {row.Name}";
         static string? Referencing(ExplorerNode row) => row.Kind == NodeKind.Project && !row.IsProgram ? row.Path
             : row.Kind == NodeKind.Dependencies && row.Owner is { } owner && !Passenger.Host.ProgramFiles.IsProgram(owner) ? owner : null;
     }
@@ -182,10 +182,8 @@ public partial class MainWindow
     /// one click, then its view's.</summary>
     private IReadOnlyList<Control> ExplorerOptions()
     {
-        MenuItem follow = new() { Header = "Always Select Opened File", ToggleType = MenuItemToggleType.CheckBox, IsChecked = settings.AlwaysSelectOpenedFile };
-        follow.Click += (_, _) => ApplySettings(settings with { AlwaysSelectOpenedFile = !settings.AlwaysSelectOpenedFile });
-        MenuItem click = new() { Header = "Open Files with Single Click", ToggleType = MenuItemToggleType.CheckBox, IsChecked = settings.OpenFilesWithSingleClick };
-        click.Click += (_, _) => ApplySettings(settings with { OpenFilesWithSingleClick = !settings.OpenFilesWithSingleClick });
+        MenuItem follow = ToolWindows.ListMenus.Toggle("Always Select Opened File", settings.AlwaysSelectOpenedFile, on => ApplySettings(settings with { AlwaysSelectOpenedFile = on }));
+        MenuItem click = ToolWindows.ListMenus.Toggle("Open Files with Single Click", settings.OpenFilesWithSingleClick, on => ApplySettings(settings with { OpenFilesWithSingleClick = on }));
         IReadOnlyList<Control> own = Explorer.Options();
         return own.Count == 0 ? [follow, click] : [follow, click, new Separator(), .. own];
     }

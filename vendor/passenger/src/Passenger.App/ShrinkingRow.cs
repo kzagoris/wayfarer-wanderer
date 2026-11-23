@@ -9,7 +9,8 @@ namespace Passenger.App;
 /// its item's when it holds a list's, a row's least when it holds a row): a list's row (a frame's place before its
 /// method's name, a branch's upstream before its name), the main toolbar or a tool window's header narrowing (the
 /// branch's name before the project's). Its words end in an ellipsis (Shell.axaml), so none is cut mid-letter. A child
-/// that goes whole (<see cref="GoesWholeProperty"/>) goes where the row cannot hold every child at its least.</summary>
+/// that goes whole (<see cref="GoesWholeProperty"/>) goes where the row cannot hold every child at its least. A child
+/// that grows lays the row out again, full or measured with no bound (<see cref="RoomGiven"/>).</summary>
 public sealed class ShrinkingRow : Panel
 {
     private double[] widths = [];
@@ -66,7 +67,13 @@ public sealed class ShrinkingRow : Panel
         }
         double gaps = Spacing * Math.Max(0, shown - 1);
         least += gaps;
+        double leastBefore = LeastWidth;
         LeastWidth = staysLeast + Spacing * Math.Max(0, staying - 1);
+        if (LeastWidth != leastBefore && Parent is ToolbarRow holder)
+        {
+            // Measured again alone, as a widget's words grew, the row keeps the room given before until its holder hears its least.
+            holder.InvalidateMeasure();
+        }
         // Those that go whole go, last first, before another is cut below its least (one giving way last, its width).
         for (int i = Math.Min(Children.Count, 64) - 1; i >= 0 && least > availableSize.Width; i--)
         {
@@ -104,12 +111,10 @@ public sealed class ShrinkingRow : Panel
             widths[i] -= give;
             excess -= give;
         }
-        // Told the room left over too, so a child that grows by itself (a tab strip) is measured again within it.
-        double slack = double.IsInfinity(room) ? 0 : Math.Max(0, room - widths.Sum());
         double height = 0;
         for (int i = 0; i < Children.Count; i++)
         {
-            Children[i].Measure(new Size(widths[i] + (Children[i] is IGivesWayFirst || Gone(i) ? 0 : slack), availableSize.Height));
+            RoomGiven.Measure(Children[i], widths[i], availableSize.Height);
             height = Math.Max(height, Children[i].DesiredSize.Height);
             if (Children[i] is IGivesWayFirst)
             {
@@ -127,6 +132,10 @@ public sealed class ShrinkingRow : Panel
     /// <summary>The least a child gives way to in a row, past its MinWidth, which leaves it as it is anywhere else: a closable
     /// tab's few letters, its ellipsis and its ×.</summary>
     public static readonly AttachedProperty<double> LeastProperty = AvaloniaProperty.RegisterAttached<ShrinkingRow, Control, double>("Least");
+
+    public static double GetLeast(Control child) => child.GetValue(LeastProperty);
+
+    public static void SetLeast(Control child, double value) => child.SetValue(LeastProperty, value);
 
     private double Least(Control child, int i)
     {

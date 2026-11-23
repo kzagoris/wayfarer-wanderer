@@ -32,7 +32,9 @@ public partial class MainWindow
     /// (<see cref="RefusalPlace"/>).</summary>
     private bool Request(string action, ActionContext? context = null)
     {
-        if (actions!.Run(action, context ?? actions.Context()) is not { } why)
+        context ??= actions!.Context();
+        action = ByPlace(action, context);
+        if (actions!.Run(action, FromDiff(action, context) ?? context) is not { } why)
         {
             return true;
         }
@@ -56,9 +58,9 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>Runs an action's work held under its id: begun at once with its first stage, ended with the task; asked for
-    /// again while it works, it says what is under way.</summary>
-    private async Task WorkingAsync(string id, string stage, Func<Task> run, bool stoppable = false)
+    /// <summary>Runs an action's work held under its id: begun at once with its first stage, ended with the task, telling
+    /// what <paramref name="run"/> says it came to; asked for again while it works, it says what is under way.</summary>
+    private async Task WorkingAsync(string id, string stage, Func<Task<(bool Succeeded, string Said)>> run, bool stoppable = false)
     {
         if (work.Begin(id, stage, stoppable) is not { } working)
         {
@@ -67,8 +69,22 @@ public partial class MainWindow
         }
         using (working)
         {
-            await run();
+            (bool succeeded, string said) = await run();
+            working.Tell(succeeded, said);
         }
+    }
+
+    /// <summary>An action's work from its first moment, begun under its id saying its first stage, so an agent's ide_action
+    /// waits for it, hears the popup or dialog it opens as it ends and what it tells; null, said in the status bar, while that
+    /// work is under way already.</summary>
+    private Working? BeginWork(string id, string stage)
+    {
+        if (work.Begin(id, stage, stoppable: false) is { } begun)
+        {
+            return begun;
+        }
+        status.Text = ActionWork.Busy(work.Of(id)!);
+        return null;
     }
 
     /// <summary>Where an action asked for now runs: the file shown and its caret, what has the keys in the window its keys
@@ -92,6 +108,10 @@ public partial class MainWindow
 
     /// <summary>Why nothing of the open folder's code runs: it is not trusted (<see cref="ProjectSession.Trusted"/>).</summary>
     private string? Untrusted() => session.Folder is not null && !session.Trusted ? Refusals.Untrusted : null;
+
+    /// <summary>Why an action working in a tool window that serves one kind of project cannot run: the window serves nothing
+    /// in the open folder, in the words its own action greys with (<see cref="Docking.ToolWindow.Unserved"/>).</summary>
+    private string? Unserved([IdentifierOf(typeof(ToolWindowIds))] string window) => Dock[window].Unserved;
 
     /// <summary>Why Expand All or Collapse All cannot run: no tool window with rows to open or close has the keys.</summary>
     private static string? NoTree(ActionContext context, Action? does, string verb) =>
@@ -119,6 +139,21 @@ public partial class MainWindow
     private Workspace.SearchScope? ExplorerScope(ActionContext context) =>
         context.ToolWindow?.Id == ToolWindowIds.Explorer && Explorer.SelectedNodes is { Count: > 0 } rows ? ScopeOf(rows) : null;
 
+    /// <summary>The toolbar's icon buttons, declared by the window's XAML, made the one icon button (ToolButtons), each
+    /// kept where Tab reaches it, as the toolbar is a region the keys go through.</summary>
+    private void GiveToolbarButtons()
+    {
+        ToolButtons.Give(MenuButton, IconKeys.Menu, "Main menu", keys: true);
+        ToolButtons.Give(BuildButton, IconKeys.Build, "Build solution", keys: true);
+        ToolButtons.Give(RunButton, IconKeys.Run, "Run", keys: true, mark: StyleClasses.ToolbarRun);
+        ToolButtons.Give(DebugButton, IconKeys.Debug, "Debug", keys: true, mark: StyleClasses.ToolbarDebug);
+        ToolButtons.Give(ProfileButton, IconKeys.Profile, "Profile", keys: true);
+        ToolButtons.Give(HotReloadButton, IconKeys.HotReload, "Apply Hot Reload Changes", keys: true, mark: StyleClasses.ToolbarHotReload);
+        ToolButtons.Give(StopButton, IconKeys.Stop, "Stop", keys: true, mark: StyleClasses.ToolbarStop);
+        ToolButtons.Give(SearchButton, IconKeys.Search, "Search everywhere", keys: true);
+        ToolButtons.Give(SettingsButton, IconKeys.Settings, "Settings", keys: true);
+    }
+
     /// <summary>The window's own actions; each feature's partial or controller adds its own beside them.</summary>
     private void AddActions()
     {
@@ -138,12 +173,12 @@ public partial class MainWindow
         };
         work.Told += (_, told) => announcer.Tell(told.Said, told.Succeeded ? Urgency.Polite : Urgency.Assertive);
         AddEditing();
-        Add(A.Open, "Open…", "IDE", context => IdeErrors.Observe(PickWorkspace()), menu: ("File", 0, 0));
         actions.Add(new IdeAction(A.RecentFiles, "Recent Files", "IDE", _ => ShowRecentFiles()) { Menus = [new("File", 0, 4), new("View", 2, 0)] });
         Add(A.Save, "Save", "IDE", context => IdeErrors.Observe(SaveExplicitly(all: false)), Refusals.NeedsUnsaved, ("File", 1, 0));
         Add(A.SaveAll, "Save All", "IDE", context => IdeErrors.Observe(SaveExplicitly(all: true)), _ => Editors.Documents.Any(d => d.IsModified) ? null : "Every file is saved", ("File", 1, 1));
-        // Quit is the application menu's on macOS; either closes every window.
-        Add(A.Exit, "Exit", "IDE", _ => Exit(), c => c.ByAgent ? Refusals.QuitIsThePersons : null, OperatingSystem.IsMacOS() ? null : ("File", 4, 0));
+        // Quit is the application menu's on macOS, named and found as it names it; either closes every window.
+        Add(A.Exit, QuitTitle, "IDE", _ => Exit(), c => c.ByAgent ? Refusals.QuitIsThePersons : null, OperatingSystem.IsMacOS() ? null : ("File", 4, 0),
+            words: [OperatingSystem.IsMacOS() ? "Exit" : "Quit"]);
         Add(A.FindAction, "Find Action…", "IDE", _ => ShowFindAction(), menu: ("Help", 0, 0));
 
         // Unit Tests, Problems, the Explorer and the Step Library take Find's keys for their filters, a console its text.
@@ -214,6 +249,9 @@ public partial class MainWindow
 
         AddTabActions();
         AddRegions();
+        AddNavigationBar();
+        AddReadAsText();
+        AddSoundCues();
 
         // The tool windows' frame, run from the terminal too.
         actions.Add(new IdeAction(A.MaximizeToolWindow, "Maximize Tool Window", "Tool Windows", _ => Dock.ToggleMaximize()) { Menus = [new("View", 3, 0)], FromTerminal = true });
@@ -234,11 +272,41 @@ public partial class MainWindow
         });
         Add(A.ToggleSolutionAnalysis, "Toggle Solution-Wide Analysis", "IDE", _ => ToggleSolutionAnalysis(),
             _ => session.CSharp is null ? session.WhyNoCSharp : null, ("Code", 4, 0));
-        Add(A.RestartCSharpServer, "Restart C# Language Server", "IDE", _ =>
+        Add(A.RestartCSharpServer, "Restart C# Language Server", "IDE", _ => RestartCSharpServer(),
+            _ => session.CSharp is null ? session.WhyNoCSharp : null, ("Code", 4, 1), words: ["Roslyn"]);
+    }
+
+    /// <summary>Restart C# Language Server: the server started again, its work held from the restart until the server has
+    /// started and loads the projects, or C# is left stopped or unavailable, telling which; Stop ends the wait alone.</summary>
+    private void RestartCSharpServer()
+    {
+        CSharp.CSharpService csharp = session.CSharp!;
+        Working? restarting = work.Begin(A.RestartCSharpServer, "Starting the C# language server again…");
+        status.Text = "Starting the C# language server again";
+        if (!csharp.Restart() || restarting is null)
         {
-            session.CSharp!.Restart();
-            status.Text = "Starting the C# language server again";
-        }, _ => session.CSharp is null ? session.WhyNoCSharp : null, ("Code", 4, 1), words: ["Roslyn"]);
+            restarting?.Dispose();
+            return;
+        }
+        string starting = csharp.State;
+        CancellationTokenRegistration stopped = default;
+        void Follow(object? sender, EventArgs e)
+        {
+            if (!restarting.IsStopped && csharp.State == starting && !csharp.IsStopped)
+            {
+                return;
+            }
+            csharp.StateChanged -= Follow;
+            stopped.Dispose();
+            if (!restarting.IsStopped)
+            {
+                bool started = !csharp.IsStopped && !csharp.IsUnavailable;
+                restarting.Tell(started, started ? $"The C# language server started again: {csharp.State}" : csharp.State);
+            }
+            restarting.Dispose();
+        }
+        csharp.StateChanged += Follow;
+        stopped = restarting.Stopping.Register(() => UiThread.Post(() => Follow(null, EventArgs.Empty)));
     }
 
     /// <summary>The editor's actions, run where the keys are: a text box's own editing there, another editor (a diff's)
@@ -292,7 +360,7 @@ public partial class MainWindow
         context.Focused is TextBox box && TextBoxEdits.ContainsKey(action) ? (box.IsReadOnly ? Refusals.TextReadOnly : null)
         : context.Focused is CodeEditor other && other != context.Editor
             ? (other.IsReadOnly && other.FindAncestorOfType<ToolWindows.OutputView>()?.TakesEdit(other, action) != true ? other.ReadOnlyWhy : null)
-        : context.File is { } shown && context.Editor.IsReadOnly ? Refusals.ReadOnly(shown.Name) : null;
+        : context.ReadOnlyWhy;
 
     private void Edit(string action, ActionContext context)
     {
@@ -472,7 +540,9 @@ public partial class MainWindow
         ActionContext context = actions!.Context();
         string? taken = Here(A.NewItem, ExplorerHasKeys(context))
             ?? Here(A.Rerun, context.ToolWindow?.Id == ToolWindowIds.Run)
-            ?? Here(A.EditBreakpoint, context is { ToolWindow: null, File: { } file } && session.Debug.Breakpoints.In(file.Path).Any(b => b.Line == context.Caret.Line));
+            ?? Here(A.EditBreakpoint, context is { ToolWindow: null, File: { } file } && session.Debug.Breakpoints.In(file.Path).Any(b => b.Line == context.Caret.Line))
+            ?? Here(A.NextOverload, assist.StepsOverloads)
+            ?? Here(A.PreviousOverload, assist.StepsOverloads);
         if (taken is null)
         {
             return false;

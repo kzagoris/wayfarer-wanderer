@@ -16,7 +16,13 @@ public sealed partial class Vim
         changeExtent = null;
     }
 
-    private VimResult VisualChange(Command command, string op, TextSnapshot text, IVimView view)
+    /// <summary>A visual operator, one that writes into an emptied text writing on the one empty line it holds.</summary>
+    private VimResult VisualChange(Command command, string op, TextSnapshot text, IVimView view) =>
+        text.Length == 0 && breakEnds && view.Refuses is null && op is "p" or "P" or "c" or "s" or "C" or "S" or "R" or "I" or "A"
+            ? OnOneEmptyLine((lined, _) => VisualChangeOn(command, op, lined, view), text, view)
+            : VisualChangeOn(command, op, text, view);
+
+    private VimResult VisualChangeOn(Command command, string op, TextSnapshot text, IVimView view)
     {
         VimMode mode = Mode;
         bool block = mode == VimMode.VisualBlock;
@@ -50,10 +56,21 @@ public sealed partial class Vim
             // Visual mode ends as it would with the change made, the carets at the stretches' starts.
             return Refused(why, block ? SelectionSet.Single(VimMotions.OffsetAtColumn(text, top, left, tab)) : RegionStretches(text, taken, lines).Item2);
         }
-        if (block)
-        {
-            keptBlockLeft = left;
-        }
+        // Any operator keeps the columns its stretch spans for the next A to place itself by (keptBlockLeft).
+        (int Left, int Right) kept = (keptBlockLeft, keptBlockRight);
+        bool toEnd = visualAims.Length > 0 && visualAims[Math.Clamp(visualPrimary, 0, visualAims.Length - 1)] == int.MaxValue;
+        Region stretch = regions[0];
+        bool overLines = text.GetLineFromOffset(stretch.Low) != text.GetLineFromOffset(stretch.High);
+        bool inserts = op is "I" or "A";
+        // A block reaching each line's end over lines too short to reach keeps no width.
+        bool reachesNothing = right == int.MaxValue && Enumerable.Range(top, bottom - top + 1).All(l => TextNavigation.VisualColumn(text, text.GetLine(l).End, tab) <= left);
+        (keptBlockLeft, keptBlockRight) = block && !lines ? (left, reachesNothing ? left : right)
+            : toEnd ? (keptBlockLeft, keptBlockRight)
+            : inserts && !lines ? (0, stretch.Cursor < stretch.Anchor && overLines ? 0 : CaretColumn(text, stretch.Cursor, tab))
+            : lines || overLines
+                ? (overLines ? keptBlockLeft : 0,
+                    stretch.Cursor >= stretch.Anchor || !lines ? CaretColumn(text, stretch.High, tab) : !overLines ? CaretColumn(text, stretch.Cursor, tab) : 0)
+            : (CaretColumn(text, stretch.Low, tab), CaretColumn(text, stretch.High, tab));
         // A tab the block's edge cuts in two (r: any tab it takes) is first made the spaces it shows.
         EditPlan? split = block && !lines && (op is "I" or "A" or "r" || basic is "d" or "c" or "y")
             ? SplitTabs(text, top, bottom, left, right, tab, cutsLeft: op != "A", cutsRight: op != "I", inside: op == "r")
@@ -64,7 +81,7 @@ public sealed partial class Vim
         {
             if (op is "I" or "A")
             {
-                return VisualInsert(acting, op == "A", mode, taken, text, view, top, bottom, left, right);
+                return VisualInsert(acting, op == "A", mode, taken, text, view, top, bottom, left, right, kept);
             }
             if (op is "J" or "gJ")
             {
@@ -73,12 +90,20 @@ public sealed partial class Vim
                 SelectionSet starts = SelectionSet.Create([.. taken.Select(r => Selection.At(r.Low))], 0);
                 if (Join(text, starts, block ? Math.Max(2, bottom - top + 1) : n, spaced: op == "J", Options.JoinSpaces) is { } joined)
                 {
+                    if (block && top == bottom && top + 1 == VimMotions.LastLine(text, breakEnds)
+                        && right.CompareTo(TextNavigation.VisualColumn(text, text.GetLine(top).End, tab) - 1) == (text.GetLine(top + 1).Length > 0 ? 1 : 0))
+                    {
+                        // Joining the last line, a block past its line's end (to its last character, the last line empty) aims j and k at its left.
+                        (wantedFor, wanted) = (joined.Selections, [left]);
+                    }
                     return new VimResult(true, Edits: [joined]);
                 }
                 // Nothing to join: visual mode ends all the same, the caret at the stretch's start, or where . found it.
                 if (replaying)
                 {
-                    return new VimResult(true, SelectionSet.Create([.. taken.Select(r => Selection.At(Settled(text, r.Anchor, breakEnds)))], 0));
+                    // Made again by characters over lines the text no longer holds, the caret goes where the stretch was cut back to.
+                    return new VimResult(true, SelectionSet.Create([.. taken.Select(r => Selection.At(Settled(text, mode == VimMode.Visual && r.Cursor < r.Anchor
+                        ? r.Cursor : r.Anchor, breakEnds)))], 0));
                 }
                 return new VimResult(true, block ? SelectionSet.Single(Settled(text, VimMotions.OffsetAtColumn(text, top, left, tab), breakEnds))
                     : mode == VimMode.VisualLine ? starts.With(c => Selection.At(VimMotions.LineOf(text, c.Caret).Start))
@@ -101,12 +126,17 @@ public sealed partial class Vim
             blockChange = block && !lines && basic == "c" && stretches.Count > 0;
             if (stretches.Count == 0)
             {
-                // A block of more than one line with nothing in its columns still takes a piece for each.
-                if (block && bottom > top && basic == "y")
+                if (basic is not ("y" or "c"))
+                {
+                    // Taking nothing, the change is still the one . makes again.
+                    Remember(acting);
+                }
+                // A block with nothing in its columns still yanks and changes, and over more than one line deletes, a piece for each line.
+                if (block && basic == "y")
                 {
                     Registers.Yank(command.Register, BlockTaken(text, stretches, (top, bottom, left, right), tab));
                 }
-                else if (block && bottom > top && basic == "d")
+                else if (block && text.Length > 0 && (basic == "c" || (bottom > top && basic == "d")))
                 {
                     Registers.Delete(command.Register, BlockTaken(text, stretches, (top, bottom, left, right), tab), always: false);
                 }
@@ -124,7 +154,7 @@ public sealed partial class Vim
             }
             if (op is "p" or "P")
             {
-                return PutOver(acting, op == "P", text, stretches, carets, block, view, top, block ? text.GetLineFromOffset(taken[0].Cursor) : bottom);
+                return PutOver(acting, op == "P", text, stretches, carets, block, view, (top, bottom, left, right), block ? text.GetLineFromOffset(taken[0].Cursor) : bottom);
             }
             return Act(acting, basic, stretches, text, carets, view, block && !lines, (top, bottom, left, right));
         }
@@ -202,7 +232,7 @@ public sealed partial class Vim
         if (extent.Mode == VimMode.VisualBlock)
         {
             int column = TextNavigation.VisualColumn(text, caret, tab);
-            blockColumns = (column, column + extent.Columns, extent.ToEnd);
+            blockColumns = (column, column + extent.Columns, extent.ToEnd || againToEnd);
             blockAgain = (column, column + extent.Columns);
             return new Region(caret, VimMotions.OffsetAtColumn(text, line, column + extent.Columns, tab));
         }
@@ -289,7 +319,8 @@ public sealed partial class Vim
     /// the stretch began, I at the cursor and A at that line's start; otherwise I at the first line's start and A after
     /// the cursor's character, or on it after $, in the first column of the stretch's first line, or on a later line
     /// reaching the column the last block began at where the column it aims at is that one, or past it from short of it.</summary>
-    private VimResult VisualInsert(Command command, bool after, VimMode mode, List<Region> taken, TextSnapshot text, IVimView view, int top, int bottom, int left, int right)
+    private VimResult VisualInsert(Command command, bool after, VimMode mode, List<Region> taken, TextSnapshot text, IVimView view, int top, int bottom, int left, int right,
+        (int Left, int Right) kept)
     {
         int tab = view.Indent.TabWidth;
         string how = after ? "A" : "I";
@@ -308,11 +339,13 @@ public sealed partial class Vim
                 int aim = aimed >= 0 ? aimed : column;
                 LineSpan cursorLine = VimMotions.LineOf(text, cursor);
                 bool onIt = cursorLine.Line == anchorLine.Line ? column == 0
-                    : keptBlockLeft <= TextNavigation.VisualColumn(text, cursorLine.End, tab) && (aim == keptBlockLeft || (aim > keptBlockLeft && column < keptBlockLeft));
-                bool afterFirst = above && keptBlockLeft != 0 && anchorLine.Length > 0;
+                    : kept.Left <= TextNavigation.VisualColumn(text, cursorLine.End, tab) && (aim == kept.Left || (aim > kept.Left && column < kept.Left));
+                // Back over lines A passes the first character where the kept columns start past it, or after $ differ.
+                bool afterFirst = above && (aim == int.MaxValue ? kept.Left != kept.Right : kept.Left != 0) && anchorLine.Length > 0;
                 int place = !after ? (above ? r.Cursor : anchorLine.Start)
                     : above ? (afterFirst ? TextNavigation.NextGrapheme(text, anchorLine.Start) : anchorLine.Start)
-                    : aim == int.MaxValue ? LastCharOf(text, r.Cursor)
+                    : aim == int.MaxValue ? (kept.Left == kept.Right ? Settled(text, r.Cursor, breakEnds)
+                        : Math.Min(CharEnd(text, Settled(text, r.Cursor, breakEnds)), VimMotions.LineOf(text, r.Cursor).End))
                     : onIt ? Settled(text, cursor, breakEnds)
                     : Math.Min(CharEnd(text, r.Cursor), VimMotions.LineOf(text, r.Cursor).End);
                 inserts.Add(Selection.At(place));
@@ -322,8 +355,7 @@ public sealed partial class Vim
                     {
                         Again = !after ? InsertAgain.AtCursor
                             : aim == int.MaxValue && !above ? InsertAgain.OnLastBelow
-                            : (above && !afterFirst) || (!above && onIt) ? InsertAgain.AtColumnBelow
-                            : InsertAgain.AfterColumnBelow,
+                            : InsertAgain.AtColumnBelow,
                     };
                 }
             }
@@ -395,13 +427,10 @@ public sealed partial class Vim
             }
             int line = (int)Math.Min(text.GetLineFromOffset(c.Caret) + (long)extent.Lines, VimMotions.LastLine(text, breakEnds));
             int last = LastCharOf(text, text.GetLineStart(line));
-            if (extent.Again == InsertAgain.OnLastBelow)
-            {
-                return Selection.At(last);
-            }
-            // The column is the caret's place in its line, counted in characters, not cells.
-            int at = Math.Min(text.GetLineStart(line) + (c.Caret - VimMotions.LineOf(text, c.Caret).Start), last);
-            return Selection.At(extent.Again == InsertAgain.AfterColumnBelow ? Math.Min(CharEnd(text, at), text.GetLine(line).End) : at);
+            // The column is the caret's place in its line, counted in characters, not cells; after $ the line's last.
+            int at = extent.Again == InsertAgain.OnLastBelow ? last : Math.Min(text.GetLineStart(line) + (c.Caret - VimMotions.LineOf(text, c.Caret).Start), last);
+            // A goes past that character where the columns the last visual change kept widen, on it otherwise.
+            return Selection.At(keptBlockLeft < keptBlockRight ? Math.Min(CharEnd(text, at), text.GetLine(line).End) : at);
         });
         return Insert(text, places, command, extent.Again == InsertAgain.AtCursor ? "I" : "A");
     }
@@ -511,10 +540,11 @@ public sealed partial class Vim
     }
 
     /// <summary>p and P over a visual stretch: the register's text in place of what is shown, which p keeps in the
-    /// unnamed register and P doesn't; whole lines put over characters go on lines of their own, over a block below the
-    /// line its cursor stands on (<paramref name="below"/>). From an empty register the stretch is deleted alone, as a d
-    /// into the unnamed register (for P into none); . after either deletes as much again so, putting nothing.</summary>
-    private VimResult PutOver(Command command, bool keep, TextSnapshot text, List<Stretch> stretches, SelectionSet carets, bool block, IVimView view, int top, int below)
+    /// unnamed register unless it held nothing (v$ on an empty last line) and P doesn't; whole lines put over characters
+    /// go on lines of their own, over a block below the line its cursor stands on (<paramref name="below"/>). From an
+    /// empty register the stretch is deleted alone, as a d into the unnamed register (for P into none); . after either
+    /// deletes as much again so, putting nothing.</summary>
+    private VimResult PutOver(Command command, bool keep, TextSnapshot text, List<Stretch> stretches, SelectionSet carets, bool block, IVimView view, (int Top, int Bottom, int Left, int Right) over, int below)
     {
         if (VimRegisters.IsClipboard(command.Register))
         {
@@ -525,19 +555,41 @@ public sealed partial class Vim
         if ((command.Register == '_' ? new VimRegister([string.Empty], false) : Registers.Get(command.Register)) is not { } value)
         {
             char? into = keep ? '_' : null;
-            return Act(command with { Keys = into is { } none ? ["\"", none.ToString(), "d"] : ["d"], Register = into }, "d", stretches, text, carets, view, block);
+            return Act(command with { Keys = into is { } none ? ["\"", none.ToString(), "d"] : ["d"], Register = into }, "d", stretches, text, carets, view, block, over);
         }
         Remember(command with { Keys = keep ? ["\"", "_", "d"] : ["d"], Count = 0 });
         stretches.Sort((a, b) => a.Start.CompareTo(b.Start));
-        VimRegister replaced = new([.. Merged(stretches, pieces: true).Select(m => Taken(text, m))], stretches[0].Lines) { Blockwise = block };
+        VimRegister replaced = TakenBy(text, stretches, block, over, view.Indent.TabWidth);
         string eol = view.LineEnding;
         int times = Math.Clamp(command.Count, 1, Math.Max(1, MostRepeatedText / Math.Max(1, value.Text.Length)));
+        if (block && intoEmptied && value.Linewise)
+        {
+            // Over an emptied text a block's P puts lines in its line's place, its p below it less a last empty one.
+            List<string> putLines = [.. LineEndings.In(value.Text, eol)[..^eol.Length].Split(eol)];
+            if (keep)
+            {
+                string all = string.Join(eol, putLines);
+                return new VimResult(true, Edits: [new EditPlan([new TextEdit(0, 0, all)], SelectionSet.Single(TextNavigation.IndentEnd(TextSnapshot.From(all), TextSnapshot.From(all).GetLine(0))), EditKind.Other)]);
+            }
+            if (putLines[^1].Length == 0)
+            {
+                putLines.RemoveAt(putLines.Count - 1);
+            }
+            if (putLines.Count == 0)
+            {
+                // Putting nothing, the text is still no longer emptied but its one empty line.
+                return new VimResult(true, Edits: [new EditPlan([], SelectionSet.Single(0), EditKind.Other)]);
+            }
+            string under = string.Join(eol, putLines);
+            return new VimResult(true, Edits: [new EditPlan([new TextEdit(0, 0, eol + under)],
+                SelectionSet.Single(eol.Length + TextNavigation.IndentEnd(TextSnapshot.From(under), TextSnapshot.From(under).GetLine(0))), EditKind.Other)]);
+        }
         if (block && value.Linewise)
         {
             // P over a block whose top line's part ran to that line's end, past text it leaves, puts the lines below that line.
             Stretch first = stretches[0];
-            bool belowTop = keep && first.First == top && first.End > first.Start && first.End == text.GetLine(top).End && first.Start > text.GetLine(top).Start;
-            return PutLinesBy(value, keep, keep && !belowTop, text, stretches, top, belowTop ? top : below, eol, replaced, times);
+            bool belowTop = keep && first.First == over.Top && first.End > first.Start && first.End == text.GetLine(over.Top).End && first.Start > text.GetLine(over.Top).Start;
+            return PutLinesBy(value, keep, keep && !belowTop, text, stretches, over.Top, belowTop ? over.Top : below, eol, replaced, times);
         }
         if (value.Blockwise && (block || stretches.TrueForAll(s => !s.Lines)))
         {
@@ -546,7 +598,7 @@ public sealed partial class Vim
             int corner = stretches[0].Start;
             TextSnapshot cleared = text.Apply(deletes);
             VimResult put = PutBlock(value, before: true, times, cleared, SelectionSet.Single(TextEditing.MapOffset(corner, deletes, false)), view, cursorAfter: false);
-            if (!keep)
+            if (!keep && replaced.Text.Length > 0 && !intoEmptied)
             {
                 Registers.Delete(null, replaced, always: false);
             }
@@ -559,7 +611,7 @@ public sealed partial class Vim
             List<TextEdit> pieces = [.. stretches.Select(t => new TextEdit(t.Start, t.End - t.Start, each))];
             TextSnapshot filled = text.Apply(pieces);
             int lastOfFirst = stretches[0].Start + Math.Max(0, each.Length - 1);
-            if (!keep)
+            if (!keep && replaced.Text.Length > 0 && !intoEmptied)
             {
                 Registers.Delete(null, replaced, always: false);
             }
@@ -594,8 +646,8 @@ public sealed partial class Vim
             }
             else if (value.Linewise)
             {
-                // Lines put over characters go on lines of their own between what stays.
-                put = eol + piece;
+                // Lines put over characters go on lines of their own between what stays, below an emptied text's one line.
+                put = eol + (intoEmptied && piece.EndsWith(eol, StringComparison.Ordinal) ? piece[..^eol.Length] : piece);
                 landing = eol.Length;
             }
             else
@@ -611,7 +663,7 @@ public sealed partial class Vim
         bool lines = value.Linewise || stretches[0].Lines;
         List<Selection> putCarets = [.. landed.Select(p => Selection.At(!lines ? Settled(after, p, breakEnds)
             : VimMotions.FirstNonBlank(after, after.GetLineFromOffset(Math.Min(p, after.Length)), breakEnds)))];
-        if (!keep)
+        if (!keep && replaced.Text.Length > 0 && !intoEmptied)
         {
             Registers.Delete(null, replaced, always: false);
         }
@@ -640,7 +692,7 @@ public sealed partial class Vim
         }
         TextSnapshot after = text.Apply(edits);
         int first = after.GetLineFromOffset(Math.Min(TextEditing.MapOffset(at, edits, false) + (above || end.BreakLength > 0 ? 0 : eol.Length), after.Length));
-        if (!keep)
+        if (!keep && replaced.Text.Length > 0 && !intoEmptied)
         {
             Registers.Delete(null, replaced, always: false);
         }
@@ -666,6 +718,8 @@ public sealed partial class Vim
         int lastAt = 0;
         int shift = 0;
         string added = string.Empty;
+        int addedLines = 0;
+        bool endsBroken = text.Length > 0 && text.GetLine(text.LineCount - 1).Length == 0 && text.LineCount - 1 > last;
         for (int i = 0; i < value.Parts.Count; i++)
         {
             string padded = value.Parts[i] + new string(' ', Math.Max(0, width - widths[i]));
@@ -676,7 +730,7 @@ public sealed partial class Vim
             if (line > last)
             {
                 at = text.Length;
-                lead = (text.Length > 0 && text.GetLine(text.LineCount - 1).Length == 0 && text.LineCount - 1 > last && added.Length == 0 ? string.Empty : eol) + new string(' ', column);
+                lead = (endsBroken && addedLines == 0 ? string.Empty : eol) + new string(' ', column);
                 followed = false;
             }
             else
@@ -701,6 +755,7 @@ public sealed partial class Vim
             if (line > last)
             {
                 added += put;
+                addedLines++;
                 continue;
             }
             edits.Add(new TextEdit(at, 0, put));
@@ -711,9 +766,10 @@ public sealed partial class Vim
             lastAt = at + shift + lead.Length;
             shift += put.Length;
         }
-        if (added.Length > 0)
+        if (addedLines > 0)
         {
-            edits.Add(new TextEdit(text.Length, 0, added));
+            // Lines added past a file that kept its final break keep it after them.
+            edits.Add(new TextEdit(text.Length, 0, endsBroken ? added + eol : added));
             if (edits.Count == 1)
             {
                 firstAt = text.Length + added.IndexOf(value.Parts[0], StringComparison.Ordinal);

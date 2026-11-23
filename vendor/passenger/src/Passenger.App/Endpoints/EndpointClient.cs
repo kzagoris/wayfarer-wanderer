@@ -75,7 +75,7 @@ public sealed record EndpointResponse
         {
             if (Body.Length > MostShown)
             {
-                return $"{Body[..MostShown]}\n… {Body.Length - MostShown:N0} more characters not shown";
+                return $"{Body[..MostShown]}\n… {Numbers.Said(Body.Length - MostShown)} more characters not shown";
             }
             string trimmed = Body.TrimStart();
             if (trimmed.StartsWith('{') || trimmed.StartsWith('['))
@@ -131,7 +131,7 @@ public static class EndpointClient
         string resolvedBody = HttpVariables.Resolve(body, variables, filling);
         if (filling.Overflowed)
         {
-            return (null, $"The request's variables fill in more than {HttpVariables.MostFilledIn:N0} characters: does one name another over and over?");
+            return (null, $"The request's variables fill in more than {Numbers.Said(HttpVariables.MostFilledIn)} characters: does one name another over and over?");
         }
         HashSet<string> unresolved = filling.Unresolved;
         if (unresolved.Count > 0)
@@ -236,7 +236,7 @@ public static class EndpointClient
                 bool asGet = status == 303 ? method != "HEAD" : status is 301 or 302 && method == "POST";
                 // By origin, as what a request reads is allowed to one server: another port of the same host is another server.
                 bool sameOrigin = next.Scheme == first.Scheme && next.Port == first.Port && string.Equals(next.Host, first.Host, StringComparison.OrdinalIgnoreCase);
-                string? stop = redirects == MostRedirects ? $"Not followed to {next}: {MostRedirects} redirects were followed already"
+                string? stop = redirects == MostRedirects ? $"Not followed to {next}: {Numbers.Said(MostRedirects)} redirects were followed already"
                     : at.Scheme == Uri.UriSchemeHttps && next.Scheme != Uri.UriSchemeHttps ? $"Not followed to {next}: it leaves HTTPS"
                     : !sameOrigin && !asGet && body.Length > 0 ? $"Not followed to {Origin(next)}: a {status} would send the request's body there"
                     : null;

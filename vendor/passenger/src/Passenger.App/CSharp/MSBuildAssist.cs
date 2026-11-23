@@ -176,7 +176,6 @@ internal sealed class MSBuildAssist : LanguageAssist
                 WordCharacters = list.WordCharacters,
                 // An MSBuild list keeps its own order among names that match alike (the common properties first), not the shortest.
                 Alike = 1000,
-                DescribedAsItOpens = true,
             });
         }
         catch (OperationCanceledException)
@@ -226,10 +225,10 @@ internal sealed class MSBuildAssist : LanguageAssist
         XmlElement? element = place.Element;
         XmlAttribute? attribute = place.Attribute;
         string? props = msbuild.Insight?.PackagesProps;
-        bool central = props is not null && element?.LocalName == "PackageReference";
+        bool central = props is not null && element?.LocalName == MSBuildNames.PackageReference;
         List<TextEdit> edits = [new TextEdit(replaced.Start, replaced.Length, package.Id)];
         if (!central && element is not null && attribute is { Name: "Include", IsValueClosed: true } && element.Attribute("Version") is null
-            && element.Attribute("VersionOverride") is null && !element.Children.Any(c => c.LocalName is "Version" or "VersionOverride"))
+            && element.Attribute(MSBuildNames.VersionOverride) is null && !element.Children.Any(c => c.LocalName is MSBuildNames.Version or MSBuildNames.VersionOverride))
         {
             edits.Add(new TextEdit(attribute.ValueEnd + 1, 0, $" Version=\"{package.Version}\""));
         }
@@ -274,7 +273,7 @@ internal sealed class MSBuildAssist : LanguageAssist
     internal static TextEdit? CentralVersion(string text, PackageChoice package)
     {
         XmlTree tree = XmlTree.Parse(text);
-        List<XmlElement> versions = [.. tree.Elements.Where(e => e.LocalName == "PackageVersion" && MSBuildSyntax.RoleOf(e) == MSBuildRole.Item)];
+        List<XmlElement> versions = [.. tree.Elements.Where(e => e.LocalName == MSBuildNames.PackageVersion && MSBuildSyntax.RoleOf(e) == MSBuildRole.Item)];
         if (versions.Any(v => string.Equals(v.Attribute("Include")?.Value.Trim(), package.Id, StringComparison.OrdinalIgnoreCase)))
         {
             return null;
@@ -299,15 +298,14 @@ internal sealed class MSBuildAssist : LanguageAssist
             return null;
         }
         return Indent(text, end) is not null
-            ? new TextEdit(text.LastIndexOf('\n', Math.Max(0, end - 1)) + 1, 0, $"  <ItemGroup>{eol}    {line}{eol}  </ItemGroup>{eol}")
+            ? new TextEdit(TextNavigation.LineStart(text, end), 0, $"  <ItemGroup>{eol}    {line}{eol}  </ItemGroup>{eol}")
             : new TextEdit(end, 0, $"<ItemGroup>{line}</ItemGroup>");
     }
 
     /// <summary>The whitespace before an offset on its line where nothing else is before it there; null where something is.</summary>
     private static string? Indent(string text, int offset)
     {
-        int lineStart = text.LastIndexOf('\n', Math.Max(0, offset - 1)) + 1;
-        string before = text[lineStart..offset];
+        string before = text[TextNavigation.LineStart(text, offset)..offset];
         return before.All(c => c is ' ' or '\t') ? before : null;
     }
 

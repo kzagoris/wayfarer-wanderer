@@ -68,14 +68,15 @@ public sealed class MemoryView : DockPanel
     private readonly StackPanel crumbs;
     private readonly StackPanel actions;
     private readonly TextBlock summary;
-    private readonly TextBlock waiting;
+    private readonly EmptyState waiting;
     private readonly ListBox types;
     private readonly ListBox deltas;
     private readonly ListBox objects;
     private readonly TreeRows<RetentionRow> pathRows = [];
     private readonly TreeList paths;
     private readonly ListBox keyPaths;
-    private readonly ToggleButton[] setTabs;
+    /// <summary>A set's pages: its objects, its shortest paths to roots, its key retention paths.</summary>
+    private readonly ToolTabs.Strip<int> setTabs = new() { Margin = new Thickness(Gaps.Normal, 0, Gaps.Normal, Gaps.Tight), [DockProperty] = Dock.Top };
     private readonly DockPanel typePage;
     private readonly DockPanel deltaPage;
     private readonly DockPanel setPage;
@@ -114,18 +115,18 @@ public sealed class MemoryView : DockPanel
         });
         ListMenus.Attach(snapshotList, () => snapshotList.SelectedItem is not SnapshotRow { Snapshot: var chosen } ? [] :
         [
-            ListMenus.Item("Remove Snapshot", "Delete", () => Remove(chosen)),
+            ListMenus.Remove("Remove Snapshot", () => Remove(chosen)),
         ]);
-        Border left = new() { [DockProperty] = Dock.Left, Width = 230, Child = snapshotList, BorderThickness = new Thickness(0, 0, 1, 0) };
+        Border left = new() { [DockProperty] = Dock.Left, Width = 230, Child = snapshotList, BorderThickness = Hairlines.After };
         left.Bind(Border.BorderBrushProperty, left.GetResourceObservable(TokenKeys.Divider));
         Children.Add(left);
 
-        crumbs = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
-        actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center, [DockProperty] = Dock.Right };
+        crumbs = new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gaps.Tight, VerticalAlignment = VerticalAlignment.Center };
+        actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gaps.Small, VerticalAlignment = VerticalAlignment.Center, [DockProperty] = Dock.Right };
         // The trail and its actions a bar's height, what the page shows under them.
-        DockPanel head = new() { Margin = new Thickness(12, 0, 8, 0), MinHeight = ToolBars.Height, Children = { actions, crumbs } };
+        DockPanel head = new() { Margin = new Thickness(Gaps.Wide, 0, Gaps.Normal, 0), MinHeight = ToolBars.Height, Children = { actions, crumbs } };
         summary = Muted(string.Empty);
-        summary.Margin = new Thickness(12, 0, 12, 6);
+        summary.Margin = new Thickness(Gaps.Wide, 0, Gaps.Wide, Gaps.Small);
         summary.TextWrapping = TextWrapping.Wrap;
         Border top = ToolBars.Top(new StackPanel { Children = { head, summary } });
 
@@ -136,7 +137,7 @@ public sealed class MemoryView : DockPanel
             return typeTable.Row([name, .. numbers]).Showing<HeapType>(type =>
             {
                 Named(name, type.Name);
-                Put(numbers, $"{type.Count:N0}", Sizes.Said(type.Bytes), Sizes.Said(type.RetainedBytes));
+                Put(numbers, Core.Numbers.Said(type.Count), Sizes.Said(type.Bytes), Sizes.Said(type.RetainedBytes));
             });
         });
         ListKeys.Act(types, new ListActs { Open = OpenType });
@@ -150,8 +151,8 @@ public sealed class MemoryView : DockPanel
             return deltaTable.Row([name, .. numbers]).Showing<TypeDelta>(type =>
             {
                 Named(name, type.Name);
-                Put(numbers, Signed(type.ObjectsDelta, n => $"{n:N0}"), Signed(type.BytesDelta, Sizes.Said), $"{type.NewObjects:N0}", Sizes.Said(type.NewBytes),
-                    $"{type.DeadObjects:N0}", Sizes.Said(type.DeadBytes), $"{type.SurvivedObjects:N0}");
+                Put(numbers, Signed(type.ObjectsDelta, Core.Numbers.Said), Signed(type.BytesDelta, Sizes.Said), Core.Numbers.Said(type.NewObjects), Sizes.Said(type.NewBytes),
+                    Core.Numbers.Said(type.DeadObjects), Sizes.Said(type.DeadBytes), Core.Numbers.Said(type.SurvivedObjects));
             });
         });
         ListKeys.Act(deltas, new ListActs { Open = () => OpenDelta(Kind.New) });
@@ -161,7 +162,7 @@ public sealed class MemoryView : DockPanel
         objects = List(() =>
         {
             Avalonia.Controls.Documents.Run type = new();
-            Avalonia.Controls.Documents.Run address = new Avalonia.Controls.Documents.Run { FontSize = 12 }.InCodeFont();
+            Avalonia.Controls.Documents.Run address = new Avalonia.Controls.Documents.Run { FontSize = TypeRamp.Code }.InCodeFont();
             TextBlock name = Cell();
             address.Bind(Avalonia.Controls.Documents.TextElement.ForegroundProperty, name.GetResourceObservable(TokenKeys.TextMuted));
             // An object: its type, then its address in the code font, muted.
@@ -182,7 +183,7 @@ public sealed class MemoryView : DockPanel
         paths = List<TreeList>(() =>
         {
             TextBlock[] numbers = Numbers(2);
-            return pathTable.Row([PathStep(), .. numbers]).Showing<RetentionRow>(row => Put(numbers, $"{row.Node.Objects:N0}", Sizes.Said(row.Node.RetainedBytes)));
+            return pathTable.Row([PathStep(), .. numbers]).Showing<RetentionRow>(row => Put(numbers, Core.Numbers.Said(row.Node.Objects), Sizes.Said(row.Node.RetainedBytes)));
         });
         paths.ItemsSource = pathRows;
         TreeKeys.Attach<RetentionRow>(paths, Toggle);
@@ -195,22 +196,18 @@ public sealed class MemoryView : DockPanel
             return keyTable.Row([name, .. numbers]).Showing<RetentionPath>(path =>
             {
                 Named(name, path.Text);
-                Put(numbers, $"{path.Objects:N0}", Sizes.Said(path.RetainedBytes));
+                Put(numbers, Core.Numbers.Said(path.Objects), Sizes.Said(path.RetainedBytes));
             });
         });
         keyPathsPage = Framed(keyTable, keyPaths);
 
-        setTabs = [Tab("Objects", 0), Tab("Shortest Paths to Roots", 1), Tab("Key Retention Paths", 2)];
-        StackPanel tabs = new() { Orientation = Orientation.Horizontal, Spacing = 2, Margin = new Thickness(8, 0, 8, 4), [DockProperty] = Dock.Top };
-        foreach (ToggleButton tab in setTabs)
-        {
-            tabs.Children.Add(tab);
-        }
-        setPage = new DockPanel { Children = { tabs, new Panel { Children = { objectsPage, pathsPage, keyPathsPage } } } };
+        setTabs.Add(0, "Objects");
+        setTabs.Add(1, "Shortest Paths to Roots");
+        setTabs.Add(2, "Key Retention Paths");
+        setTabs.Chosen += (_, tab) => ShowTab(tab);
+        setPage = new DockPanel { Children = { setTabs, new Panel { Children = { objectsPage, pathsPage, keyPathsPage } } } };
 
-        waiting = Muted(string.Empty);
-        waiting.HorizontalAlignment = HorizontalAlignment.Center;
-        waiting.VerticalAlignment = VerticalAlignment.Center;
+        waiting = new EmptyState();
         Children.Add(top);
         Children.Add(new Panel { Children = { typePage, deltaPage, setPage, waiting } });
         Show(null);
@@ -265,7 +262,7 @@ public sealed class MemoryView : DockPanel
     public ListBox ObjectList => objects;
 
     /// <summary>Which of the object set's views is shown: its objects (0), Shortest Paths to Roots (1), Key Retention Paths (2).</summary>
-    public int SetTab => Array.FindIndex(setTabs, t => t.IsChecked == true);
+    public int SetTab => setTabs.HasChoice ? setTabs.Choice : -1;
 
     /// <summary>A snapshot taken: listed and shown, the rows of those it had the run let go of saying so. The first of a run
     /// puts the earlier run's away, which it cannot be compared with.</summary>
@@ -379,7 +376,7 @@ public sealed class MemoryView : DockPanel
             }
             if (i == trail.Count - 1)
             {
-                crumbs.Children.Add(new TextBlock { Text = trail[i].Crumb, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+                crumbs.Children.Add(new TextBlock { Classes = { StyleClasses.Strong }, Text = trail[i].Crumb, VerticalAlignment = VerticalAlignment.Center });
                 continue;
             }
             int back = i + 1;
@@ -401,7 +398,7 @@ public sealed class MemoryView : DockPanel
         switch (page)
         {
             case SnapshotPage { Snapshot: var snapshot }:
-                summary.Text = $"{snapshot.Objects:N0} objects, {Sizes.Said(snapshot.Bytes)} live, in {snapshot.Types.Count:N0} types; taken at "
+                summary.Text = $"{Core.Numbers.Said(snapshot.Objects)} objects, {Sizes.Said(snapshot.Bytes)} live, in {Core.Numbers.Said(snapshot.Types.Count)} types; taken at "
                     + $"{snapshot.Taken:HH:mm:ss} in {Durations.Said(snapshot.Took)} ({snapshot.Phases})"
                     + (snapshot.Lacks is { } lacks ? $". {lacks}" : string.Empty)
                     + (snapshot.Gone is { } gone ? $". {gone}: its types are listed, its objects no longer open" : string.Empty);
@@ -412,7 +409,7 @@ public sealed class MemoryView : DockPanel
                 ToolTip.SetTip(compare, "Compare this snapshot with another of the run: its new, dead and survived objects");
                 break;
             case ComparisonPage { Comparison: var comparison }:
-                summary.Text = $"{comparison.NewObjects:N0} new, {comparison.DeadObjects:N0} dead and {comparison.SurvivedObjects:N0} survived objects "
+                summary.Text = $"{Core.Numbers.Said(comparison.NewObjects)} new, {Core.Numbers.Said(comparison.DeadObjects)} dead and {Core.Numbers.Said(comparison.SurvivedObjects)} survived objects "
                     + $"from {comparison.Older.Name} to {comparison.Newer.Name}"
                     + (comparison.Inexact is { } inexact ? $". {inexact}: some objects may show as dead and new though they survived." : string.Empty);
                 deltas.ItemsSource = comparison.Types;
@@ -422,7 +419,7 @@ public sealed class MemoryView : DockPanel
                 Action("Open Survived Objects", () => OpenDelta(Kind.Survived));
                 break;
             case SetPage set:
-                summary.Text = $"{set.Set.Count:N0} {Core.Plural.Noun(set.Set.Count, "object")}, {Sizes.Said(set.Set.Bytes)}, retained {Sizes.Said(set.Set.RetainedBytes)}, in {set.Set.Snapshot.Name}";
+                summary.Text = $"{Core.Numbers.Said(set.Set.Count)} {Core.Plural.Noun(set.Set.Count, "object")}, {Sizes.Said(set.Set.Bytes)}, retained {Sizes.Said(set.Set.RetainedBytes)}, in {set.Set.Snapshot.Name}";
                 objects.ItemsSource = set.Set.Objects;
                 objects.SelectedIndex = set.Set.Count > 0 ? 0 : -1;
                 ShowPaths(set.Paths);
@@ -440,9 +437,7 @@ public sealed class MemoryView : DockPanel
         MenuFlyout menu = new();
         foreach (MemorySnapshot other in snapshots.Select(r => r.Snapshot).Where(s => s != snapshot))
         {
-            MenuItem item = new() { Header = $"{other.Name} ({other.Taken:HH:mm:ss})" };
-            item.Click += (_, _) => IdeErrors.Observe(CompareWithAsync(other));
-            menu.Items.Add(item);
+            menu.Items.Add(ListMenus.Item($"{other.Name} ({other.Taken:HH:mm:ss})", () => IdeErrors.Observe(CompareWithAsync(other))));
         }
         CompareMenu = menu;
         menu.Placement = PlacementMode.BottomEdgeAlignedLeft;
@@ -517,10 +512,7 @@ public sealed class MemoryView : DockPanel
 
     private void ShowTab(int tab)
     {
-        for (int i = 0; i < setTabs.Length; i++)
-        {
-            setTabs[i].IsChecked = i == tab;
-        }
+        setTabs.Choice = tab;
         objectsPage.IsVisible = tab == 0;
         pathsPage.IsVisible = tab == 1;
         keyPathsPage.IsVisible = tab == 2;
@@ -612,13 +604,6 @@ public sealed class MemoryView : DockPanel
         deltas.ItemsSource = deltaSort < 0 ? [.. sorted.Reverse()] : sorted.ToList();
     }
 
-    private ToggleButton Tab(string label, int index)
-    {
-        ToggleButton tab = new() { Content = label, Classes = { StyleClasses.PanelTab } };
-        tab.Click += (_, _) => ShowTab(index);
-        return tab;
-    }
-
     private Button Action(string label, Action run)
     {
         Button button = new() { Content = label, VerticalAlignment = VerticalAlignment.Center };
@@ -648,31 +633,22 @@ public sealed class MemoryView : DockPanel
     /// kind strong before its name).</summary>
     private Control PathStep()
     {
-        RowIcon chevron = RowIcon.Chevron();
-        Border toggle = new() { Width = 18, Height = ListRow.Height, Background = Brushes.Transparent, Child = chevron };
+        RowExpander chevron = RowExpander.Of<RetentionRow>(Toggle);
         TextBlock text = Cell();
         Avalonia.Controls.Documents.Run kind = new() { FontWeight = FontWeight.SemiBold };
         Avalonia.Controls.Documents.Run named = new();
         TextBlock root = Cell();
         root.Inlines = [kind, named];
-        StackPanel step = new() { Orientation = Orientation.Horizontal, Children = { toggle, text, root } };
-        toggle.PointerPressed += (_, e) =>
-        {
-            if (step.DataContext is RetentionRow row)
-            {
-                Toggle(row);
-                e.Handled = true;
-            }
-        };
+        StackPanel step = new() { Orientation = Orientation.Horizontal, Children = { chevron, text, root } };
         return step.Showing<RetentionRow>(row =>
         {
-            step.Margin = new Thickness(row.Depth * 14, 0, 0, 0);
-            chevron.IsVisible = row.Node.Children.Count > 0;
-            chevron.Turned = row.IsExpanded;
+            step.Margin = new Thickness(row.Depth * Gaps.Indent, 0, 0, 0);
+            chevron.Expands = row.Node.Children.Count > 0;
+            chevron.IsOpen = row.IsExpanded;
             text.IsVisible = row.Node.Root is null;
             root.IsVisible = row.Node.Root is not null;
             Named(row.Node.Root is null ? text : root, row.Node.Text);
-            text.FontWeight = row.Depth == 0 ? FontWeight.SemiBold : FontWeight.Normal;
+            text.Classes.Set(StyleClasses.Strong, row.Depth == 0);
             kind.Text = row.Node.Root?.KindName;
             named.Text = row.Node.Root is { Name.Length: > 0 } rooted ? $": {rooted.Name}" : null;
         });
@@ -682,18 +658,18 @@ public sealed class MemoryView : DockPanel
     /// when it was taken and what it holds.</summary>
     private static Control Row()
     {
-        TextBlock name = new() { FontWeight = FontWeight.SemiBold };
+        TextBlock name = new() { Classes = { StyleClasses.Strong } };
         TextBlock letGo = Muted("objects let go");
         letGo.VerticalAlignment = VerticalAlignment.Center;
         TextBlock said = Muted(string.Empty);
-        StackPanel head = new() { Orientation = Orientation.Horizontal, Spacing = 6, Children = { name, letGo } };
-        StackPanel row = new() { Margin = new Thickness(2, 4), Children = { head, said } };
+        StackPanel head = new() { Orientation = Orientation.Horizontal, Spacing = Gaps.Small, Children = { name, letGo } };
+        StackPanel row = new() { Margin = new Thickness(Gaps.Hair, Gaps.Tight), Children = { head, said } };
         return row.Showing<SnapshotRow>(listed =>
         {
             MemorySnapshot snapshot = listed.Snapshot;
             name.Text = snapshot.Name;
             letGo.IsVisible = listed.Gone is not null;
-            said.Text = $"{snapshot.Taken:HH:mm:ss} · {snapshot.Objects:N0} objects · {Sizes.Said(snapshot.Bytes)}";
+            said.Text = $"{snapshot.Taken:HH:mm:ss} · {Core.Numbers.Said(snapshot.Objects)} objects · {Sizes.Said(snapshot.Bytes)}";
             ToolTip.SetTip(row, listed.Gone);
         });
     }
@@ -716,7 +692,7 @@ public sealed class MemoryView : DockPanel
         TextBlock[] cells = new TextBlock[count];
         for (int i = 0; i < count; i++)
         {
-            cells[i] = new TextBlock { FontSize = 12, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center }.InCodeFont();
+            cells[i] = new TextBlock { Classes = { StyleClasses.Code }, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
         }
         return cells;
     }
@@ -733,9 +709,7 @@ public sealed class MemoryView : DockPanel
 
     private static TextBlock Muted(string text)
     {
-        TextBlock block = MutedText.Of(text);
-        block.FontSize = 12;
-        return block;
+        return MutedText.Caption(text);
     }
 
     private static string Signed(long value, Func<long, string> format) => value switch

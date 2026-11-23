@@ -259,7 +259,7 @@ public sealed partial class EditorWindow
                 Spacing = 8,
                 Children =
                 {
-                    new TextBlock { Classes = { StyleClasses.PopupTitle }, Text = title },
+                    new TextBlock { Classes = { ShellClasses.PopupTitle }, Text = title },
                     new TextBlock { Text = question, TextWrapping = TextWrapping.Wrap },
                     new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { no, yes } },
                 },

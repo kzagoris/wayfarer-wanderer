@@ -31,7 +31,7 @@ public partial class MainWindow
 
     private void AddRoutes()
     {
-        routesLater = new Debounce(TimeSpan.FromMilliseconds(400), () =>
+        routesLater = new Debounce(TypingPauses.Routes, () =>
         {
             IdeErrors.Observe(ReadRoutesAsync());
             return Task.CompletedTask;
@@ -249,9 +249,7 @@ public partial class MainWindow
         MenuFlyout menu = new();
         foreach ((WebRoute route, _, _) in RoutesIn(document).Where(r => r.At.Line == line && RouteRequests.Sendable(r.Route)))
         {
-            MenuItem send = new() { Header = $"Send {RouteRequests.Title(route)}" };
-            send.Click += (_, _) => IdeErrors.Observe(SendRouteAsync(route));
-            menu.Items.Add(send);
+            menu.Items.Add(ToolWindows.ListMenus.Item($"Send {RouteRequests.Title(route)}", () => IdeErrors.Observe(SendRouteAsync(route))));
         }
         if (menu.Items.Count == 0)
         {
@@ -387,9 +385,9 @@ public partial class MainWindow
         {
             if (Editors.Find(path) is { } document)
             {
-                if (document.IsReadOnly)
+                if (document.ReadOnlyWhy is { } readOnly)
                 {
-                    return (null, string.Empty, Refusals.ReadOnly(Path.GetFileName(path)));
+                    return (null, string.Empty, readOnly);
                 }
                 string before = document.Text.Snapshot.ToString();
                 TextEdit[] edits = [new TextEdit(before.Length, 0, added(before.Replace("\r\n", "\n", StringComparison.Ordinal)))];

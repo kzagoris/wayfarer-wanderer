@@ -32,15 +32,16 @@ public sealed record ProgramFileLink(string Path) : LinkTarget;
 /// terminal's file paths) is drawn as plain text until Cmd or Ctrl is held over it.</summary>
 public readonly record struct FoundLink(int Start, int Length, LinkTarget Target, bool Hidden = false);
 
-/// <summary>The links in a console's lines: web addresses, a .NET stack frame's file and line ("at X in
-/// /path/File.cs:line 12"), and a compiler's message ("File.cs(12,5): error ..."). The terminal's (<see cref="FilePaths"/>)
-/// add any path to a file, with a line and column after it or not. A path is a link only to a file there is, a relative
-/// one found under the folders given (the project's first), the disk asked off the window's thread and the line's links
-/// coming with its answer; a stack frame's <c>/_/</c>, a deterministic build's name for the source root, is relative too.
-/// A stretch of the IDE's own words is a link too (<see cref="Claim"/>), as the folder a publish landed in. A line's links
-/// are kept while its text is the same, found again by its characters, and the editor's for a line while it starts where
-/// it did, so drawing it again and the pointer moving over it copy and make nothing. As a highlighter it colours them, for
-/// a view with no colours of its own.</summary>
+/// <summary>The links in a console's lines: web addresses (one a container's program names as its own where its container
+/// publishes it here, <see cref="Reaching"/>), a .NET stack frame's file and line ("at X in /path/File.cs:line 12"), and a
+/// compiler's message ("File.cs(12,5): error ..."). The terminal's (<see cref="FilePaths"/>) add any path to a file, with a
+/// line and column after it or not. A path is a link only to a file there is, a relative one found under the folders given
+/// (the project's first); the disk, and where a container's address is reached, asked off the window's thread, the line's
+/// links coming with the answer; a stack frame's <c>/_/</c>, a deterministic build's name for the source root, is relative
+/// too. A stretch of the IDE's own words is a link too (<see cref="Claim"/>), as the folder a publish landed in. A line's
+/// links are kept while its text is the same, found again by its characters, and the editor's for a line while it starts
+/// where it did, so drawing it again and the pointer moving over it copy and make nothing. As a highlighter it colours
+/// them, for a view with no colours of its own.</summary>
 public sealed partial class ConsoleLinks : IHighlighter
 {
     /// <summary>Lines longer than this have no links: output written without line breaks costs nothing more to draw.</summary>
@@ -71,6 +72,17 @@ public sealed partial class ConsoleLinks : IHighlighter
     /// <summary>Whether a batch of paths is being asked now.</summary>
     private bool lookingUp;
 
+    /// <summary>Where each address a container's program named as its own is reached from here, by the container its line
+    /// named and the address (<see cref="Reached"/>), as answered: null where it is published nowhere.</summary>
+    private readonly Dictionary<(string? Named, Uri Address), Uri?> reached = [];
+
+    /// <summary>The addresses being asked where they are reached, off the window's thread.</summary>
+    private readonly HashSet<(string? Named, Uri Address)> reaching = [];
+
+    private Func<string?, Uri, Task<Uri?>>? reachedBy;
+
+    private Func<Containers.ContainerPaths?>? mappedBy;
+
     /// <summary>How many times what was found has been forgotten, so answers asked before are passed over.</summary>
     private int forgotten;
 
@@ -91,30 +103,76 @@ public sealed partial class ConsoleLinks : IHighlighter
     /// <summary>Every path asked of the disk since the console last forgot what it found (or last kept as many), as found.</summary>
     public IReadOnlyCollection<string> Asked => files.Keys;
 
-    /// <summary>Whether paths found in lines are being asked of the disk: their lines' links come once they are answered.</summary>
-    public bool Looking => asking.Count > 0;
+    /// <summary>Whether paths found in lines are being asked of the disk, or addresses where they are reached: their lines'
+    /// links come once they are answered.</summary>
+    public bool Looking => asking.Count > 0 || reaching.Count > 0;
 
     /// <summary>Where a relative path is looked for, in order: the project the output came from first.</summary>
     public Func<IReadOnlyList<string>> Folders { get; set; } = () => [];
 
     /// <summary>Where the paths of the containers whose output this is are the workspace's files (a container run's images),
-    /// tried first for a path that starts at the root; null for output from this machine alone.</summary>
-    public Func<Containers.ContainerPaths?> Paths { get; set; } = () => null;
+    /// tried first for a path that starts at the root: the run's own, given as it starts, which another program's output
+    /// takes with it (<see cref="Forget"/>); null for output of programs on this machine. Set, the lines' links are found
+    /// again.</summary>
+    public Func<Containers.ContainerPaths?>? Paths
+    {
+        get => mappedBy;
+        set
+        {
+            if (value != mappedBy)
+            {
+                mappedBy = value;
+                ForgetFound();
+            }
+        }
+    }
 
     /// <summary>Whether any path to a file is a link (hidden); a console links only frames and compiler messages.</summary>
     public bool FilePaths { get; init; }
 
-    /// <summary>Forgets what was found, for output from another program (another project's relative paths) or a file
-    /// made or deleted since, and the IDE's own claims with it.</summary>
-    public void Forget()
+    /// <summary>For output of programs in containers, where an address one names as its own (where it says it listens, <see
+    /// cref="WebAddress.OnItsOwnMachine"/>) is reached from here, given the container its line's log prefix names (Compose's
+    /// <c>web-1</c>) or null: null where it is published nowhere, then no link. Asked off the window's thread once for each
+    /// address until the console's text goes, which takes this with it (<see cref="Forget"/>); null for output of programs on
+    /// this machine. Set, the lines' links are found again.</summary>
+    public Func<string?, Uri, Task<Uri?>>? Reaching
     {
-        lines.Clear();
+        get => reachedBy;
+        set
+        {
+            if (value != reachedBy)
+            {
+                reachedBy = value;
+                ForgetFound();
+            }
+        }
+    }
+
+    /// <summary>Forgets what was found, for output from another program (another project's relative paths, where it ran, its
+    /// containers' paths and addresses) or a file made or deleted since, and the IDE's own claims with it; the program's
+    /// containers kept where it is <paramref name="sameProgram"/>, whose console was emptied while it runs on.</summary>
+    public void Forget(bool sameProgram = false)
+    {
         claimed.Clear();
         files.Clear();
+        if (!sameProgram)
+        {
+            reachedBy = null;
+            mappedBy = null;
+        }
+        ForgetFound();
+    }
+
+    /// <summary>Forgets each line's links and what they wait on, to be found again as the lines are drawn.</summary>
+    private void ForgetFound()
+    {
+        lines.Clear();
         given.Clear();
         asking.Clear();
         toAsk.Clear();
         waiting.Clear();
+        reached.Clear();
+        reaching.Clear();
         forgotten++;
         Changed?.Invoke(this, EventArgs.Empty);
     }
@@ -253,15 +311,17 @@ public sealed partial class ConsoleLinks : IHighlighter
         }
         waited = false;
         List<FoundLink> found = [];
-        foreach (Match url in Url().Matches(line))
+        // Merged logs name the resource before the program's own text: "web-1 | " or "[apiservice] ".
+        Match prefix = ResourcePrefix().Match(line);
+        int skip = prefix.Success ? prefix.Length : 0;
+        string? container = prefix.Success ? prefix.Groups["named"].Value : null;
+        foreach (ValueMatch url in WebAddresses.In(line))
         {
-            if (Web(url.Value) is { } target)
+            if (Web(line.Substring(url.Index, url.Length), container) is { } target)
             {
                 Claim(found, new FoundLink(url.Index, url.Length, target));
             }
         }
-        // Merged logs name the resource before the program's own text: "web-1 | " or "[apiservice] ".
-        int skip = ResourcePrefix().Match(line) is { Success: true } prefix ? prefix.Length : 0;
         if (Frame().Match(line, skip, line.Length - skip) is { Success: true } frame && Resolve(frame.Groups["path"].Value.Trim(), deterministic: true) is { } framed)
         {
             Group path = frame.Groups["path"];
@@ -341,14 +401,13 @@ public sealed partial class ConsoleLinks : IHighlighter
         found.Add(link);
     }
 
-    /// <summary>An address the browser opens (www. taken as http); a file: URL opens its file in the editor.</summary>
-    private LinkTarget? Web(string text)
+    /// <summary>An address the browser opens (www. taken as http), one a container's program names as its own where it is
+    /// reached from here (the container its line names, <paramref name="named"/>, or the console's), one a program on this
+    /// machine listens at on every interface at localhost (<see cref="WebAddress.Callable"/>); a file: URL opens its file in
+    /// the editor.</summary>
+    private LinkTarget? Web(string text, string? named)
     {
-        if (text.StartsWith("www.", StringComparison.OrdinalIgnoreCase))
-        {
-            text = "http://" + text;
-        }
-        if (!Uri.TryCreate(text, UriKind.Absolute, out Uri? address))
+        if (WebAddresses.Parse(text) is not { } address)
         {
             return null;
         }
@@ -356,7 +415,45 @@ public sealed partial class ConsoleLinks : IHighlighter
         {
             return FoundPaths.OfFileAddress(address) is { } local && Exists(local) is { } file ? new FileLink(file, default) : null;
         }
-        return new WebLink(address);
+        if (reachedBy is not null && WebAddress.OnItsOwnMachine(address))
+        {
+            return Reached(named, address) is { } here ? new WebLink(here) : null;
+        }
+        // Where a program on this machine listens on every interface, which no browser can name.
+        return new WebLink(WebAddress.Of(WebAddress.Callable(address.OriginalString)) ?? address);
+    }
+
+    /// <summary>Where an address a container's program names as its own is reached from here, once answered: null while it
+    /// is being asked, the line being read waiting on it, or where its container publishes it nowhere.</summary>
+    private Uri? Reached(string? named, Uri address)
+    {
+        if (reached.TryGetValue((named, address), out Uri? here))
+        {
+            return here;
+        }
+        waited = true;
+        if (reaching.Add((named, address)))
+        {
+            IdeErrors.Observe(ReachAsync(named, address, reachedBy!, forgotten));
+        }
+        return null;
+    }
+
+    /// <summary>Asks where an address is reached from here, off the window's thread; as its answer lands, the lines that
+    /// waited on it are read again and the views told.</summary>
+    private async Task ReachAsync(string? named, Uri address, Func<string?, Uri, Task<Uri?>> by, int asked)
+    {
+        // On a later turn however soon answered, so the line asking is kept, waiting, before its answer lands.
+        Uri? here = await BackgroundWork.Run(() => by(named, address))
+            .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext | ConfigureAwaitOptions.ForceYielding);
+        UiThread.Check();
+        if (asked != forgotten)
+        {
+            return;
+        }
+        reaching.Remove((named, address));
+        reached[(named, address)] = here;
+        ReadWaitingAgain();
     }
 
     /// <summary>A line and column, both from one in the text, as a position from zero; no column is the line's start.</summary>
@@ -405,7 +502,7 @@ public sealed partial class ConsoleLinks : IHighlighter
         {
             path = relative;
         }
-        else if (path.StartsWith('/') && Paths() is { IsEmpty: false } map && map.ToHost(path) is { } host)
+        else if (path.StartsWith('/') && mappedBy?.Invoke() is { IsEmpty: false } map && map.ToHost(path) is { } host)
         {
             yield return host;
         }
@@ -502,16 +599,22 @@ public sealed partial class ConsoleLinks : IHighlighter
                 files[batch[i]] = found[i];
                 asking.Remove(batch[i]);
             }
-            string[] again = [.. waiting];
-            waiting.Clear();
-            foreach (string line in again)
-            {
-                lines.Remove(line);
-                In(line);
-            }
-            Changed?.Invoke(this, EventArgs.Empty);
+            ReadWaitingAgain();
         }
         Ask();
+    }
+
+    /// <summary>Reads again the lines that waited on an answer now landed, and tells the views.</summary>
+    private void ReadWaitingAgain()
+    {
+        string[] again = [.. waiting];
+        waiting.Clear();
+        foreach (string line in again)
+        {
+            lines.Remove(line);
+            In(line);
+        }
+        Changed?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>The file's canonical path as the disk has it, or null when no file is there.</summary>
@@ -527,11 +630,6 @@ public sealed partial class ConsoleLinks : IHighlighter
         }
     }
 
-    /// <summary>A web address (mailto:, http, https, ftp, ftps, news, and www. without a scheme) to its last character that
-    /// cannot end a sentence, or a file: URL.</summary>
-    [GeneratedRegex(@"\b(?:mailto:|(?:news|(?:ht|f)tps?)://|(?<![\p{L}0-9_.])www\.)[-A-Za-z0-9+$&@#/%?=~_|!:,.;]*[-A-Za-z0-9+$&@#/%=~_|]|\bfile:(?:/|[A-Za-z]:)[^\s()\[\]]*[^\s()\[\]:;?!,.]")]
-    private static partial Regex Url();
-
     /// <summary>A .NET stack frame, a line beginning "at": "at Type.Method(args) in /path/File.cs:line 12", the path after
     /// the method's closing parenthesis, so one with spaces (or " in ") is whole.</summary>
     [GeneratedRegex(@"^\s*at\s[^\r\n]*?\) in (?<path>[^\r\n]+?):line (?<line>\d{1,9})\b")]
@@ -545,8 +643,9 @@ public sealed partial class ConsoleLinks : IHighlighter
     [GeneratedRegex(@"^\s*at:\s[^\r\n]*\((?<path>[^()\r\n]+?):(?<line>\d{1,9})\)\s*$")]
     private static partial Regex GodotFrame();
 
-    /// <summary>The container's name and bar <c>docker compose logs</c> puts before each line of a service's.</summary>
-    [GeneratedRegex(@"^(?:[\w.-]+-\d+\s+\| |\[[^\]\r\n]+\] )")]
+    /// <summary>The container's name and bar <c>docker compose logs</c> puts before each line of a service's (its project's
+    /// name left out), or the name in brackets an AppHost's merged log puts there.</summary>
+    [GeneratedRegex(@"^(?:(?<named>[\w.-]+-\d+)\s+\| |\[(?<named>[^\]\r\n]+)\] )")]
     private static partial Regex ResourcePrefix();
 
     /// <summary>A compiler's or MSBuild's message, the place first on its line: "File.cs(12,5): error CS1002: ...", "1>"

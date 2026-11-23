@@ -85,7 +85,7 @@ public static class Screenshot
             }
         }
 
-        double elapsed = Stopwatch.GetElapsedTime(Program.StartedAt).TotalMilliseconds;
+        TimeSpan elapsed = Stopwatch.GetElapsedTime(Program.StartedAt);
         // A program or a build the steps started ends with the windows, as it does with the person's.
         string? folder = window.Folder;
         PassengerApp.Quit();
@@ -97,7 +97,7 @@ public static class Screenshot
             Console.Error.WriteLine($"screenshot: {options.Path} taken with background work still pending after {Durations.Said(SettleLimit)}");
             return 1;
         }
-        Console.WriteLine($"screenshot: {options.Path} after {elapsed:F0} ms");
+        Console.WriteLine($"screenshot: {options.Path} after {Durations.Said(elapsed)}");
         return 0;
     }
 
@@ -114,7 +114,7 @@ public static class Screenshot
         {
             if (step is ScriptStep.Open open)
             {
-                // As File, Open's panel hands the window what was chosen.
+                // As the system's panel hands the window what was chosen.
                 window.Open(open.Path);
             }
             else if (step is ScriptStep.FirstStart)
@@ -154,7 +154,7 @@ public static class Screenshot
                 break;
             case ScriptStep.Key key:
                 RawInputModifiers modifiers = Raw(key.Stroke.Modifiers);
-                string? typed = Typed(key.Stroke.Key, modifiers);
+                string? typed = key.Stroke.Types;
                 // A dialog its key closes (Enter on Attach to Process) takes no release: it has gone.
                 bool closed = false;
                 bool taken = false;
@@ -179,7 +179,7 @@ public static class Screenshot
                 Pump(wait.For);
                 break;
             case ScriptStep.Hover hover:
-                window.MouseMove(hover.At, RawInputModifiers.None);
+                window.MouseMove(hover.At, Raw(hover.Held));
                 // Past the editor's hover delay, and the card's answer.
                 Take(window, new ScriptStep.Wait(TimeSpan.FromMilliseconds(1500)));
                 break;
@@ -350,30 +350,6 @@ public static class Screenshot
         frame.CopyPixels(bounds, target.Address, target.RowBytes * bounds.Height, target.RowBytes);
         return part;
     }
-
-    /// <summary>The character a key types on a US keyboard, Shift's too ("$" for Shift+4); none for a key that types
-    /// nothing, or one held with Control, Alt or Command, which make it a shortcut.</summary>
-    internal static string? Typed(Key key, RawInputModifiers held) =>
-        (held & (RawInputModifiers.Control | RawInputModifiers.Alt | RawInputModifiers.Meta)) == 0
-        && PhysicalKeys.Value.TryGetValue(key, out PhysicalKey physical)
-        && physical.ToQwertyKeySymbol((held & RawInputModifiers.Shift) != 0) is { Length: > 0 } typed
-        && typed.All(c => c >= ' ' && c != '\u007f')
-            ? typed
-            : null;
-
-    /// <summary>Each key by where it is on a US keyboard.</summary>
-    private static readonly Lazy<Dictionary<Key, PhysicalKey>> PhysicalKeys = new(() =>
-    {
-        Dictionary<Key, PhysicalKey> keys = [];
-        foreach (PhysicalKey physical in Enum.GetValues<PhysicalKey>())
-        {
-            if (physical != PhysicalKey.None)
-            {
-                keys.TryAdd(physical.ToQwertyKey(), physical);
-            }
-        }
-        return keys;
-    });
 
     private static RawInputModifiers Raw(KeyModifiers modifiers)
     {

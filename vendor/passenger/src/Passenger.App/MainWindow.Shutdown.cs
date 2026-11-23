@@ -32,28 +32,36 @@ public partial class MainWindow
             EndChildren();
             Editors.LetGoOfFiles();
         };
-        actions!.Add(new IdeAction(AppActions.CloseSolution, "Close Solution", "IDE", c => CloseSolution(asks: !c.ByAgent))
+        // Only the person closes the solution: an agent's ide_action or input is refused, attached or in its own Passenger.
+        actions!.Add(new IdeAction(AppActions.CloseSolution, "Close Solution", "IDE", _ =>
         {
-            WhyNot = c => Folder is null ? Refusals.NoFolder : c.ByAgent ? WhyNotLeave(ClosingSolution) : null,
+            if (!RefusedToAgentsInput(Refusals.CloseSolutionIsThePersons))
+            {
+                CloseSolution();
+            }
+        })
+        {
+            WhyNot = c => Folder is null ? Refusals.NoFolder : AskedByAgent(c) ? Refusals.CloseSolutionIsThePersons : null,
             Menus = [new MenuPlace("File", 0, 5)],
         });
     }
 
-    /// <summary>File, Exit: Passenger quits (<see cref="PassengerApp.Quit"/>), but for an attached agent's input into the
-    /// window (<see cref="RefusedToAgentsInput"/>); an agent's own Passenger, which ends with its agent, quits as it asks.</summary>
+    /// <summary>File, Exit: Passenger quits (<see cref="PassengerApp.Quit"/>), asking first where Confirm before closing says
+    /// (<see cref="PassengerApp.QuitAskedAsync"/>), but for an attached agent's input into the window (<see
+    /// cref="RefusedToAgentsInput"/>); an agent's own Passenger, which ends with its agent, quits as it asks.</summary>
     private void Exit()
     {
         if (!AgentsOwn && RefusedToAgentsInput(Refusals.QuitIsThePersons))
         {
             return;
         }
+        if (ConfirmsQuit)
+        {
+            IdeErrors.Observe(PassengerApp.QuitAskedAsync(this));
+            return;
+        }
         PassengerApp.Quit();
     }
-
-    /// <summary>Whether a close of this window by an attached agent's input is refused: the person's last window, whose
-    /// close quits Passenger (<see cref="RefusedToAgentsInput"/>).</summary>
-    private bool LastCloseRefused() =>
-        !AgentsOwn && !PassengerApp.Windows.Any(w => w != this && w.IsVisible) && RefusedToAgentsInput(Refusals.QuitIsThePersons);
 
     /// <summary>The session's programs and builds go now, so a server lets go of its port; the rest are asked to end.</summary>
     private void EndChildren()
@@ -67,9 +75,9 @@ public partial class MainWindow
     /// <summary>Close Solution: its changed files saved as closing the window saves them (one that cannot be keeps it
     /// open), its editors and layout kept with it, all it runs ended, and the Welcome screen in the editors' place; a
     /// program Hot Reload changed that this would stop is asked about first, the solution closed once it has stopped
-    /// (<see cref="StopHeldAskedAsync"/>), and where the person <paramref name="asks"/>, the containers of runs Detach let
-    /// go of (<see cref="LetGoAskedAsync"/>). Null once it is closed, else why not.</summary>
-    public string? CloseSolution(bool asks = true)
+    /// (<see cref="StopHeldAskedAsync"/>), as are the containers of runs Detach let go of (<see cref="LetGoAskedAsync"/>).
+    /// Null once it is closed, else why not.</summary>
+    public string? CloseSolution()
     {
         UiThread.Check();
         if (Folder is null)
@@ -81,7 +89,7 @@ public partial class MainWindow
             IdeErrors.Observe(CloseSolutionAskedAsync(held));
             return HeldWords(held, ClosingSolution);
         }
-        if (asks && AsksOfLetGo)
+        if (AsksOfLetGo)
         {
             IdeErrors.Observe(CloseSolutionLetGoAsync());
             return "The solution closes once you answer whether to stop the containers of the runs Detach let go of";
@@ -92,7 +100,7 @@ public partial class MainWindow
             status.Text = unsaved;
             return unsaved;
         }
-        Remember();
+        Remember(AskedAt());
         ForgetOpen();
         if (keepsWorkspace)
         {
@@ -189,7 +197,7 @@ public partial class MainWindow
         }
         else if (stopped)
         {
-            Close();
+            CloseAsAnswered();
         }
     }
 

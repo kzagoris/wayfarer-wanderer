@@ -71,6 +71,9 @@ internal sealed partial class AsyncStepper
     private AsyncStep? _currentAsyncStep;
     private AsyncBreakpoint? _notifyDebuggerBreakpoint;
 
+    /// <summary>Whether an async step waits at its breakpoints for its run to go on, on whichever thread.</summary>
+    public bool Steps => _currentAsyncStep is not null || _runtimeStep is not null || _notifyDebuggerBreakpoint is not null;
+
     /// <summary>The label of the async method a step out leaves through its builder, while its task gives a value: listed as
     /// what it returned once its caller's await is told the task has completed.</summary>
     private string? _steppedOutOf;
@@ -87,6 +90,10 @@ internal sealed partial class AsyncStepper
         ICorDebugHandleValue? task = null;
         try
         {
+            if (ManagedDebugger.HoldsAsyncSteps)
+            {
+                await _debugger.HoldForInput(thread, "the step out's ask of its builder");
+            }
             ICorDebugObjectValue objectValue = builder.UnwrapDebugValueToObject();
 
             ICorDebugEval eval = thread.CreateEval();
@@ -429,6 +436,17 @@ internal sealed partial class AsyncStepper
         if (step.Run is not { } run)
         {
             return true;
+        }
+        if (ManagedDebugger.HoldsAsyncSteps)
+        {
+            try
+            {
+                await _debugger.HoldForInput(thread, "the question of which run resumed");
+            }
+            catch (Exception error) when (error is ManagedDebugger.EvalException || Failures.OfRuntime(error))
+            {
+                _debugger.Log($"The hold before asking which run resumed on thread {thread.Id} ended: {error.Message}");
+            }
         }
         RunId? resumed = run.IsStateMachine ? StateMachineOf(frame) : await BuilderRunOf(frame);
         if (resumed is null)

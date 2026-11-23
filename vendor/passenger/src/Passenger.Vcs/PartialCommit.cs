@@ -4,7 +4,8 @@ using Passenger.Text;
 
 namespace Passenger.Vcs;
 
-/// <summary>A file's chosen changes, tied to the texts reviewed so a later edit cannot silently enter the commit.</summary>
+/// <summary>A file's chosen changes, tied to the texts reviewed so a later edit cannot silently enter the commit: each a
+/// change of <see cref="FileDiff.Hunks"/> whole, or a part of one chosen line by line (<see cref="LinesChosen"/>).</summary>
 public sealed record PartialCommit(FileDiff Diff, IReadOnlyList<DiffHunk> Hunks, string? From = null)
 {
     /// <summary>The last commit's text with just the chosen changes, retaining each side's line separators.</summary>
@@ -15,7 +16,7 @@ public sealed record PartialCommit(FileDiff Diff, IReadOnlyList<DiffHunk> Hunks,
         LineStarts newStarts = new(after);
         StringBuilder content = new();
         int copied = 0;
-        foreach (DiffHunk hunk in Hunks.OrderBy(h => h.OldStart))
+        foreach (DiffHunk hunk in Hunks.OrderBy(h => h.OldStart).ThenBy(h => h.NewStart))
         {
             int start = Offset(oldStarts, Diff.Head.Length, hunk.OldStart);
             int end = Offset(oldStarts, Diff.Head.Length, hunk.OldStart + hunk.OldCount);
@@ -70,27 +71,27 @@ public sealed record PartialCommit(FileDiff Diff, IReadOnlyList<DiffHunk> Hunks,
         return kept;
     }
 
-    /// <summary>The changes of <paramref name="diff"/> that lines of the file as it is now touch, named as "3,12-14" (lines
-    /// counted from 1): each change a range overlaps goes in whole, one that only deletes lines by either line beside where
-    /// they were. Why not, saying where the changes are, where the ranges do not read or one touches no change.</summary>
+    /// <summary>The changes of <paramref name="diff"/> that lines of the file as it is now name, as "3,12-14" (lines
+    /// counted from 1), chosen line by line (<see cref="LinesChosen"/>): a change one that only deletes lines met by either
+    /// line beside where they were. Why not, saying where the changes are, where the ranges do not read or one touches no
+    /// change.</summary>
     public static (IReadOnlyList<DiffHunk> Hunks, string? Why) Touched(FileDiff diff, string ranges)
     {
-        HashSet<DiffHunk> taken = [];
+        List<(int First, int Last)> lines = [];
         foreach (string given in ranges.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
         {
             if (Range(given) is not (int first, int last))
             {
                 return ([], $"{given} is not a line or a range of lines, as 3 or 12-14");
             }
-            DiffHunk[] touched = [.. diff.Hunks.Where(h => Lines(h).First <= last && Lines(h).Last >= first)];
-            if (touched.Length == 0)
+            if (!diff.Hunks.Any(h => Lines(h).First <= last && Lines(h).Last >= first))
             {
                 string where = diff.Hunks.Count == 0 ? "it has none" : $"{(diff.Hunks.Count == 1 ? "its one change is" : "its changes are")} at {Plural.Listed([.. diff.Hunks.Select(Said)])}";
                 return ([], $"no change is at line{(first == last ? $" {first}" : $"s {first}-{last}")}: {where}");
             }
-            taken.UnionWith(touched);
+            lines.Add((first - 1, last - 1));
         }
-        return taken.Count == 0 ? ([], "no lines are named") : ([.. diff.Hunks.Where(taken.Contains)], null);
+        return lines.Count == 0 ? ([], "no lines are named") : (LinesChosen(diff, lines, []), null);
 
         static (int, int)? Range(string given)
         {
@@ -112,6 +113,69 @@ public sealed record PartialCommit(FileDiff Diff, IReadOnlyList<DiffHunk> Hunks,
         };
     }
 
+    /// <summary>The changes of <paramref name="diff"/> that chosen lines take, from 0: of <paramref name="file"/>'s lines
+    /// of the file as it is now, a changed line its replacement and an added line itself; of <paramref name="head"/>'s
+    /// lines of the last commit, a changed line its replacement and a deleted line its deletion. A change every line of
+    /// one side of is chosen, or one that only deletes lines a file's line beside it is, goes whole; any other only as
+    /// its lines chosen, a change's lines paired in order, its replaced lines first and the rest added or deleted.</summary>
+    public static IReadOnlyList<DiffHunk> LinesChosen(FileDiff diff, IReadOnlyList<(int First, int Last)> file, IReadOnlyList<(int First, int Last)> head)
+    {
+        List<DiffHunk> chosen = [];
+        foreach (DiffHunk hunk in diff.Hunks)
+        {
+            bool[] mine = [.. Enumerable.Range(hunk.NewStart, hunk.NewCount).Select(line => file.Any(r => r.First <= line && line <= r.Last))];
+            bool[] theirs = [.. Enumerable.Range(hunk.OldStart, hunk.OldCount).Select(line => head.Any(r => r.First <= line && line <= r.Last))];
+            bool deletionMet = hunk.NewCount == 0 && file.Any(r => r.First <= hunk.NewStart && r.Last >= hunk.NewStart - 1);
+            if (deletionMet || mine.Length > 0 && mine.All(m => m) || theirs.Length > 0 && theirs.All(t => t))
+            {
+                chosen.Add(hunk);
+                continue;
+            }
+            int paired = Math.Min(hunk.OldCount, hunk.NewCount);
+            for (int i = 0; i < paired; i++)
+            {
+                if (mine[i] || theirs[i])
+                {
+                    chosen.Add(new DiffHunk(hunk.OldStart + i, 1, hunk.NewStart + i, 1));
+                }
+            }
+            for (int i = paired; i < hunk.NewCount; i++)
+            {
+                if (mine[i])
+                {
+                    chosen.Add(new DiffHunk(hunk.OldStart + paired, 0, hunk.NewStart + i, 1));
+                }
+            }
+            for (int i = paired; i < hunk.OldCount; i++)
+            {
+                if (theirs[i])
+                {
+                    chosen.Add(new DiffHunk(hunk.OldStart + i, 1, hunk.NewStart + paired, 0));
+                }
+            }
+        }
+        return chosen;
+    }
+
+    /// <summary>A change's parts line by line, as <see cref="LinesChosen"/> pairs them: each replaced line with its
+    /// replacement, then the lines added together, or each line deleted.</summary>
+    private static IEnumerable<DiffHunk> Parts(DiffHunk hunk)
+    {
+        int paired = Math.Min(hunk.OldCount, hunk.NewCount);
+        for (int i = 0; i < paired; i++)
+        {
+            yield return new DiffHunk(hunk.OldStart + i, 1, hunk.NewStart + i, 1);
+        }
+        if (hunk.NewCount > paired)
+        {
+            yield return new DiffHunk(hunk.OldStart + paired, 0, hunk.NewStart + paired, hunk.NewCount - paired);
+        }
+        for (int i = paired; i < hunk.OldCount; i++)
+        {
+            yield return new DiffHunk(hunk.OldStart + i, 1, hunk.NewStart + paired, 0);
+        }
+    }
+
     /// <summary>What the index is to hold of a file once a commit took some of its changes, each text as git keeps it:
     /// <paramref name="staged"/>, what it held, with the changes <paramref name="committed"/> made to the last commit's
     /// <paramref name="head"/> taken in, so a staged change the commit left out stays staged. Where both changed the same
@@ -128,8 +192,6 @@ public sealed record PartialCommit(FileDiff Diff, IReadOnlyList<DiffHunk> Hunks,
         Encoding reading = wide ?? Encoding.Latin1;
         return Read(head) is { } before && Read(staged) is { } kept && Read(committed) is { } taken
             ? reading.GetBytes(string.Concat(Restaged(before, kept, taken))) : null;
-
-        static Encoding? Wide(byte[] bytes) => FileText.Bom(bytes) is { CodePage: not 65001 } encoding ? encoding : null;
 
         string[]? Read(byte[] bytes) => reading.GetString(bytes) is var text && reading.GetBytes(text).AsSpan().SequenceEqual(bytes) ? Lines(text) : null;
     }
@@ -185,16 +247,52 @@ public sealed record PartialCommit(FileDiff Diff, IReadOnlyList<DiffHunk> Hunks,
         }
         lines.AddRange(head.AsSpan(at));
         return lines;
-
-        // Lines added at a place share it with a stretch only inside it, and with lines added at that same place.
-        static bool Overlaps(DiffHunk hunk, int start, int end) => (hunk.OldCount > 0, start < end) switch
-        {
-            (true, true) => hunk.OldStart < end && start < End(hunk),
-            (true, false) => hunk.OldStart < start && start < End(hunk),
-            (false, true) => start < hunk.OldStart && hunk.OldStart < end,
-            (false, false) => hunk.OldStart == start,
-        };
     }
+
+    /// <summary>What the index is to hold of a file once some of its changes are taken out of it, each text as git keeps it:
+    /// <paramref name="staged"/>, what it held, with each part of its changes from the last commit's <paramref name="head"/>
+    /// (<see cref="Parts"/>, lines added together one part) that shares lines of the last commit with one of
+    /// <paramref name="changes"/> (by their lines there) put back as the last commit has it. Null where the two can't be
+    /// read alike, as <see cref="Restaged(byte[], byte[], byte[])"/>.</summary>
+    public static byte[]? Unstaged(byte[] head, byte[] staged, IReadOnlyList<DiffHunk> changes)
+    {
+        Encoding? wide = Wide(head);
+        if (Wide(staged)?.CodePage != wide?.CodePage)
+        {
+            return null;
+        }
+        Encoding reading = wide ?? Encoding.Latin1;
+        if (Read(head) is not { } before || Read(staged) is not { } held)
+        {
+            return null;
+        }
+        List<string> lines = [];
+        int at = 0;
+        foreach (DiffHunk part in LineDiff.Hunks(before, held).SelectMany(Parts))
+        {
+            bool taken = changes.Any(c => Overlaps(part, c.OldStart, End(c)) || Overlaps(c, part.OldStart, End(part)));
+            lines.AddRange(before.AsSpan(at, part.OldStart - at));
+            lines.AddRange(taken ? before.AsSpan(part.OldStart, part.OldCount) : held.AsSpan(part.NewStart, part.NewCount));
+            at = End(part);
+        }
+        lines.AddRange(before.AsSpan(at));
+        return reading.GetBytes(string.Concat(lines));
+
+        string[]? Read(byte[] bytes) => reading.GetString(bytes) is var text && reading.GetBytes(text).AsSpan().SequenceEqual(bytes) ? Lines(text) : null;
+    }
+
+    /// <summary>A text's encoding where it is UTF-16 or UTF-32, by its byte order mark; null for any other.</summary>
+    private static Encoding? Wide(byte[] bytes) => FileText.Bom(bytes) is { CodePage: not 65001 } encoding ? encoding : null;
+
+    /// <summary>Whether a change of the last commit's lines meets a stretch of them: lines added at a place meet a stretch
+    /// only inside it, and lines added at that same place.</summary>
+    private static bool Overlaps(DiffHunk hunk, int start, int end) => (hunk.OldCount > 0, start < end) switch
+    {
+        (true, true) => hunk.OldStart < end && start < End(hunk),
+        (true, false) => hunk.OldStart < start && start < End(hunk),
+        (false, true) => start < hunk.OldStart && hunk.OldStart < end,
+        (false, false) => hunk.OldStart == start,
+    };
 
     /// <summary>A text's lines, each with the break that ends it.</summary>
     private static string[] Lines(string text)

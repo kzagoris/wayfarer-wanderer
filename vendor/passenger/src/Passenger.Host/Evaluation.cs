@@ -18,11 +18,6 @@ internal static class Evaluation
         | ProjectLoadSettings.IgnoreInvalidImports | ProjectLoadSettings.RejectCircularImports
         | ProjectLoadSettings.DoNotEvaluateElementsWithFalseCondition | ProjectLoadSettings.FailOnUnresolvedSdk;
 
-    /// <summary>The item types that are a project's files, beside the ones a project's own targets add (AvailableItemName,
-    /// the item types offered as a file's build action).</summary>
-    private static readonly string[] FileItemTypes =
-        ["Compile", "None", "Content", "EmbeddedResource", "AdditionalFiles", "Page", "Resource", "ApplicationDefinition", "Folder"];
-
     /// <summary>What each web SDK sets true as it is imported.</summary>
     private static readonly string[] WebSdks =
         ["UsingMicrosoftNETSdkWeb", "UsingMicrosoftNETSdkRazor", "UsingMicrosoftNETSdkBlazorWebAssembly", "UsingMicrosoftNETSdkStaticWebAssets"];
@@ -35,10 +30,9 @@ internal static class Evaluation
     {
         using ProjectCollection collection = new(asked.Properties.ToDictionary(p => p.Key, p => p.Value), loggers: null, ToolsetDefinitionLocations.Default);
         EvaluationContext context = EvaluationContext.Create(EvaluationContext.SharingPolicy.Shared);
-        ParallelOptions parallel = new() { MaxDegreeOfParallelism = Environment.ProcessorCount, CancellationToken = cancel };
         ConcurrentDictionary<string, (EvaluatedProject Outer, IReadOnlyList<string> Frameworks)> targeted = new(PathNames.Comparer);
-        // Load-balanced, so each worker takes the next project in the order asked: the active file's first.
-        Parallel.ForEach(Partitioner.Create(asked.Projects.ToArray(), loadBalance: true), parallel, path =>
+        // Each worker takes the next project in the order asked: the active file's first.
+        ApartScheduler.ForEach("Passenger evaluator", [.. asked.Projects], 0, cancel, path =>
         {
             (EvaluatedProject outer, IReadOnlyList<string> frameworks) = Outer(path, collection, context, asked.Of(path));
             evaluated(outer);
@@ -49,7 +43,7 @@ internal static class Evaluation
         });
         List<(EvaluatedProject Outer, IReadOnlyList<string> Frameworks)> inOrder =
             [.. asked.Projects.Distinct(PathNames.Comparer).Where(targeted.ContainsKey).Select(p => targeted[p])];
-        Parallel.ForEach(Partitioner.Create(inOrder.ToArray(), loadBalance: true), parallel,
+        ApartScheduler.ForEach("Passenger evaluator", inOrder, 0, cancel,
             t => evaluated(Frameworks(t.Outer, t.Frameworks, collection, context, asked.Of(t.Outer.Path))));
     }
 
@@ -130,8 +124,8 @@ internal static class Evaluation
             AssemblyName = NonEmpty(first.GetPropertyValue(MSBuildNames.AssemblyName)),
             OutputType = NonEmpty(first.GetPropertyValue(MSBuildNames.OutputType)),
             TargetFrameworks = frameworks,
-            IsTestProject = each.Any(p => p.GetPropertyValue("IsTestProject").Equals("true", StringComparison.OrdinalIgnoreCase)),
-            IsAspireHost = each.Any(p => p.GetPropertyValue("IsAspireHost").Equals("true", StringComparison.OrdinalIgnoreCase)),
+            IsTestProject = each.Any(p => p.GetPropertyValue(MSBuildNames.IsTestProject).Equals("true", StringComparison.OrdinalIgnoreCase)),
+            IsAspireHost = each.Any(p => AspireHosts.Is(p.GetPropertyValue(AspireHosts.Property), p.GetItems(MSBuildNames.PackageReference).Select(i => i.EvaluatedInclude))),
             IsWeb = each.Any(p => WebSdks.Any(sdk => p.GetPropertyValue(sdk).Equals("true", StringComparison.OrdinalIgnoreCase))),
             Dependencies = [.. each.Select((p, i) => Dependencies(p, named[i]))],
             Symbols = [.. each.Select(DefinedSymbols.Of).OfType<FrameworkSymbols>()],
@@ -157,7 +151,7 @@ internal static class Evaluation
     /// <summary>For a program, the heads of the C# files it includes, whose directives are its project's too; none for a
     /// project.</summary>
     internal static IEnumerable<Stamp> IncludedHeads(string path, IEnumerable<EvaluatedItem> items) => ProgramFiles.IsProgram(path)
-        ? items.Where(i => i.Type == "Compile" && ProgramFiles.IsProgram(i.Path) && !PathNames.Same(i.Path, path)).Select(i => Stamps.Head(i.Path))
+        ? items.Where(i => i.Type == MSBuildNames.Compile && ProgramFiles.IsProgram(i.Path) && !PathNames.Same(i.Path, path)).Select(i => Stamps.Head(i.Path))
         : [];
 
     /// <summary>The folders a project's files come from, stamped: those under its own (<see cref="Walked"/>, stamped before
@@ -224,20 +218,20 @@ internal static class Evaluation
         Dictionary<string, string> central = new(StringComparer.OrdinalIgnoreCase);
         if (project.GetPropertyValue(CarriedProperties.ManagePackageVersionsCentrally).Equals("true", StringComparison.OrdinalIgnoreCase))
         {
-            foreach (ProjectItem version in project.GetItems("PackageVersion"))
+            foreach (ProjectItem version in project.GetItems(MSBuildNames.PackageVersion))
             {
-                central[version.EvaluatedInclude] = version.GetMetadataValue("Version");
+                central[version.EvaluatedInclude] = version.GetMetadataValue(MSBuildNames.Version);
             }
         }
-        List<PackageDependency> packages = [.. project.GetItems("PackageReference")
+        List<PackageDependency> packages = [.. project.GetItems(MSBuildNames.PackageReference)
             .Select(p => new PackageDependency(
                 p.EvaluatedInclude,
-                NonEmpty(p.GetMetadataValue("VersionOverride")) ?? NonEmpty(p.GetMetadataValue("Version")) ?? central.GetValueOrDefault(p.EvaluatedInclude),
-                p.GetMetadataValue("IsImplicitlyDefined").Equals("true", StringComparison.OrdinalIgnoreCase)))
+                NonEmpty(p.GetMetadataValue(MSBuildNames.VersionOverride)) ?? NonEmpty(p.GetMetadataValue(MSBuildNames.Version)) ?? central.GetValueOrDefault(p.EvaluatedInclude),
+                p.GetMetadataValue(MSBuildNames.IsImplicitlyDefined).Equals("true", StringComparison.OrdinalIgnoreCase)))
             .DistinctBy(p => p.Name, StringComparer.OrdinalIgnoreCase)];
-        List<string> projects = [.. project.GetItems("ProjectReference")
-            .Select(r => NonEmpty(r.GetMetadataValue(ProgramFiles.RefMetadata)) ?? r.GetMetadataValue("FullPath")).Distinct(PathNames.Comparer)];
-        List<string> shared = [.. project.GetItems("FrameworkReference").Select(r => r.EvaluatedInclude).Distinct(StringComparer.OrdinalIgnoreCase)];
+        List<string> projects = [.. project.GetItems(MSBuildNames.ProjectReference)
+            .Select(r => NonEmpty(r.GetMetadataValue(ProgramFiles.RefMetadata)) ?? r.GetMetadataValue(MSBuildNames.FullPath)).Distinct(PathNames.Comparer)];
+        List<string> shared = [.. project.GetItems(MSBuildNames.FrameworkReference).Select(r => r.EvaluatedInclude).Distinct(StringComparer.OrdinalIgnoreCase)];
         return new FrameworkDependencies(framework, packages, projects)
         {
             FrameworkReferences = shared,
@@ -252,19 +246,19 @@ internal static class Evaluation
     private static List<TargetingPack> TargetingPacks(Project project, IReadOnlyList<string> shared)
     {
         string version = project.GetPropertyValue(MSBuildNames.TargetFrameworkVersion);
-        if (!project.GetPropertyValue("TargetFrameworkIdentifier").Equals(".NETCoreApp", StringComparison.OrdinalIgnoreCase) || version.Length < 2)
+        if (!project.GetPropertyValue(MSBuildNames.TargetFrameworkIdentifier).Equals(FrameworkNames.NetCoreApp, StringComparison.OrdinalIgnoreCase) || version.Length < 2)
         {
             return [];
         }
         string target = "net" + version.TrimStart('v', 'V');
         List<TargetingPack> packs = [];
-        foreach (ProjectItem known in project.GetItems("KnownFrameworkReference"))
+        foreach (ProjectItem known in project.GetItems(MSBuildNames.KnownFrameworkReference))
         {
             if (shared.Contains(known.EvaluatedInclude, StringComparer.OrdinalIgnoreCase)
                 && known.GetMetadataValue(MSBuildNames.TargetFramework).Equals(target, StringComparison.OrdinalIgnoreCase)
-                && NonEmpty(known.GetMetadataValue("TargetingPackName")) is { } name && !packs.Any(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                && NonEmpty(known.GetMetadataValue(MSBuildNames.TargetingPackName)) is { } name && !packs.Any(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
             {
-                string pinned = known.GetMetadataValue("TargetingPackVersion");
+                string pinned = known.GetMetadataValue(MSBuildNames.TargetingPackVersion);
                 packs.Add(new TargetingPack(known.EvaluatedInclude, name, pinned.Length == 0 || pinned.StartsWith("**", StringComparison.Ordinal) ? null : pinned));
             }
         }
@@ -272,48 +266,62 @@ internal static class Evaluation
     }
 
     /// <summary>The project's files, every evaluation's, each once: of the file item types and those the project names as
-    /// such, but those it hides (Visible false), each a shared project brings in naming its items file.</summary>
+    /// such, but those it hides (Visible false), each a shared project brings in naming its items file, and each a NuGet
+    /// package's own build file names from that package's folder (<see cref="PackageLayout"/>) marked so.</summary>
     internal static List<EvaluatedItem> Items(IReadOnlyList<Project> evaluations)
     {
         List<EvaluatedItem> items = [];
         HashSet<(string, string)> seen = [];
         foreach (Project project in evaluations)
         {
-            IEnumerable<string> types = FileItemTypes.Concat(project.GetItems("AvailableItemName").Select(i => i.EvaluatedInclude)).Distinct(StringComparer.OrdinalIgnoreCase);
+            string[] packageFolders = [.. PackageFolders(project)];
+            IEnumerable<string> types = MSBuildNames.FileItemTypes.Concat(project.GetItems(MSBuildNames.AvailableItemName).Select(i => i.EvaluatedInclude)).Distinct(StringComparer.OrdinalIgnoreCase);
             foreach (string type in types)
             {
                 foreach (ProjectItem item in project.GetItems(type))
                 {
-                    if (item.GetMetadataValue("Visible").Equals("false", StringComparison.OrdinalIgnoreCase))
+                    if (item.GetMetadataValue(MSBuildNames.Visible).Equals("false", StringComparison.OrdinalIgnoreCase))
                     {
                         continue;
                     }
-                    string full = item.GetMetadataValue("FullPath");
+                    string full = item.GetMetadataValue(MSBuildNames.FullPath);
                     if (full.Length == 0 || !seen.Add((type, full)))
                     {
                         continue;
                     }
-                    string? shared = item.Xml?.ContainingProject?.FullPath is { } from && from.EndsWith(EvaluatedItem.SharedItemsExtension, StringComparison.OrdinalIgnoreCase)
-                        ? from : null;
-                    items.Add(new EvaluatedItem(type, full, NonEmpty(item.GetMetadataValue("Link")), NonEmpty(item.GetMetadataValue("DependentUpon")), shared));
+                    string? from = item.Xml?.ContainingProject?.FullPath;
+                    string? shared = from is not null && from.EndsWith(EvaluatedItem.SharedItemsExtension, StringComparison.OrdinalIgnoreCase) ? from : null;
+                    bool packaged = from is not null && packageFolders.Any(f => PackageLayout.VersionFolder(from, f) is { } package && PathNames.IsUnder(full, package.Folder));
+                    items.Add(new EvaluatedItem(type, full, NonEmpty(item.GetMetadataValue(MSBuildNames.Link)), NonEmpty(item.GetMetadataValue(MSBuildNames.DependentUpon)), shared, packaged));
                 }
             }
         }
         return items;
     }
 
+    /// <summary>The NuGet package folders a project's restore takes packages from (its root and fallback folders), full.</summary>
+    private static IEnumerable<string> PackageFolders(Project project) =>
+        new[] { project.GetPropertyValue(CarriedProperties.NuGetPackageRoot) }
+            .Concat(project.GetPropertyValue(CarriedProperties.NuGetPackageFolders).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Where(f => f.Length > 0 && Path.IsPathFullyQualified(f)).Select(f => Path.TrimEndingDirectorySeparator(Path.GetFullPath(f)));
+
     /// <summary>Where imports never change but with their versions, which the imports kept say: the .NET install (the
-    /// SDK, its props and targets) and the NuGet package folders.</summary>
+    /// SDK, its props and targets), the workloads' packs and manifests in the user's own folder where it installs them for
+    /// each user (<see cref="WorkloadFolders"/>), and the NuGet package folders.</summary>
     internal static HashSet<string> OutsideRoots(Project project)
     {
         HashSet<string> roots = new(PathNames.Comparer);
-        foreach (string property in new[] { "NetCoreRoot", "NetCoreTargetingPackRoot", "MSBuildBinPath", MSBuildNames.ExtensionsPath, CarriedProperties.NuGetPackageRoot })
+        foreach (string property in new[] { "NetCoreRoot", "NetCoreTargetingPackRoot", "MSBuildBinPath", MSBuildNames.ExtensionsPath })
         {
             Add(project.GetPropertyValue(property));
         }
-        foreach (string folder in project.GetPropertyValue(CarriedProperties.NuGetPackageFolders).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        roots.UnionWith(PackageFolders(project));
+        string root = project.GetPropertyValue("NetCoreRoot");
+        if (root.Length > 0 && Path.IsPathFullyQualified(root)
+            && WorkloadFolders.Of(root, project.GetPropertyValue("NETCoreSdkVersion"), WorkloadFolders.CliHome(Environment.GetEnvironmentVariable)).UserLocal is { } own)
         {
-            Add(folder);
+            Add(Path.Combine(own, WorkloadFolders.Packs));
+            Add(Path.Combine(own, WorkloadFolders.Manifests));
         }
         return roots;
 
@@ -371,7 +379,7 @@ internal static class Evaluation
     {
         foreach (Project project in evaluations)
         {
-            HashSet<string> found = new(project.GetItems("EditorConfigFiles").Select(i => i.EvaluatedInclude), PathNames.Comparer);
+            HashSet<string> found = new(project.GetItems(MSBuildNames.EditorConfigFiles).Select(i => i.EvaluatedInclude), PathNames.Comparer);
             foreach (ProjectItem looked in project.GetItems("PotentialEditorConfigFiles").Concat(project.GetItems("GlobalAnalyzerConfigFiles")))
             {
                 yield return Stamps.Presence(looked.EvaluatedInclude, found.Contains(looked.EvaluatedInclude));

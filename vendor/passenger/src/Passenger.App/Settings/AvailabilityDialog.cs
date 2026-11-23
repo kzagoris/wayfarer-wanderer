@@ -15,13 +15,13 @@ public sealed class AvailabilityDialog : IdeWindow
     public AvailabilityDialog(TemplateAvailability where, TemplateUse use)
     {
         Title = "Availability configuration";
-        Width = 520;
+        Width = DialogWidths.Question;
         Height = 360;
         MinWidth = 420;
         MinHeight = 280;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        StackPanel places = new() { Spacing = 6, Margin = new Thickness(16, 12) };
-        places.Children.Add(new TextBlock { Text = "C#", FontWeight = Avalonia.Media.FontWeight.SemiBold, Margin = new Thickness(0, 0, 0, 4) });
+        StackPanel places = new() { Spacing = Gaps.Small, [DialogFooter.InsetProperty] = true };
+        places.Children.Add(new TextBlock { Classes = { StyleClasses.PaneTitle }, Text = "C#", Margin = new Thickness(0, 0, 0, Gaps.Tight) });
         foreach ((TemplateAvailability place, _, string name) in LiveTemplatesPane.Places)
         {
             CheckBox box = new() { Content = name, IsChecked = where.HasFlag(place), IsEnabled = Applies(place, use) };

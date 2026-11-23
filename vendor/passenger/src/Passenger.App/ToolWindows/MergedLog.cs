@@ -12,7 +12,7 @@ namespace Passenger.App.ToolWindows;
 public sealed class MergedLog : DockPanel
 {
     // In a narrow log the last toggles give way first, their words ending in an ellipsis, never under Find and the log's own.
-    private readonly ShrinkingRow sources = new() { VerticalAlignment = VerticalAlignment.Center, ClipToBounds = true };
+    private readonly ShrinkingRow sources = new() { Spacing = Gaps.Hair, VerticalAlignment = VerticalAlignment.Center, ClipToBounds = true };
     private readonly HashSet<string> hidden = new(StringComparer.Ordinal);
 
     /// <param name="findName">The Find button's name.</param>
@@ -23,12 +23,12 @@ public sealed class MergedLog : DockPanel
         Button finding = ToolButtons.Of(IconKeys.Search, "Find in the log", OpenFind);
         finding.Name = findName;
         finding.VerticalAlignment = VerticalAlignment.Center;
-        StackPanel right = new() { Orientation = Orientation.Horizontal, Spacing = 4, [DockProperty] = Dock.Right, Children = { finding } };
+        StackPanel right = new() { Orientation = Orientation.Horizontal, Spacing = Gaps.Tight, [DockProperty] = Dock.Right, Children = { finding } };
         foreach (Control control in own)
         {
             right.Children.Add(control);
         }
-        Children.Add(ToolBars.Top(new DockPanel { Margin = new Thickness(8, 0), Children = { right, sources } }));
+        Children.Add(ToolBars.Top(new DockPanel { Margin = new Thickness(Gaps.Normal, 0), Children = { right, sources } }));
         Children.Add(Console);
     }
 
@@ -67,11 +67,8 @@ public sealed class MergedLog : DockPanel
         sources.Children.Clear();
         foreach ((string key, string words) in offered)
         {
-            ToggleButton toggle = new()
-            {
-                Classes = { StyleClasses.Segment }, Content = words, IsChecked = !hidden.Contains(key), VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 2, 0),
-            };
+            ToggleButton toggle = Segments.Toggle(words);
+            toggle.IsChecked = !hidden.Contains(key);
             toggle.IsCheckedChanged += (_, _) =>
             {
                 if (toggle.IsChecked == true)

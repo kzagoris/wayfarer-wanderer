@@ -27,19 +27,19 @@ public sealed class NewItemDialog : IdeWindow
     private static readonly HashSet<string> Asked = new(StringComparer.OrdinalIgnoreCase) { "namespace" };
 
     private readonly ItemTarget target;
-    private readonly TextBox search = new() { Classes = { StyleClasses.Search }, PlaceholderText = "Search", Margin = new Thickness(8, 8, 8, 6) };
+    private readonly TextBox search = SearchBox.Of("Search templates");
     private readonly ListBox list;
-    private readonly TextBlock loading = new() { Classes = { StyleClasses.Muted }, Text = "Loading templates…", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(12) };
-    private readonly TextBlock heading = new() { FontSize = 16, FontWeight = FontWeight.SemiBold };
-    private readonly TextBlock description = new() { Classes = { StyleClasses.Muted }, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
-    private readonly TextBox itemName = new() { Classes = { StyleClasses.Search } };
-    private readonly TextBox space = new() { Classes = { StyleClasses.Search } };
+    private readonly TextBlock loading = new() { Classes = { StyleClasses.Muted }, Text = "Loading templates…", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(Gaps.Wide) };
+    private readonly TextBlock heading = new() { Classes = { StyleClasses.PageTitle } };
+    private readonly TextBlock description = new() { Classes = { StyleClasses.Muted }, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, Gaps.Tight, 0, 0) };
+    private readonly TextBox itemName = new();
+    private readonly TextBox space = new();
     private readonly Control nameRow;
     private readonly Control spaceRow;
     private readonly TemplateOptions options = new();
-    private readonly TextBlock command = new() { Classes = { StyleClasses.Muted }, FontSize = 12, TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock command = FormRows.Note();
     private readonly Control details;
-    private readonly ProgressBar bar = new() { IsIndeterminate = true, Height = 4, MinHeight = 4, Width = 160, VerticalAlignment = VerticalAlignment.Center };
+    private readonly ProgressBar bar = new() { IsIndeterminate = true, Width = 160 };
     private readonly TextBlock progress = new() { Classes = { StyleClasses.Muted }, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
     private readonly StackPanel working;
     private readonly TextBlock problem = new() { TextWrapping = TextWrapping.Wrap, IsVisible = false, VerticalAlignment = VerticalAlignment.Center };
@@ -60,41 +60,42 @@ public sealed class NewItemDialog : IdeWindow
         this.target = target;
         FormRows.Scope(this);
         Title = "New Item";
-        Width = 860;
+        Width = DialogWidths.Workspace;
         Height = 600;
         MinWidth = 680;
         MinHeight = 440;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         create.IsEnabled = false;
 
-        list = new ListBox { Classes = { StyleClasses.Tree }, Padding = new Thickness(8, 0) };
+        list = new ListBox { Classes = { StyleClasses.Tree }, Padding = new Thickness(Gaps.Normal, 0) };
         ReusedRows.Use(list, Item);
         list.SelectionChanged += (_, _) => Choose(list.SelectedItem as ProjectTemplate);
         search.TextChanged += (_, _) => Filter();
         ListKeys.Search(search, list);
         DockPanel leftPanel = new();
+        search.Margin = new Thickness(Gaps.Normal, Gaps.Normal, Gaps.Normal, Gaps.Small);
         DockPanel.SetDock(search, Dock.Top);
         leftPanel.Children.Add(search);
         leftPanel.Children.Add(new Panel { Children = { list, loading } });
-        Border left = new() { Width = 280, BorderThickness = new Thickness(0, 0, 1, 0), Child = leftPanel };
+        Border left = new() { Width = TemplateList.Width, BorderThickness = Hairlines.After, Child = leftPanel };
         left.Bind(Border.BorderBrushProperty, left.GetResourceObservable(TokenKeys.Divider));
 
-        nameRow = TemplateOptions.Row("Name:", itemName);
-        spaceRow = TemplateOptions.Row("Namespace:", space);
+        nameRow = TemplateOptions.Row("Name", itemName);
+        spaceRow = TemplateOptions.Row("Namespace", space);
         itemName.TextChanged += (_, _) => ShowCommand();
         space.TextChanged += (_, _) => ShowCommand();
         space.Text = target.Namespace;
         options.Changed += ShowCommand;
-        TextBlock where = new() { Classes = { StyleClasses.Muted }, FontSize = 12, TextWrapping = TextWrapping.Wrap, Text = $"It will be made in {target.Shown}" };
-        details = new StackPanel { Spacing = 10, Children = { nameRow, spaceRow, TemplateOptions.Row(null, where), options.Panel, options.Folded, TemplateOptions.Row(null, command) } };
+        TextBlock where = FormRows.Note($"It will be made in {target.Shown}");
+        details = new StackPanel { Spacing = FormRows.Between, Children = { nameRow, spaceRow, TemplateOptions.Row(null, where), options.Panel, options.Folded, TemplateOptions.Row(null, command) } };
         StackPanel right = new()
         {
-            Margin = new Thickness(24, 18, 24, 18),
-            Spacing = 10,
-            Children = { new StackPanel { Children = { heading, description }, Margin = new Thickness(0, 0, 0, 8) }, details },
+            [DialogFooter.InsetProperty] = true,
+            Spacing = FormRows.Between,
+            Children = { new StackPanel { Children = { heading, description }, Margin = new Thickness(0, 0, 0, Gaps.Normal) }, details },
         };
         problem.Classes.Add(StyleClasses.Error);
-        working = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, IsVisible = false, Children = { bar, progress } };
+        working = new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gaps.Normal, IsVisible = false, Children = { bar, progress } };
         create.Click += (_, _) => IdeErrors.Observe(CreateAsync());
         Closing += (_, _) => creating?.Cancel();
         Action changed = () => IdeErrors.Observe(RefreshAsync(read));

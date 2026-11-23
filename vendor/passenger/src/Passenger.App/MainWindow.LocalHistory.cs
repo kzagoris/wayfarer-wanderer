@@ -38,6 +38,7 @@ public partial class MainWindow
         Dock.Add(new Docking.ToolWindow(ToolWindowIds.LocalHistory, "Local History", IconKeys.History, () => localHistoryView = new LocalHistoryView(),
             Docking.ToolAnchor.BottomLeft)
         {
+            Serves = ToolWindowServes.EveryFolder,
             Tools = () => localHistoryView?.Tabs,
         });
         // The menus' names, and Find Action's (Show Local History...) beside the Git window's Show History.
@@ -141,6 +142,11 @@ public partial class MainWindow
         if (session.LocalHistory is not { } history || Folder is not { } open)
         {
             status.Text = Refusals.NoFolder;
+            return null;
+        }
+        using Working? reading = BeginWork(AppActions.RecentChanges, "Reading the recent changes…");
+        if (reading is null)
+        {
             return null;
         }
         IReadOnlyList<HistoryEvent> events = history.Snapshot().Events;

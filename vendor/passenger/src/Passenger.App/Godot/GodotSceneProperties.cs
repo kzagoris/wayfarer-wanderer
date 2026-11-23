@@ -16,7 +16,7 @@ namespace Passenger.App.Godot;
 /// and written into the scene once it settles (<see cref="GodotSceneValues"/>); one they cannot edit shows its text.</summary>
 public sealed class GodotSceneProperties : DockPanel, IGodotTuner
 {
-    private readonly TextBlock heading = new() { FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(8, 6, 8, 4) };
+    private readonly TextBlock heading = new() { Classes = { StyleClasses.PaneTitle }, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(Gaps.Normal, Gaps.Small, Gaps.Normal, Gaps.Tight) };
     private readonly ListBox list = new() { Classes = { StyleClasses.Tree } };
     private readonly Action<Control, Control> showPopup;
     private readonly Action closePopup;
@@ -175,15 +175,12 @@ public sealed class GodotSceneProperties : DockPanel, IGodotTuner
     /// <summary>A property's row: its name, its value's editor where one fits it (else its text), and where it comes from.</summary>
     private Control Row()
     {
-        Grid grid = new() { ColumnDefinitions = new ColumnDefinitions("8*,12*"), RowDefinitions = new RowDefinitions("Auto,Auto"), Margin = new Thickness(8, 3) };
-        TextBlock label = new() { TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
-        TextBlock text = new TextBlock { FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center }.InCodeFont();
-        Grid.SetColumn(text, 1);
-        TextBlock source = new() { Classes = { StyleClasses.Muted }, FontSize = 11, TextTrimming = TextTrimming.CharacterEllipsis };
-        Grid.SetRow(source, 1);
-        Grid.SetColumnSpan(source, 2);
-        TextBox box = new TextBox { FontSize = 12, IsVisible = false, VerticalAlignment = VerticalAlignment.Center, Tag = TypingBox }.InCodeFont();
-        Grid.SetColumn(box, 1);
+        PropertyRow grid = new();
+        TextBlock label = grid.Label;
+        TextBlock text = grid.Value;
+        TextBlock source = grid.Source;
+        TextBox box = grid.Box;
+        box.Tag = TypingBox;
         box.KeyDown += (_, e) =>
         {
             if (grid.DataContext is not GodotSceneProperty shown || e.Key is not (Avalonia.Input.Key.Enter or Avalonia.Input.Key.Escape))
@@ -200,12 +197,8 @@ public sealed class GodotSceneProperties : DockPanel, IGodotTuner
                 typing = null;
                 Refreshed?.Invoke();
             }
-            list.Focus();
+            ListKeys.Hold(list);
         };
-        grid.Children.Add(label);
-        grid.Children.Add(text);
-        grid.Children.Add(source);
-        grid.Children.Add(box);
         (GodotValueCells From, LiveValueCell Cell)? made = null;
         Refreshed += () =>
         {
@@ -223,7 +216,7 @@ public sealed class GodotSceneProperties : DockPanel, IGodotTuner
             text.Text = row.Text;
             ToolTip.SetTip(text, row.Text);
             source.Text = row.Source;
-            label.FontWeight = row.Set ? FontWeight.SemiBold : FontWeight.Normal;
+            label.Classes.Set(StyleClasses.Strong, row.Set);
             bool edits = false;
             if (cells is { } given && Shown is not null)
             {
@@ -234,13 +227,13 @@ public sealed class GodotSceneProperties : DockPanel, IGodotTuner
                         grid.Children.Remove(old.Cell.Editor);
                     }
                     LiveValueCell cell = given.Make();
-                    Grid.SetColumn(cell.Editor, 1);
-                    grid.Children.Add(cell.Editor);
+                    grid.InValue(cell.Editor);
                     grid.Tag = cell;
                     made = (given, cell);
                 }
                 (edits, _) = made.Value.Cell.Show(0, new PropertyValue(row.Property.Name, row.Property.Category, false, GodotVariant.TypeName(row.Property.Type), row.Text, row.Source, null, null));
             }
+            grid.SplitFor(editor: made is not null);
             bool typed = typing == row.Property.Name;
             if (typed && !box.IsVisible)
             {

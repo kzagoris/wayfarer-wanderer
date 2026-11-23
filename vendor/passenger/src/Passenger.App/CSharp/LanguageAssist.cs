@@ -100,14 +100,14 @@ internal abstract class LanguageAssist
         Task.FromResult<CodeActions.Reformatted?>(null);
 }
 
-/// <summary>The languages' own answers, asked in one order by every command: an .http file's routes, an MSBuild file's,
+/// <summary>The languages' own answers, asked in one order by every command: an address written in a comment or a string, an .http file's routes, an MSBuild file's,
 /// XAML's, a compose file's, a settings file's configuration, a page's stylesheets' classes, a GDScript's own reading
 /// while Godot's server has not started, a web language's, a Godot shader's, a Godot scene's, a .feature file's (and a C# step
 /// definition's steps), then C#'s, Razor's and any file left; the first that answers is the command's.</summary>
-internal sealed class LanguageAssists(HttpAssist http, MSBuildAssist msbuild, XamlAssist xaml, ComposeAssist compose, SettingsAssist settings,
+internal sealed class LanguageAssists(LinkAssist links, HttpAssist http, MSBuildAssist msbuild, XamlAssist xaml, ComposeAssist compose, SettingsAssist settings,
     CssClassAssist classes, GDScriptAssist gdscript, WebAssist web, GodotShaderAssist shaders, GodotAssist godot, GherkinAssist gherkin, CSharpAssist csharp)
 {
-    private readonly IReadOnlyList<LanguageAssist> ladder = [http, msbuild, xaml, compose, settings, classes, gdscript, web, shaders, godot, gherkin, csharp];
+    private readonly IReadOnlyList<LanguageAssist> ladder = [links, http, msbuild, xaml, compose, settings, classes, gdscript, web, shaders, godot, gherkin, csharp];
 
     public GherkinAssist Gherkin => gherkin;
 
@@ -188,6 +188,20 @@ internal sealed class LanguageAssists(HttpAssist http, MSBuildAssist msbuild, Xa
         }
     }
 
+    /// <summary>Whether a language's Go to Declaration leads somewhere from an offset of a file, a place or a page, a link's
+    /// own leading aside; a server's failure leads nowhere.</summary>
+    public async Task<bool> DeclaresAsync(OpenDocument document, int offset)
+    {
+        try
+        {
+            return await DeclaredAsync(document, offset) is { Places.Count: > 0 } or { Page: not null };
+        }
+        catch (LanguageServerFailed)
+        {
+            return false;
+        }
+    }
+
     /// <summary>Where Go to Declaration goes from an offset of a file, for an agent; null where no language answers.</summary>
     public async Task<Declared?> DeclaredAsync(OpenDocument document, int offset)
     {
@@ -240,8 +254,8 @@ internal sealed class LanguageAssists(HttpAssist http, MSBuildAssist msbuild, Xa
 /// <summary>What a hover card is given, part by part: the window's card shows each, an agent reads them as text.</summary>
 internal interface IHoverCard
 {
-    /// <summary>Code, as written.</summary>
-    void AddCode(string code);
+    /// <summary>Code, as written, coloured as its language is in the editor; plain for none.</summary>
+    void AddCode(string code, Languages.Language? language = null);
 
     /// <summary>Words.</summary>
     void AddText(string text);

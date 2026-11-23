@@ -17,14 +17,14 @@ namespace Passenger.App.Settings;
 /// nothing.</summary>
 public sealed class ThemeExplorer : StackPanel
 {
-    private const double Gap = 8;
+    private const double Gap = Gaps.Normal;
     private static readonly string[] Orders = ["Popular", "Top rated", "Newest", "Name"];
     private readonly Func<AppSettings> working;
     private readonly Action<Func<AppSettings, AppSettings>> change;
     private readonly Action chosen;
     private readonly List<ExplorerRow> rows = [];
     private readonly Dictionary<string, byte[]> fetched = new(StringComparer.Ordinal);
-    private readonly StackPanel opened = new() { Spacing = 6, IsVisible = false };
+    private readonly StackPanel opened = new() { Spacing = Gaps.Small, IsVisible = false };
     private CancellationTokenSource? searching;
     private CancellationTokenSource? choosing;
     private int found;
@@ -36,8 +36,7 @@ public sealed class ThemeExplorer : StackPanel
         this.working = working;
         this.change = change;
         this.chosen = chosen;
-        Spacing = 6;
-        AutomationProperties.SetName(SearchBox, "Search VS Code themes");
+        Spacing = Gaps.Small;
         AutomationProperties.SetName(OrderBox, "Order of VS Code themes");
         AutomationProperties.SetName(List, "VS Code themes");
         OrderBox.ItemsSource = Orders;
@@ -88,7 +87,7 @@ public sealed class ThemeExplorer : StackPanel
         };
         opened.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gap, Children = { SearchBox, OrderBox } });
         opened.Children.Add(new Border { Classes = { StyleClasses.Framed }, Child = List });
-        opened.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { MoreButton } });
+        opened.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gaps.Normal, Children = { MoreButton } });
         Children.Add(OpenButton);
         Children.Add(opened);
         Children.Add(Said);
@@ -98,13 +97,10 @@ public sealed class ThemeExplorer : StackPanel
     public Button OpenButton { get; } = new() { Content = "Browse VS Code Themes", Name = "BrowseVsCodeThemes" };
 
     /// <summary>The words searched for: a theme's or extension's name, its publisher, or words it is described by.</summary>
-    public TextBox SearchBox { get; } = new()
-    {
-        Classes = { StyleClasses.Search }, PlaceholderText = "Name, publisher or words", Width = 260,
-    };
+    public TextBox SearchBox { get; } = Passenger.App.SearchBox.Of("Search VS Code themes", "Search by name, publisher or words");
 
     /// <summary>The order the themes are listed in.</summary>
-    public ComboBox OrderBox { get; } = new() { Classes = { StyleClasses.Form }, Width = 120 };
+    public ComboBox OrderBox { get; } = new ToolDropDown();
 
     /// <summary>The colour themes found, one row each.</summary>
     public ListBox List { get; } = new() { Classes = { StyleClasses.Tree }, Height = 240 };

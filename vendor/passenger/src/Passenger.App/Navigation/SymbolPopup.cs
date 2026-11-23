@@ -52,11 +52,16 @@ public sealed class SymbolPopup : SearchPopup<SymbolRow>
     private readonly Debounce typing;
     private CancellationTokenSource? asking;
 
+    /// <param name="initial">Which of the first rows to choose before anything is typed (the caret's member), given here so
+    /// a search that answers at once chooses it too.</param>
+    /// <param name="width">How wide it is, a step of the popups' scale: wide for the files and places of a solution, less for
+    /// a file's own few (a navigation bar's list).</param>
     public SymbolPopup(string title, string placeholder, Func<string, CancellationToken, Task<IReadOnlyList<SymbolRow>>> search, string? initialQuery = null,
-        (string Label, bool Checked)? option = null)
-        : base(title, placeholder, PopupFrame.Wide, initialQuery, option)
+        (string Label, bool Checked)? option = null, Func<IReadOnlyList<SymbolRow>, int>? initial = null, double width = PopupFrame.Wide)
+        : base(title, placeholder, width, initialQuery, option)
     {
         this.search = search;
+        Initial = initial;
         typing = new Debounce(Pause, Refresh);
         IdeErrors.Observe(Refresh());
     }
@@ -68,7 +73,7 @@ public sealed class SymbolPopup : SearchPopup<SymbolRow>
     public bool IsSettled { get; private set; }
 
     /// <summary>Which of the first rows to choose (the caret's member), before anything is typed.</summary>
-    public Func<IReadOnlyList<SymbolRow>, int>? Initial { get; init; }
+    public Func<IReadOnlyList<SymbolRow>, int>? Initial { get; }
 
     protected override void QueryChanged() => typing.Restart();
 
@@ -114,24 +119,16 @@ public sealed class SymbolPopup : SearchPopup<SymbolRow>
     /// is handed: its badge (a file's icon for a file), its name and type, where it is.</summary>
     public static Control ReusedRow()
     {
-        RowIcon icon = new() { Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
-        TextBlock letter = BadgeLetter();
-        Border badge = BadgeOf(letter);
-        badge.Margin = new Thickness(0, 0, 8, 0);
-        TextBlock where = new()
-        {
-            [DockPanel.DockProperty] = Dock.Right,
-            FontSize = 12,
-            Margin = new Thickness(12, 0, 8, 0),
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxWidth = 260,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
+        RowIcon icon = new() { Margin = new Thickness(0, 0, Gaps.Small, 0), VerticalAlignment = VerticalAlignment.Center };
+        Border badge = Tags.Kind(out TextBlock letter);
+        badge.Margin = new Thickness(0, 0, Gaps.Small, 0);
+        TextBlock where = ListRow.DetailText();
+        where.MaxWidth = 260;
         TextBlock name = new() { [DockPanel.DockProperty] = Dock.Left, VerticalAlignment = VerticalAlignment.Center };
         // A member's type follows its name close, as "Sum(int): decimal"; a container stands apart.
         TextBlock detail = new()
         {
-            FontSize = 12,
+            Classes = { StyleClasses.Caption },
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
             MaxWidth = 300,
@@ -154,7 +151,6 @@ public sealed class SymbolPopup : SearchPopup<SymbolRow>
             {
                 (string kind, string brush) = Badge(symbol.Kind);
                 letter.Text = kind;
-                letter.Foreground = InfoCard.Brush(TokenKeys.BadgeText);
                 badge.Background = InfoCard.Brush(brush);
             }
             where.Text = symbol.Where ?? string.Empty;
@@ -162,59 +158,26 @@ public sealed class SymbolPopup : SearchPopup<SymbolRow>
             name.Text = symbol.Name;
             detail.Text = symbol.Detail ?? string.Empty;
             detail.Foreground = InfoCard.Brush(TokenKeys.TextMuted);
-            detail.Margin = new Thickness(symbol.Detail?.StartsWith(':') == true ? 0 : 8, 0, 0, 0);
-            row.Margin = new Thickness(symbol.Depth * 16, 0, 0, 0);
+            detail.Margin = new Thickness(symbol.Detail?.StartsWith(':') == true ? 0 : Gaps.Normal, 0, 0, 0);
+            row.Margin = new Thickness(symbol.Depth * Gaps.Indent, 0, 0, 0);
         });
     }
 
     /// <summary>A kind's letter on its colour, marking a symbol or a kind of type.</summary>
     public static Control KindBadge(string letter, string brush)
     {
-        TextBlock shown = BadgeLetter();
+        Border badge = Tags.Kind(out TextBlock shown);
         shown.Text = letter;
-        shown.Foreground = InfoCard.Brush(TokenKeys.BadgeText);
-        Border badge = BadgeOf(shown);
         badge.Background = InfoCard.Brush(brush);
         return badge;
     }
 
-    private static TextBlock BadgeLetter() => new()
+    /// <summary>The letter and colour of a symbol of each kind (the protocol's SymbolKind), a Godot node's and a Markdown
+    /// heading's their own, as every badge has them (<see cref="KindBadges"/>).</summary>
+    public static (string Letter, string Brush) Badge(SymbolKind kind) => KindBadges.Of(kind switch
     {
-        FontSize = 10,
-        FontWeight = FontWeight.Bold,
-        HorizontalAlignment = HorizontalAlignment.Center,
-        VerticalAlignment = VerticalAlignment.Center,
-    };
-
-    private static Border BadgeOf(TextBlock letter) => new()
-    {
-        Width = 16,
-        Height = 16,
-        Classes = { StyleClasses.KindBadge },
-        VerticalAlignment = VerticalAlignment.Center,
-        Child = letter,
-    };
-
-    /// <summary>The letter and colour of a symbol of each kind (the protocol's SymbolKind).</summary>
-    public static (string Letter, string Brush) Badge(SymbolKind kind) => kind switch
-    {
-        SymbolKind.Namespace => ("N", TokenKeys.Syntax_Keyword),
-        SymbolKind.Class => ("C", TokenKeys.Syntax_Class),
-        SymbolKind.Method or SymbolKind.Function => ("m", TokenKeys.Syntax_Method),
-        SymbolKind.Property => ("p", TokenKeys.Syntax_Property),
-        SymbolKind.Field => ("f", TokenKeys.Syntax_Field),
-        SymbolKind.Constructor => ("m", TokenKeys.Syntax_Method),
-        SymbolKind.Enum => ("E", TokenKeys.Syntax_Enum),
-        SymbolKind.Interface => ("I", TokenKeys.Syntax_Interface),
-        SymbolKind.Variable => ("v", TokenKeys.TextMuted),
-        SymbolKind.Constant => ("c", TokenKeys.Syntax_Constant),
-        SymbolKind.EnumMember => ("e", TokenKeys.Syntax_EnumMember),
-        SymbolKind.Struct => ("S", TokenKeys.Syntax_Struct),
-        SymbolKind.Event => ("e", TokenKeys.Syntax_Event),
-        SymbolKind.Operator => ("o", TokenKeys.TextMuted),
-        SymbolKind.TypeParameter => ("T", TokenKeys.Syntax_TypeParameter),
-        SymbolRow.NodeKind => ("n", TokenKeys.Syntax_Class),
-        SymbolRow.HeadingKind => ("H", TokenKeys.Syntax_Heading),
-        _ => ("·", TokenKeys.TextMuted),
-    };
+        SymbolRow.NodeKind => BadgeKind.Node,
+        SymbolRow.HeadingKind => BadgeKind.Heading,
+        _ => KindBadges.Of(kind),
+    });
 }

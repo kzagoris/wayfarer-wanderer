@@ -23,24 +23,24 @@ public sealed class GitQuestionDialog : IdeWindow
         bool yesNo = question.Kind == GitQuestionKind.YesNo;
         if (question.Kind == GitQuestionKind.User)
         {
-            user = new TextBox { Name = "GitUser", Classes = { StyleClasses.Search } };
+            user = new TextBox { Name = "GitUser" };
         }
         if (!yesNo)
         {
-            secret = new TextBox { Name = "GitSecret", Classes = { StyleClasses.Search }, PasswordChar = '•' };
+            secret = new TextBox { Name = "GitSecret", PasswordChar = '•' };
         }
-        StackPanel fields = new() { Spacing = 8 };
+        StackPanel fields = new() { Spacing = FormRows.Between };
         if (user is not null)
         {
-            fields.Children.Add(FormRows.Of("User:", user));
+            fields.Children.Add(FormRows.Of("User", user));
         }
         if (secret is not null)
         {
             fields.Children.Add(FormRows.Of(question.Kind switch
             {
-                GitQuestionKind.Passphrase => "Passphrase:",
-                GitQuestionKind.Other => "Answer:",
-                _ => "Password:",
+                GitQuestionKind.Passphrase => "Passphrase",
+                GitQuestionKind.Other => "Answer",
+                _ => "Password",
             }, secret));
         }
 
@@ -54,8 +54,7 @@ public sealed class GitQuestionDialog : IdeWindow
         }
         TextBlock kept = new()
         {
-            Classes = { StyleClasses.Muted },
-            FontSize = 12,
+            Classes = { StyleClasses.Muted, StyleClasses.Caption },
             TextWrapping = TextWrapping.Wrap,
             Text = (agent is null ? string.Empty : $"Asked for {agent}'s call through Passenger's MCP server: the answer goes to git, never to the agent. ")
                 + (yesNo ? "ssh keeps a host it is told to trust in its known_hosts."

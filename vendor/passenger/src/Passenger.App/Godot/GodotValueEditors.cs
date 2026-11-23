@@ -5,6 +5,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Passenger.App.LiveTree;
+using Passenger.App.ToolWindows;
 using Passenger.Core;
 using Passenger.Editor;
 using Passenger.Inspector;
@@ -35,8 +36,8 @@ public sealed class GodotItemsEditor : Border
     private readonly Func<ulong, string, Control> objectForm;
 
     // Clear of the scroll bar, which shows over the rows' right.
-    private readonly StackPanel rows = new() { Spacing = 2, Margin = new Thickness(0, 0, 14, 0) };
-    private readonly TextBlock empty;
+    private readonly StackPanel rows = new() { Spacing = Gaps.Hair, Margin = new Thickness(0, 0, Gaps.Group, 0) };
+    private readonly EmptyState empty;
     private readonly List<TextBox> fields = [];
     private readonly Border slot = new() { IsVisible = false };
 
@@ -92,19 +93,19 @@ public sealed class GodotItemsEditor : Border
         keyType = hint.Key != GodotType.Nil ? hint.Key : keys.Kind == 0 ? GodotType.Nil : keys.Type;
         Classes.Add(StyleClasses.Popup);
         Width = PopupFrame.Narrow;
-        Padding = new Thickness(8);
-        empty = new TextBlock { Classes = { StyleClasses.EmptyText }, Text = Entries ? "No entries" : "No items" };
-        Button add = new() { Classes = { StyleClasses.Compact }, Content = Entries ? "Add Entry" : "Add Item", HorizontalAlignment = HorizontalAlignment.Left };
+        Padding = PopupFrame.Inset;
+        empty = new EmptyState { Text = Entries ? "No entries" : "No items" };
+        Button add = new() { Content = Entries ? "Add Entry" : "Add Item", HorizontalAlignment = HorizontalAlignment.Left };
         add.Click += (_, _) => IdeErrors.Observe(InTurnAsync(AddAsync));
         Add = add;
         string of = itemType == GodotType.Nil && keyType == GodotType.Nil ? GodotVariant.TypeName(type)
             : Entries ? $"Dictionary[{Named(keyType, keys)}, {Named(itemType, items)}]" : $"{type}[{Named(itemType, items)}]";
         Child = new StackPanel
         {
-            Spacing = 6,
+            Spacing = Gaps.Small,
             Children =
             {
-                new TextBlock { Classes = { StyleClasses.PopupTitle }, Text = $"{name}: {of}", TextTrimming = TextTrimming.CharacterEllipsis },
+                new TextBlock { Classes = { StyleClasses.PaneTitle }, Text = $"{name}: {of}", TextTrimming = TextTrimming.CharacterEllipsis },
                 new ScrollViewer { MaxHeight = ListRow.Height * 12, Content = new Panel { Children = { rows, empty } } },
                 add,
                 slot,
@@ -181,11 +182,11 @@ public sealed class GodotItemsEditor : Border
     {
         Grid row = new() { ColumnDefinitions = new ColumnDefinitions("32,*,Auto") };
         object asked = rowsNow[index];
-        TextBlock at = new TextBlock { Classes = { StyleClasses.Muted }, FontSize = 12, Text = index.ToString(System.Globalization.CultureInfo.InvariantCulture), VerticalAlignment = VerticalAlignment.Center }.InCodeFont();
+        TextBlock at = new TextBlock { Classes = { StyleClasses.Muted, StyleClasses.Code }, Text = index.ToString(System.Globalization.CultureInfo.InvariantCulture), VerticalAlignment = VerticalAlignment.Center };
         Control field = Opens(Listed[index], $"{name}[{index}]", asked, Replaced) is { } opens ? opens
             : Field(Listed[index], asked, text => InTurn(asked, now => SetItemAsync(now, text)));
         Grid.SetColumn(field, 1);
-        Button remove = ToolButtons.Of(IconKeys.Close, $"Remove item {index}", () => Remove(asked));
+        Button remove = ToolButtons.Glyph(IconKeys.Close, $"Remove item {index}", () => Remove(asked));
         Grid.SetColumn(remove, 2);
         row.Children.Add(at);
         row.Children.Add(field);
@@ -201,9 +202,9 @@ public sealed class GodotItemsEditor : Border
         TextBox key = Field(entry.Key, asked, text => InTurn(asked, now => SetEntryAsync(now, text, key: true)));
         Control value = Opens(entry.Value, $"{name}[{GodotVariant.Shown(entry.Key, quoted: true)}]", asked, ReplacedValue) is { } opens ? opens
             : Field(entry.Value, asked, text => InTurn(asked, now => SetEntryAsync(now, text, key: false)));
-        value.Margin = new Thickness(4, 0, 0, 0);
+        value.Margin = new Thickness(Gaps.Tight, 0, 0, 0);
         Grid.SetColumn(value, 1);
-        Button remove = ToolButtons.Of(IconKeys.Close, $"Remove {GodotVariant.Shown(entry.Key, quoted: true)}", () => Remove(asked));
+        Button remove = ToolButtons.Glyph(IconKeys.Close, $"Remove {GodotVariant.Shown(entry.Key, quoted: true)}", () => Remove(asked));
         Grid.SetColumn(remove, 2);
         row.Children.Add(key);
         row.Children.Add(value);
@@ -222,13 +223,12 @@ public sealed class GodotItemsEditor : Border
         {
             return null;
         }
-        TextBlock words = new TextBlock { FontSize = 12, Text = GodotVariant.Shown(item), TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center }.InCodeFont();
+        TextBlock words = new TextBlock { Classes = { StyleClasses.Code }, Text = GodotVariant.Shown(item), TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
         Button button = new()
         {
-            Classes = { StyleClasses.Compact },
             HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Left,
-            Padding = new Thickness(4, 2, 8, 2),
+            Padding = new Thickness(Gaps.Tight, Gaps.Hair, Gaps.Normal, Gaps.Hair),
             Content = words,
         };
         ToolTip.SetTip(button, item is GodotObjectId ? $"{named}: its own properties, read and set in the game" : $"{named}: its items, set in the game");
@@ -307,7 +307,7 @@ public sealed class GodotItemsEditor : Border
     private TextBox Field(object? value, object row, Action<string> taken)
     {
         string was = GodotVariant.Shown(value, quoted: value is string or GodotName or GodotNodePath);
-        TextBox field = new TextBox { FontSize = 12, Text = was, VerticalAlignment = VerticalAlignment.Center }.InCodeFont();
+        TextBox field = new ValueField { Text = was };
         field.KeyDown += (_, e) =>
         {
             if (e.Key == Key.Enter)
@@ -475,8 +475,8 @@ public sealed class GodotResourceEditor : Border, IGodotTuner
     private readonly GodotGame game;
     private readonly IGodotTuner tuner;
     // Clear of the scroll bar, which shows over the rows' right.
-    private readonly StackPanel rows = new() { Spacing = 2, Margin = new Thickness(0, 0, 14, 0) };
-    private readonly TextBlock words = new() { Classes = { StyleClasses.EmptyText } };
+    private readonly StackPanel rows = new() { Spacing = Gaps.Hair, Margin = new Thickness(0, 0, Gaps.Group, 0) };
+    private readonly EmptyState words = new();
     private readonly TextBlock title;
     private readonly Border slot = new() { IsVisible = false };
     private readonly Dictionary<string, (Control Row, GodotValueCell Cell, TextBox Typed, TextBlock Shown)> made = new(StringComparer.Ordinal);
@@ -495,12 +495,12 @@ public sealed class GodotResourceEditor : Border, IGodotTuner
         this.tuner = tuner;
         Classes.Add(StyleClasses.Popup);
         Width = PopupFrame.Medium;
-        Padding = new Thickness(8);
-        title = new TextBlock { Classes = { StyleClasses.PopupTitle }, Text = property, TextTrimming = TextTrimming.CharacterEllipsis };
+        Padding = PopupFrame.Inset;
+        title = new TextBlock { Classes = { StyleClasses.PaneTitle }, Text = property, TextTrimming = TextTrimming.CharacterEllipsis };
         words.Text = $"Reading {property}'s properties…";
         Child = new StackPanel
         {
-            Spacing = 6,
+            Spacing = Gaps.Small,
             Children =
             {
                 title,
@@ -577,11 +577,11 @@ public sealed class GodotResourceEditor : Border, IGodotTuner
     private (Control Row, GodotValueCell Cell, TextBox Typed, TextBlock Shown) Row(string name)
     {
         Grid grid = new() { ColumnDefinitions = new ColumnDefinitions("2*,3*"), RowDefinitions = new RowDefinitions("Auto,Auto"), MinHeight = ListRow.Height };
-        TextBlock label = new() { Text = name, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+        TextBlock label = new() { Text = name, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, Gaps.Normal, 0) };
         ToolTip.SetTip(label, name);
         GodotValueCell cell = new(game, this);
-        TextBox typed = new TextBox { FontSize = 12, VerticalAlignment = VerticalAlignment.Center }.InCodeFont();
-        TextBlock shown = new TextBlock { FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center }.InCodeFont();
+        TextBox typed = new ValueField();
+        TextBlock shown = new TextBlock { Classes = { StyleClasses.Code }, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
         typed.KeyDown += (_, e) =>
         {
             if (e.Key == Key.Enter && id is { } resource)

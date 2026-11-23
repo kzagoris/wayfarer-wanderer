@@ -322,7 +322,7 @@ public sealed partial class PassengerTools
         {
             throw new InvalidOperationException($"Nothing was replaced; {string.Join("; ", said)}");
         }
-        string replaced = $"Replaced {FilesReplaced.Count(changed)}: {AgentAnswers.Named([.. changed.Select(m => m.Path).Distinct().Select(Relative)], "file", FilesOfTheChange)}";
+        string replaced = $"Replaced {FilesReplaced.Said(changed)}: {AgentAnswers.Named([.. changed.Select(m => m.Path).Distinct().Select(Relative)], "file", FilesOfTheChange)}";
         return said.Count == 0 ? replaced : $"{replaced}; {string.Join("; ", said)}";
     });
 
@@ -352,7 +352,7 @@ public sealed partial class PassengerTools
         string name = Relative(document.Path);
         if (document.IsReadOnly)
         {
-            throw new InvalidOperationException($"{Refusals.ReadOnly(name)}, so nothing changed");
+            throw new InvalidOperationException($"{ReadOnlyHere(document.Path, name)}, so nothing changed");
         }
         if (await Editors.ClearAsync([document.Path]) is { } held)
         {
@@ -365,7 +365,7 @@ public sealed partial class PassengerTools
         if (found.Count > 1 && !all)
         {
             int[] lines = [.. found.Select(o => text.GetLineFromOffset(o) + 1).Distinct()];
-            throw new InvalidOperationException($"{name} has \"{Shorter(oldText)}\" {found.Count} times (lines {string.Join(", ", lines.Take(10))}{(lines.Length > 10 ? ", …" : "")}), so nothing changed: give more of the text around the one to change, or all true for every one");
+            throw new InvalidOperationException($"{name} has \"{Shorter(oldText)}\" {Numbers.Said(found.Count)} times (lines {string.Join(", ", lines.Take(10))}{(lines.Length > 10 ? ", …" : "")}), so nothing changed: give more of the text around the one to change, or all true for every one");
         }
         string written = LineEndings.In(newText ?? string.Empty, eol);
         List<TextEdit> edits = [.. found.Select(o => new TextEdit(o, needle.Length, written))];
@@ -405,7 +405,7 @@ public sealed partial class PassengerTools
             int last = after.GetLineFromOffset(Math.Min(after.Length, start + written.Length));
             spans.Add((first, last));
         }
-        System.Text.StringBuilder said = new($"Changed {name} {(edits.Count == 1 ? $"at line {spans[0].First + 1}" : $"in {edits.Count} places")}, {saved}:");
+        System.Text.StringBuilder said = new($"Changed {name} {(edits.Count == 1 ? $"at line {spans[0].First + 1}" : $"in {Numbers.Said(edits.Count)} places")}, {saved}:");
         int shown = 0;
         int lastShown = -1;
         foreach ((int first, int last) in spans)
@@ -430,10 +430,12 @@ public sealed partial class PassengerTools
 
     /// <summary>A search's matches in the files the agent may read, or with <paramref name="changes"/> change (<see
     /// cref="AgentReach"/>), and the files left out: one the person has open outside the folder, or one a link
-    /// in it leads out to, is none of the agent's.</summary>
+    /// in it leads out to, is none of the agent's. One it reads that is read-only by where it lies stays, for Replace in
+    /// Files to leave as it is, saying why, as the window's does (<see cref="ReadOnlyFiles"/>).</summary>
     private (FilesFound Kept, IReadOnlyList<string> LeftOut) Reached(FilesFound searched, bool changes)
     {
-        List<string> left = [.. searched.Matches.Select(m => m.Path).Concat(searched.Stopped).Distinct(StringComparer.Ordinal).Where(p => !Reaches(p, changes))];
+        List<string> left = [.. searched.Matches.Select(m => m.Path).Concat(searched.Stopped).Distinct(StringComparer.Ordinal)
+            .Where(p => !Reaches(p, changes && !ReadOnlyFiles.Holds(p)))];
         return left.Count == 0 ? (searched, left) : (searched with
         {
             Matches = [.. searched.Matches.Where(m => !left.Contains(m.Path))],
@@ -606,14 +608,20 @@ public sealed partial class PassengerTools
 
     /// <summary>What the Problems window lists beyond a file's diagnostics, as diagnostics with no path or a folder's answers
     /// it: within the folder, of the severity and project asked, each list's severest first, by file and place, held to
-    /// <see cref="AgentAnswers.MostFindings"/> in all, saying what it left out.</summary>
+    /// <see cref="AgentAnswers.MostFindings"/> in all, saying what it left out; with C#, once the language server answers
+    /// for the projects as they stand (<see cref="SettledServer"/>), refused as that refuses.</summary>
     private Task<ProblemsInfo> Problems(string? within, string? severity, string? project, CancellationToken cancel) => OnUi(cancel, async () =>
     {
         global::Passenger.Workspace.ProjectModel? named = project is null ? null : Project(project);
+        string? without = null;
+        if (Session.CSharp is not null)
+        {
+            // Toolset is what the server said of each project's load, solution what it found: of the projects loaded as they stand.
+            await SettledServer(cancel);
+            without = WentWithout(await UntakenAsync(cancel) ?? []);
+        }
         if (Session.CSharp is { SolutionWide: true })
         {
-            // Its first answers come once the server has loaded the solution and analysed it.
-            await Server(cancel);
             // Looked at every 50 ms: the server's solution-wide pulls raise nothing as the last is answered.
             await Until(() => Session.CSharp is not { IsAnalysing: true }, ServerLimit, cancel);
         }
@@ -630,7 +638,7 @@ public sealed partial class PassengerTools
         int leftOut = left.Sum();
         string? more = leftOut == 0 ? null : AgentAnswers.More(leftOut, "finding",
             $"{LeftOut(left)}; diagnostics with severity, project or a folder's path lists fewer at once, with a file's path that file's own");
-        return new ProblemsInfo(kept[0], kept[1], solution is null ? null : kept[2]) { More = more };
+        return new ProblemsInfo(kept[0], kept[1], solution is null ? null : kept[2]) { More = more is null ? without : without is null ? more : $"{more}. {without}" };
 
         bool Within(string? path, string? owner) =>
             (within is null || (path is not null && PathNames.Within(path, within)))
@@ -697,6 +705,7 @@ public sealed record HistoryRowInfo(long Set, string Time, string Title, bool La
 /// solution's with solution-wide analysis on (null while it is off).</summary>
 public sealed record ProblemsInfo(IReadOnlyList<Finding> Toolset, IReadOnlyList<Finding> Build, IReadOnlyList<Finding>? Solution)
 {
-    /// <summary>How many findings past those listed were left out, of which severities, and how to read them.</summary>
+    /// <summary>How many findings past those listed were left out, of which severities, and how to read them; then the C#
+    /// files and projects the language server had not taken in or loaded again yet, which the lists went without.</summary>
     public string? More { get; init; }
 }

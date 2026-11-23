@@ -134,7 +134,7 @@ public sealed class GitLogView : DockPanel, IOwnKeys
         branchFilterText = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
         PathIcon clearGlyph = new() { Classes = { StyleClasses.Small } };
         clearGlyph.Bind(PathIcon.DataProperty, clearGlyph.GetResourceObservable(IconKeys.Close));
-        Button clearBranch = new() { Classes = { StyleClasses.TabPin }, Content = clearGlyph, Margin = new Thickness(6, 0, 0, 0) };
+        Button clearBranch = new() { Classes = { ShellClasses.TabPin }, Content = clearGlyph, Margin = new Thickness(6, 0, 0, 0) };
         ToolButtons.Tip(clearBranch, "Clear Branch Filter");
         clearBranch.Click += (_, _) => FilterBranch(null, all: true);
         branchFilter = new Border

@@ -91,12 +91,30 @@ public sealed partial class Vim(VimRegisters registers)
     /// <summary>Set while . makes the last change again, which records nothing.</summary>
     private bool replaying;
 
+    /// <summary>Set while . makes the last change again with a count of its own.</summary>
+    private bool replayingCounted;
+
     /// <summary>Whether the file keeps a final line break (<see cref="IVimView.KeepsFinalLineBreak"/>), as the view said
     /// for what is being done: where it keeps none, a final line break begins an empty last line.</summary>
     private bool breakEnds = true;
 
     /// <summary>Where the operator's object or motion that just failed left its caret, a count cut short; null where it stays.</summary>
     private int? ranOutAt;
+
+    /// <summary>Set where an operator acted, whatever it changed (x on an empty line, gU over capitals), which is a change
+    /// made, not one that failed.</summary>
+    private bool actedOnNothing;
+
+    /// <summary>The line an exclusive motion just ended at the start of, which the operator's stretch leaves out; null with none.</summary>
+    private int? reachedPast;
+
+    /// <summary>Set while a command writes into a text a delete emptied (<see cref="OnOneEmptyLine"/>), whose one empty line
+    /// a delete or change takes nothing of, as Vim's empty buffer gives its registers nothing.</summary>
+    private bool intoEmptied;
+
+    /// <summary>Whether the insert session under way began on an emptied text's one line, which it leaves emptied where it
+    /// types nothing.</summary>
+    private bool typingIntoEmptied;
 
     public Vim()
         : this(new VimRegisters())
@@ -154,6 +172,10 @@ public sealed partial class Vim(VimRegisters registers)
         }
         if (Mode == VimMode.Insert)
         {
+            if (key == VimKeys.Enter)
+            {
+                FollowLineBreak(text, selections, view);
+            }
             return key == VimKeys.Escape ? LeaveInsert(text, selections, view) : VimResult.Left;
         }
         if (IsVisual(Mode))
@@ -205,14 +227,58 @@ public sealed partial class Vim(VimRegisters registers)
         searchSaid = null;
         // A command Vim mode doesn't know is swallowed whole, so its keys never type into the text.
         SelectionSet? aimedFor = wantedFor;
-        VimResult result = command is null ? VimResult.Held : Run(command, text, selections, view);
-        if (command is { Operator: null, Name: "." or "p" or "P" or "~" or "r" or "h" or "l" or "f" or "F" or "t" or "T" or ";" or "," or "*" or "#" }
+        VimResult result = command is null ? VimResult.Held
+            : WritesIntoEmpty(command, text, view) ? OnOneEmptyLine(command, text, view)
+            : Run(command, text, selections, view);
+        if ((command is { Operator: null, Name: "." or "p" or "P" or "~" or "r" or "h" or "l" or "f" or "F" or "t" or "T" or ";" or "," or "*" or "#"
+                or "S" or "Y" or "s" or "x" or "X" or "J" or "gJ" or "%" or "+" or "-" or "_" }
             && (ReferenceEquals(result, VimResult.Held) || result is { Edits: null, Selections: null, ReadsClipboard: false }))
+            || (command is { Operator: not null, Name: not ("i" or "a" or "$") } && ReferenceEquals(result, VimResult.Held)))
         {
-            // One that can't act (nothing to repeat or put, no character, nowhere to go) keeps the column j and k aim for.
+            // One that can't act (nothing to repeat or put, nowhere to go, its operator's motion failing) keeps j and k's column.
             wantedFor = aimedFor;
         }
+        if (command is { Operator: not null, Name: "$" } or { Operator: null, Name: "C" or "D" } && ReferenceEquals(result, VimResult.Held))
+        {
+            // An operator's $ cut short aims j and k at the line's end all the same.
+            (wantedFor, wanted) = (selections, [.. Enumerable.Repeat(int.MaxValue, selections.Count)]);
+        }
         return Told(result, command?.Name);
+    }
+
+    /// <summary>Whether a command writes into a text left empty in a file that keeps its final line break: a change, an
+    /// insert or a put, which there writes into the one empty line Vim's empty buffer holds.</summary>
+    private bool WritesIntoEmpty(Command command, TextSnapshot text, IVimView view) =>
+        text.Length == 0 && breakEnds && view.Refuses is null && (command.Operator == "c"
+            || command is { Operator: null, Name: "C" or "s" or "S" or "i" or "a" or "I" or "gI" or "A" or "o" or "O" or "p" or "P" or "gp" or "gP" or "R" });
+
+    /// <summary>A command that writes into an empty text run on the one empty line Vim's empty buffer holds, given its line
+    /// break first, so what it writes keeps the file's final line break as Vim's 'eol' does; one that writes nothing (a put
+    /// of an empty register) leaves the text empty.</summary>
+    private VimResult OnOneEmptyLine(Command command, TextSnapshot text, IVimView view) =>
+        OnOneEmptyLine((lined, carets) => Run(command, lined, carets, view), text, view);
+
+    /// <summary>What <paramref name="act"/> does on the one empty line an emptied text holds, given its line break first,
+    /// as <see cref="OnOneEmptyLine(Command, TextSnapshot, IVimView)"/> runs a command there.</summary>
+    private VimResult OnOneEmptyLine(Func<TextSnapshot, SelectionSet, VimResult> act, TextSnapshot text, IVimView view)
+    {
+        EditPlan line = new([new TextEdit(0, 0, view.LineEnding)], SelectionSet.Single(0), EditKind.Joined);
+        intoEmptied = true;
+        VimResult result;
+        try
+        {
+            result = act(text.Apply(line.Edits), line.Selections);
+        }
+        finally
+        {
+            intoEmptied = false;
+        }
+        typingIntoEmptied = Mode == VimMode.Insert;
+        if (result.Edits is { Count: > 0 } made)
+        {
+            return result with { Edits = [line, .. made.Select(p => p with { Kind = EditKind.Joined })] };
+        }
+        return Mode is VimMode.Insert or VimMode.Replace ? result with { Edits = [line with { Selections = result.Selections ?? line.Selections }] } : result;
     }
 
     /// <summary>A result with what a search asks shown: its matches, and its wrap or failure in words.</summary>
@@ -338,8 +404,68 @@ public sealed partial class Vim(VimRegisters registers)
     }
 
     /// <summary>An insert session begun; only i, a, I, gI, A, o and O repeat what it types by their count.</summary>
-    private void Begin(Command command, string how, SelectionSet carets, int length) =>
+    private void Begin(Command command, string how, SelectionSet carets, int length)
+    {
         inserting = (command.Keys, command.Count, how, carets.Items[0].Caret, length, carets.Count, carets.Items.Min(c => c.Caret));
+        lineBreaks = carets.Count == 1 ? [] : null;
+    }
+
+    /// <summary>Each line break Enter made in the insert session of one caret, where it put it and the indent it wrote after
+    /// it; null where the session's text is kept as it stands (several carets, a break that wrote more, the host's edits).</summary>
+    private List<(int At, string Indent)>? lineBreaks;
+
+    /// <summary>Enter in an insert session, as the editor makes it: the blanks it takes after the carets leave the text
+    /// shorter than what was typed, so the session's length goes down by them, and a break that writes only its indent is
+    /// kept (<see cref="lineBreaks"/>).</summary>
+    private void FollowLineBreak(TextSnapshot text, SelectionSet selections, IVimView view)
+    {
+        if (inserting is not { } session)
+        {
+            return;
+        }
+        EditPlan plan = TextEditing.NewLine(text, selections, view.LineEnding, view.Indent, view.Markup);
+        inserting = session with { Length = session.Length - plan.Edits.Sum(e => e.Length) };
+        if (lineBreaks is not null && plan is { Split: [], Edits: [{ } edit] } && edit.Text.StartsWith(view.LineEnding, StringComparison.Ordinal)
+            && edit.Text.AsSpan(view.LineEnding.Length).Trim(" \t").IsEmpty && (lineBreaks.Count == 0 || lineBreaks[^1].At < edit.Start))
+        {
+            lineBreaks.Add((edit.Start, edit.Text[view.LineEnding.Length..]));
+            return;
+        }
+        lineBreaks = null;
+    }
+
+    /// <summary>Edits the host made in an insert session of one caret at <paramref name="caret"/> (its formatting of what was
+    /// typed, of a block left), sorted and apart in the text before them: what they change before the session's start moves
+    /// it, and after the caret is no typing, so . types again what the session's keys did; one taking in that start makes
+    /// what it writes typed from there.</summary>
+    public void FollowEdits(IReadOnlyList<TextEdit> edits, int caret)
+    {
+        if (inserting is not { Carets: 1 } session)
+        {
+            return;
+        }
+        lineBreaks = null;
+        int first = session.First;
+        int length = session.Length;
+        int moved = 0;
+        foreach (TextEdit edit in edits)
+        {
+            if (edit.End <= session.First)
+            {
+                moved += edit.Text.Length - edit.Length;
+            }
+            else if (edit.Start >= caret)
+            {
+                length += edit.Text.Length - edit.Length;
+            }
+            else if (edit.Start < session.First)
+            {
+                length -= session.First - edit.Start;
+                first = edit.Start;
+            }
+        }
+        inserting = (session.Keys, session.Count, session.How, first + moved, length + moved, session.Carets, first + moved);
+    }
 
     /// <summary>Escape in insert mode: the carets step back onto the text, a line the session indented and left blank loses
     /// its indent, a count repeats what it typed, and what it typed is kept for . to type again.</summary>
@@ -359,6 +485,7 @@ public sealed partial class Vim(VimRegisters registers)
             // A line break that took the blanks after it makes the lengths differ: what the first caret typed stands before it.
             typed = text.GetText(trimmed.Top, top - trimmed.Top).Replace("\r\n", "\n", StringComparison.Ordinal);
         }
+        List<(int At, string Indent)>? breaks = session is { Carets: 1 } one && typed is not null ? BreaksIn(text, one.First, typed) : null;
         List<EditPlan> plans = [];
         if (blockStart is { } start && text.LineCount > start.Text.LineCount)
         {
@@ -370,7 +497,24 @@ public sealed partial class Vim(VimRegisters registers)
             }
             (blockCorner, blockChange) = (null, false);
         }
+        if (blockStart is { } padded && typed is "" && selections.Count == padded.Pads.Length && padded.Pads.Skip(1).Any(pad => pad > 0))
+        {
+            // A block's A that typed nothing pads only its first line.
+            List<TextEdit> unpadded = [.. selections.Items.Skip(1).Select((c, i) => (c.Caret, Pad: padded.Pads[i + 1])).Where(p => p.Pad > 0)
+                .Select(p => new TextEdit(p.Caret - p.Pad, p.Pad, string.Empty))];
+            EditPlan kept = new(unpadded, TextEditing.MapThrough(selections, unpadded), EditKind.Joined);
+            plans.Add(kept);
+            (text, selections) = (text.Apply(kept.Edits), kept.Selections);
+        }
         blockStart = null;
+        if (typingIntoEmptied && typed is "" && text.Length == view.LineEnding.Length && text.GetText(0, text.Length) == view.LineEnding)
+        {
+            // Typing nothing into an emptied text leaves it emptied.
+            EditPlan emptied = new([new TextEdit(0, text.Length, string.Empty)], SelectionSet.Single(0), EditKind.Joined);
+            plans.Add(emptied);
+            (text, selections) = (text.Apply(emptied.Edits), emptied.Selections);
+        }
+        typingIntoEmptied = false;
         // A line the session indented and left blank loses its indent, as Vim's autoindent takes back.
         bool indents = session is { How: "o" or "O" or "cc" } && typed == string.Empty || typed is not null && BlankAfterBreak(typed);
         int[]? indentAims = null;
@@ -405,12 +549,16 @@ public sealed partial class Vim(VimRegisters registers)
         }
         if (session is { } begun && !replaying)
         {
-            lastChange = new ChangeMade(begun.Keys, begun.Count, typed ?? string.Empty, changeExtent);
+            lastChange = typed is not null && breaks is { Count: > 0 } && WithoutIndents(typed, breaks) is ({ } made, { } at)
+                ? new ChangeMade(begun.Keys, begun.Count, made, changeExtent) { Breaks = at }
+                : new ChangeMade(begun.Keys, begun.Count, typed ?? string.Empty, changeExtent);
         }
         changeExtent = null;
+        SelectionSet stepped = selections.With(c => Selection.At(Settled(text, Math.Max(VimMotions.StepBack(text, c.Caret), VimMotions.LineOf(text, c.Caret).Start), breakEnds)));
+        // A block's insert that typed nothing steps back from its first line's place, as any insert's Escape does.
         SelectionSet back = blockCorner is { } corner && corner <= text.Length
-            ? SelectionSet.Single(Settled(text, corner, breakEnds))
-            : selections.With(c => Selection.At(Settled(text, Math.Max(VimMotions.StepBack(text, c.Caret), VimMotions.LineOf(text, c.Caret).Start), breakEnds)));
+            ? typed is "" ? SelectionSet.Single(stepped.Items.MinBy(c => c.Caret)) : SelectionSet.Single(Settled(text, corner, breakEnds))
+            : stepped;
         if (blockChange)
         {
             // A block's change leaves its one cursor where typing ended on the first line it changed.
@@ -442,6 +590,61 @@ public sealed partial class Vim(VimRegisters registers)
             }
         }
         return edits.Count == 0 ? null : new EditPlan(edits, TextEditing.MapThrough(carets, edits), EditKind.Joined);
+    }
+
+    /// <summary>The session's line breaks (<see cref="lineBreaks"/>) as places in what it typed, read from the text at
+    /// <paramref name="first"/>; null where the text no longer holds a break at each, in order.</summary>
+    private List<(int At, string Indent)>? BreaksIn(TextSnapshot text, int first, string typed)
+    {
+        if (lineBreaks is not { Count: > 0 } kept)
+        {
+            return null;
+        }
+        List<(int At, string Indent)> found = [];
+        foreach ((int at, string indent) in kept)
+        {
+            // What was typed reads each "\r\n" as one "\n".
+            int crlf = at > first ? text.GetText(first, at - first).Split("\r\n").Length - 1 : 0;
+            int place = at - first - crlf;
+            if (place < 0 || place >= typed.Length || typed[place] != '\n' || found.Count > 0 && found[^1].At >= place)
+            {
+                return null;
+            }
+            found.Add((place, indent));
+        }
+        return found;
+    }
+
+    /// <summary>What a session typed with the indent each of its line breaks wrote taken out, and where those breaks stand in
+    /// it; null where one's indent is no longer as written (typed over, taken back by hand), which . then types as it stands.
+    /// An indent the session's end took from a blank last line is taken out with it.</summary>
+    private static (string Text, int[] Breaks)? WithoutIndents(string typed, List<(int At, string Indent)> breaks)
+    {
+        System.Text.StringBuilder made = new(typed.Length);
+        List<int> places = [];
+        int from = 0;
+        foreach ((int at, string indent) in breaks)
+        {
+            made.Append(typed, from, at - from);
+            places.Add(made.Length);
+            made.Append('\n');
+            from = at + 1;
+            int lineEnd = typed.IndexOf('\n', from) is int next and >= 0 ? next : typed.Length;
+            if (typed.AsSpan(from).StartsWith(indent, StringComparison.Ordinal))
+            {
+                from += indent.Length;
+            }
+            else if (lineEnd == typed.Length && typed.AsSpan(from).Trim(" \t").IsEmpty && indent.StartsWith(typed[from..], StringComparison.Ordinal))
+            {
+                from = typed.Length;
+            }
+            else
+            {
+                return null;
+            }
+        }
+        made.Append(typed, from, typed.Length - from);
+        return (made.ToString(), [.. places]);
     }
 
     /// <summary>Whether what was typed ends with a line break and blanks alone after it.</summary>
@@ -476,10 +679,18 @@ public sealed partial class Vim(VimRegisters registers)
             lastChange = change with { Keys = keys };
         }
         int times = count > 0 ? count : change.Count;
+        ChangeMade kept = lastChange!;
+        if (count > 0 && change.Visual is null)
+        {
+            // A count given replaces the change's own for each . after it too, where the change is made.
+            lastChange = kept with { Count = count };
+        }
         List<EditPlan> plans = [];
         SelectionSet carets = selections;
         VimRequest? asked = null;
+        IReadOnlyList<string>? pressedAfter = null;
         replaying = true;
+        replayingCounted = count > 0;
         try
         {
             if (change.Visual is { Again: not InsertAgain.None } again)
@@ -501,9 +712,17 @@ public sealed partial class Vim(VimRegisters registers)
                 carets = ShowVisual(text, view).Selections!;
             }
             List<string> typed = times > 0 ? [.. times.ToString(System.Globalization.CultureInfo.InvariantCulture).Select(c => c.ToString())] : [];
+            actedOnNothing = false;
             foreach (string key in typed.Concat(keys))
             {
                 Follow(Press(key, text, carets, view));
+            }
+            // A change that fails keeps its own count; one whose operator finds nothing to change is made all the same.
+            if (plans.Count == 0 && !actedOnNothing && Mode == VimMode.Normal && change.Visual is null)
+            {
+                // A change failing again keeps its count, and what it typed is pressed as normal mode's keys, as Vim's are.
+                lastChange = kept with { JoinedNothing = lastChange?.JoinedNothing ?? kept.JoinedNothing };
+                pressedAfter = change.Inserted.Length > 0 ? [.. VimKeys.Pressed(change.Inserted), VimKeys.Escape] : null;
             }
             if (Mode == VimMode.Replace)
             {
@@ -515,25 +734,45 @@ public sealed partial class Vim(VimRegisters registers)
             }
             if (Mode == VimMode.Insert)
             {
-                if (change.Inserted.Length > 0)
+                int from = 0;
+                foreach (int at in change.Breaks)
                 {
-                    Follow(new VimResult(true, Edits: [TextEditing.Insert(text, carets, LineEndings.In(change.Inserted, view.LineEnding), EditKind.Joined)]));
+                    // Each line break Enter made is made again as Enter makes it here, its blanks taken and its indent this line's.
+                    Type(change.Inserted[from..at]);
+                    FollowLineBreak(text, carets, view);
+                    Follow(new VimResult(true, Edits: [TextEditing.NewLine(text, carets, view.LineEnding, view.Indent, view.Markup) with { Kind = EditKind.Joined }]));
+                    from = at + 1;
                 }
+                Type(change.Inserted[from..]);
                 Follow(LeaveInsert(text, carets, view));
             }
         }
         finally
         {
             replaying = false;
+            replayingCounted = false;
             blockAgain = null;
             pending.Clear();
         }
+        if (change.Visual is { Mode: VimMode.VisualLine, Again: InsertAgain.None } && change.Keys.Count > 0 && change.Keys[^1] is "u" or "U" or "~")
+        {
+            // A change of case over lines made again leaves the carets where it began, as Vim's does.
+            carets = selections;
+        }
         if (plans.Count == 0)
         {
-            return new VimResult(true, carets) { Request = asked };
+            return new VimResult(true, carets) { Request = asked, Replay = pressedAfter };
         }
         plans[^1] = plans[^1] with { Selections = carets };
         return new VimResult(true, Edits: [.. plans.Select(p => p with { Kind = EditKind.Joined })]) { Request = asked };
+
+        void Type(string typed)
+        {
+            if (typed.Length > 0)
+            {
+                Follow(new VimResult(true, Edits: [TextEditing.Insert(text, carets, LineEndings.In(typed, view.LineEnding), EditKind.Joined)]));
+            }
+        }
 
         void Follow(VimResult result)
         {

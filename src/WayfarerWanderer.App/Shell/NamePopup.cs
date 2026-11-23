@@ -35,7 +35,7 @@ public sealed class NamePopup : UserControl
         Width = 360;
         name = new TextBox { Classes = { StyleClasses.Search }, Text = initial };
         problem = new TextBlock { Classes = { StyleClasses.Muted }, FontSize = 12, IsVisible = false, TextWrapping = TextWrapping.Wrap };
-        StackPanel body = new() { Spacing = 8, Children = { new TextBlock { Classes = { StyleClasses.PopupTitle }, Text = title }, name } };
+        StackPanel body = new() { Spacing = 8, Children = { new TextBlock { Classes = { ShellClasses.PopupTitle }, Text = title }, name } };
         if (option is { } asked)
         {
             this.option = new CheckBox { Content = asked.Text, IsChecked = asked.On, Focusable = false, FontSize = 12, MinHeight = 0 };

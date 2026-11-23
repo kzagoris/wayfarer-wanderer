@@ -88,6 +88,41 @@ public sealed class ProjectModels
     /// <summary>Done while no round runs: what an agent's Open waits for before it says what the projects are.</summary>
     public Task Idle => idle.Task;
 
+    /// <summary>The holds on folders about to go or move (<see cref="HoldOff"/>).</summary>
+    private readonly List<FoldersHeld> heldOff = [];
+
+    /// <summary>Holds off the rounds that would look at a project reaching a folder about to go or move
+    /// (<see cref="FolderBuilds.Reaches"/>: one under it, or whose evaluation read a file or walked a folder under it) until
+    /// disposed, the workspace followed meanwhile evaluated once it is, and is done (<c>Evaluated</c>) once no round runs:
+    /// a round reads what each project's evaluation read, and evaluates in the host, and on Windows a folder with a file or
+    /// folder under it open does not move.</summary>
+    public (IDisposable Held, Task Evaluated) HoldOff(IReadOnlyList<string> going)
+    {
+        UiThread.Check();
+        FoldersHeld held = new(this, going);
+        heldOff.Add(held);
+        return (held, idle.Task);
+    }
+
+    /// <summary>Whether a hold reaches a project of a workspace, as last evaluated.</summary>
+    private bool HeldBack(WorkspaceModel workspace) =>
+        heldOff.Count > 0 && workspace.Projects.Any(p => heldOff.Any(h => h.Reaches(p.Path, known.GetValueOrDefault(p.Path))));
+
+    private sealed class FoldersHeld(ProjectModels models, IReadOnlyList<string> going) : IDisposable
+    {
+        /// <summary>Whether a project, as last <paramref name="evaluated"/>, reaches a folder it holds.</summary>
+        public bool Reaches(string project, EvaluatedProject? evaluated) =>
+            going.Any(folder => FolderBuilds.Reaches(project, evaluated is null ? null : evaluated.Inputs.Concat(evaluated.Folders), folder));
+
+        public void Dispose()
+        {
+            if (models.heldOff.Remove(this) && models.running != models.generation && models.reading.IsCompleted)
+            {
+                models.Next();
+            }
+        }
+    }
+
     /// <summary>The next round that evaluates a project waits until <paramref name="until"/> has ended before it asks the
     /// host, as a slow evaluation keeps the project unread meanwhile: done once that round is waiting.</summary>
     public Task HoldEvaluation(string project, Task until)
@@ -309,7 +344,8 @@ public sealed class ProjectModels
 
     private void Next()
     {
-        if (wanted is not { } next || folder is null)
+        // Held back, what is wanted stays wanted until let go.
+        if (wanted is not { } next || folder is null || HeldBack(next.Workspace))
         {
             running = -1;
             idle.TrySetResult();
@@ -465,7 +501,7 @@ public sealed class ProjectModels
                 {
                     left = [.. stale.Where(p => !evaluated.Contains(p))];
                 }
-                IdeErrors.Write($"Project host (process {host.ProcessId}) evaluating the projects of {following}: {ended.Reason}. The {left.Count} not yet evaluated are asked of a host started anew");
+                IdeErrors.Write($"Project host (process {host.ProcessId}) evaluating the projects of {following}: {ended.Reason}. The {Numbers.Said(left.Count)} not yet evaluated are asked of a host started anew");
                 host = await BackgroundWork.Run(() => ProjectHosts.ForAsync(following));
                 done = await EvaluateAsync(host, left);
             }
@@ -474,7 +510,7 @@ public sealed class ProjectModels
                 // What the round evaluated may still wait in a posted landing, which this continuation can come before.
                 Land();
                 Keep(projects);
-                IdeErrors.Write($"Project host (process {host.ProcessId}) evaluated {stale.Count} of the {projects.Count} projects of {following} in {Durations.Said(TimeSpan.FromSeconds(done.Seconds))}, {Durations.Said(Stopwatch.GetElapsedTime(began))} after they were checked");
+                IdeErrors.Write($"Project host (process {host.ProcessId}) evaluated {Numbers.Said(stale.Count)} of the {Numbers.Said(projects.Count)} projects of {following} in {Durations.Said(TimeSpan.FromSeconds(done.Seconds))}, {Durations.Said(Stopwatch.GetElapsedTime(began))} after they were checked");
             }
         }
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)

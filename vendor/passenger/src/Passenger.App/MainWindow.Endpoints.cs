@@ -33,13 +33,14 @@ public partial class MainWindow
             return view;
         }, Docking.ToolAnchor.RightTop)
         {
+            Serves = ToolWindowServes.WebRequests,
             Action = AppActions.ShowEndpoints,
             Menus = [new MenuPlace("Tools", 0, 3)],
             Chosen = () => endpoints?.Chosen,
         });
         actions!.Add(new IdeAction(AppActions.EndpointsRefresh, "Refresh Endpoints", "Endpoints", _ => Endpoints.Reload(session.Folder))
         {
-            WhyNot = NeedsFolder,
+            WhyNot = c => NeedsFolder(c) ?? Unserved(ToolWindowIds.Endpoints),
             Words = ["Read the .http files again"],
         });
         // A row's Test, Enter and menu, an agent and Find Action test the row chosen; an .http file's icon, its line's request.

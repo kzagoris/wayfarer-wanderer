@@ -5,18 +5,21 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Passenger.Workspace;
 
 namespace Passenger.App.Explorer;
 
 /// <summary>A project the Add Reference dialog offers: checked while the project references it, and not offered when it
 /// references the project itself, directly or through others (a reference back would be a cycle MSBuild refuses).</summary>
-public sealed class ReferenceChoice(string path, string name, string where, bool chosen, bool circular) : Observable, ICheckChoice
+public sealed class ReferenceChoice(ProjectModel project, string where, bool chosen, bool circular) : Observable, ICheckChoice
 {
     private bool isChosen = chosen;
 
-    public string Path { get; } = path;
+    public string Path => Project.Path;
 
-    public string Name { get; } = name;
+    public string Name => Project.Name;
+
+    public ProjectModel Project { get; } = project;
 
     /// <summary>Where it is, and why it cannot be chosen when it cannot.</summary>
     public string Detail { get; } = circular ? $"{where} (references this project)" : where;
@@ -41,29 +44,15 @@ public sealed class AddReferenceDialog : IdeWindow
     {
         Choices = choices;
         Title = "Add Reference";
-        Width = 520;
+        Width = DialogWidths.Form;
         Height = 420;
         MinWidth = 360;
         MinHeight = 240;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
-        list = new ListBox { Classes = { StyleClasses.Tree }, ItemsSource = choices };
-        ReusedRows.Use(list, CheckRows.Of);
+        // Enter takes the choices as the dialog's default button does.
+        list = CheckRows.List(choices, Accept);
         list.SelectedItem = choices.FirstOrDefault(c => c.CanChoose);
-        // Enter takes the choices as the dialog's default button does; Space flips the chosen row's box.
-        ListKeys.Act(list, new ListActs
-        {
-            Enter = Accept,
-            Keys = e =>
-            {
-                if (e.Key != Key.Space || e.KeyModifiers != KeyModifiers.None || list.SelectedItem is not ReferenceChoice { CanChoose: true } choice)
-                {
-                    return false;
-                }
-                choice.IsChosen = !choice.IsChosen;
-                return true;
-            },
-        });
         Border rows = new() { Classes = { StyleClasses.Framed }, Child = list };
 
         Button ok = DialogFooter.Default();
@@ -71,31 +60,16 @@ public sealed class AddReferenceDialog : IdeWindow
         TextBlock heading = new()
         {
             [DockPanel.DockProperty] = Dock.Top,
+            Classes = { StyleClasses.PaneTitle },
             Text = $"Projects {project} references",
-            FontWeight = FontWeight.SemiBold,
-            Margin = new Thickness(0, 0, 0, 10),
+            Margin = new Thickness(0, 0, 0, Gaps.Wide),
         };
-        Content = DialogFooter.Page(new DockPanel { Margin = new Thickness(16), Children = { heading, rows } }, DialogFooter.OkCancel(ok, () => Close(null)));
-        Opened += (_, _) => Dispatcher.UIThread.Post(FocusChosen, DispatcherPriority.Loaded);
+        Content = DialogFooter.Page(new DockPanel { [DialogFooter.InsetProperty] = true, Children = { heading, rows } }, DialogFooter.OkCancel(ok, () => Close(null)));
+        Opened += (_, _) => Dispatcher.UIThread.Post(() => ListKeys.Hold(list), DispatcherPriority.Loaded);
     }
 
     public IReadOnlyList<ReferenceChoice> Choices { get; }
 
     /// <summary>Closes as OK does, with the projects checked.</summary>
     public void Accept() => Close((IReadOnlyList<string>)[.. Choices.Where(c => c.IsChosen).Select(c => c.Path)]);
-
-    /// <summary>Gives the row chosen the keys.</summary>
-    private void FocusChosen()
-    {
-        if (list.SelectedIndex >= 0)
-        {
-            list.ScrollIntoView(list.SelectedIndex);
-            list.UpdateLayout();
-            list.ContainerFromIndex(list.SelectedIndex)?.Focus();
-        }
-        else
-        {
-            list.Focus();
-        }
-    }
 }

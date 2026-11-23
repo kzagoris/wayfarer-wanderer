@@ -271,7 +271,9 @@ public sealed partial class Vim
         (char kind, int by) = OffsetOf(last.Offset);
         int at = kind == 'e' ? caret - by : caret;
         int index = -1;
-        for (int i = 0; i < Math.Min(n, matches.Count + 1); i++)
+        // Past the first match the steps go round the matches, so a count of millions takes no more than one round.
+        int steps = Options.WrapScan ? 1 + (int)((n - 1L) % matches.Count) : Math.Min(n, matches.Count + 1);
+        for (int i = 0; i < steps; i++)
         {
             int from = index < 0 ? at : (kind == 'e' ? Math.Max(matches[index].Start, matches[index].End - 1) : matches[index].Start);
             int next = back ? LastBefore(matches, from, kind == 'e') : FirstAfter(matches, from, kind == 'e');
@@ -399,14 +401,14 @@ public sealed partial class Vim
     }
 
     /// <summary>m: the mark named set at the caret; ' and ` set the place '' goes back to.</summary>
-    private VimResult SetMark(Command command, SelectionSet selections, IVimView view)
+    private VimResult SetMark(Command command, TextSnapshot text, SelectionSet selections, IVimView view)
     {
         char name = command.Argument![0];
         if (!(char.IsAsciiLetter(name) || name is '\'' or '`' or '<' or '>' or '[' or ']'))
         {
             return VimResult.Held;
         }
-        view.SetMark(name == '`' ? '\'' : name, selections.Primary.Caret);
+        view.SetMark(name == '`' ? '\'' : name, selections.Primary.Caret, text);
         return new VimResult(true, selections);
     }
 }

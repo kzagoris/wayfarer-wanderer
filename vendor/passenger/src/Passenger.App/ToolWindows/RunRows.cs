@@ -1,14 +1,14 @@
 using System.Collections.ObjectModel;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
-using Avalonia.Controls.Shapes;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 
 namespace Passenger.App.ToolWindows;
 
-/// <summary>What a row's state dot says of what it stands for: no dot, running, running but unhealthy, between states
+/// <summary>What a row's state mark says of what it stands for: no mark, running, running but unhealthy, between states
 /// (paused, starting, stopping), failed, or stopped.</summary>
 public enum RunState
 {
@@ -25,7 +25,7 @@ public enum RunState
 public sealed record RunLink(string Words, Uri? Target, string? Tip = null);
 
 /// <summary>A row of a list of what runs (the Containers window's projects, services and containers, the Aspire window's
-/// resources): its depth, a chevron when rows go under it, its state's dot, its name with muted words after it, and at its
+/// resources): its depth, a chevron when rows go under it, its state's mark, its name with muted words after it, and at its
 /// right its health's tag, its addresses and muted words of its own. A heading is its words in bold, its count at its right.</summary>
 public sealed record RunRow(int Depth, string Label)
 {
@@ -158,7 +158,18 @@ public static class RunRows
         TreeKeys.Attach<RunItem<T>>(list, item => item.Data, item => toggle(item.Data));
     }
 
-    /// <summary>The state dot's colour: running green, unhealthy or failed red, between states amber, the rest muted.</summary>
+    /// <summary>The state mark's shape, so a state reads without its colour: running a dot, unhealthy a warning's triangle,
+    /// between states a half-filled ring, failed a cross, stopped an empty ring.</summary>
+    public static string ShapeOf(RunState state) => state switch
+    {
+        RunState.Running => IconKeys.TestRunning,
+        RunState.Unhealthy => IconKeys.Problems,
+        RunState.Between => IconKeys.TestAll,
+        RunState.Failed => IconKeys.TestFailed,
+        _ => IconKeys.TestNotRun,
+    };
+
+    /// <summary>The state mark's colour: running green, unhealthy or failed red, between states amber, the rest muted.</summary>
     public static string Colour(RunState state) => state switch
     {
         RunState.Running => TokenKeys.Test_Passed,
@@ -183,17 +194,18 @@ public static class RunRows
 }
 
 /// <summary>A row of a list of what runs drawn (<see cref="RunRows"/>): indented by its depth, a chevron when rows go under
-/// it, its state's dot, its name and muted words after it, and at its right its health's tag, its addresses (links to the
+/// it, its state's mark, its name and muted words after it, and at its right its health's tag, its addresses (links to the
 /// browser, else words) and muted words of its own. Shown again in place, each part changed only where what it shows
 /// changed, so a press on a link or the chevron is not taken from under the pointer by a read that changed nothing of it.</summary>
 public sealed class RunRowView : DockPanel
 {
     private readonly Action<Uri> browse;
     private readonly string linkName;
-    private readonly RowIcon chevron;
-    private readonly Ellipse dot = new() { Width = 8, Height = 8, Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
-    private readonly StackPanel right = new() { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
-    private readonly StackPanel links = new() { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+    private readonly RowExpander chevron;
+    private readonly RowIcon dot = RowIcon.Glyph(IconKeys.TestRunning);
+    // Where the row is narrower than its parts at its right, they give way from the last, their words ending in an ellipsis.
+    private readonly ShrinkingRow right = new() { Spacing = Gaps.Small, VerticalAlignment = VerticalAlignment.Center, [TextBlock.TextTrimmingProperty] = TextTrimming.CharacterEllipsis };
+    private readonly ShrinkingRow links = new() { Spacing = Gaps.Small, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock trailing = RunRows.Words(string.Empty, muted: true, dock: null);
     private readonly TextBlock name = RunRows.Words(string.Empty, muted: false, dock: Dock.Left);
     private readonly TextBlock detail = RunRows.Words(string.Empty, muted: true, dock: null);
@@ -206,28 +218,17 @@ public sealed class RunRowView : DockPanel
         this.browse = browse;
         this.linkName = linkName;
         Height = ListRow.Height;
-        // Its whole box takes a press, not only the glyph's thin strokes.
-        chevron = new RowIcon
-        {
-            Width = 12, Height = 12, Margin = new Thickness(0, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center,
-            ForegroundKey = TokenKeys.TextMuted, Name = "rowChevron",
-        };
-        chevron.PointerPressed += (_, e) =>
-        {
-            // The press's capture let go first, or rows moved under the pointer would take the next press from the chevron.
-            e.Pointer.Capture(null);
-            toggle();
-            e.Handled = true;
-        };
-        // A second press soon after is the chevron's again, never the list's double click, which would toggle it back.
-        chevron.DoubleTapped += (_, e) => e.Handled = true;
+        chevron = new RowExpander(toggle);
+        chevron.Chevron.Name = "rowChevron";
         SetDock(chevron, Dock.Left);
+        dot.Margin = new Thickness(0, 0, Gaps.Normal, 0);
+        dot.VerticalAlignment = VerticalAlignment.Center;
         SetDock(dot, Dock.Left);
         SetDock(right, Dock.Right);
         right.Children.Add(links);
         right.Children.Add(trailing);
-        detail.Margin = new Thickness(8, 0, 0, 0);
-        detail.FontSize = 12;
+        detail.Margin = new Thickness(Gaps.Normal, 0, 0, 0);
+        detail.Classes.Add(StyleClasses.Caption);
         Children.Add(chevron);
         Children.Add(dot);
         Children.Add(right);
@@ -238,20 +239,25 @@ public sealed class RunRowView : DockPanel
     /// <summary>What the row shows now.</summary>
     public RunRow? Shown => shown;
 
+    /// <summary>Its state's mark, shaped and coloured by the state (<see cref="RunRows.ShapeOf"/>, <see cref="RunRows.Colour"/>).</summary>
+    public RowIcon StateMark => dot;
+
     /// <summary>Shows a row, changing only the parts that differ from what it shows.</summary>
     public void Show(RunRow row)
     {
         RunRow? was = shown;
         shown = row;
-        Margin = new Thickness(6 + (row.Depth * 16), 0, 6, 0);
-        chevron.IsVisible = row.Expands;
-        chevron.DataKey = row.Expanded ? IconKeys.ChevronDown : IconKeys.ChevronRight;
+        Margin = new Thickness(Gaps.Small + (row.Depth * Gaps.Indent), 0, Gaps.Small, 0);
+        chevron.Expands = row.Expands;
+        chevron.IsOpen = row.Expanded;
         dot.IsVisible = !row.Heading && row.State != RunState.None;
         if (was is null || was.State != row.State)
         {
-            dot.Bind(Shape.FillProperty, dot.GetResourceObservable(RunRows.Colour(row.State)));
+            dot.DataKey = RunRows.ShapeOf(row.State);
+            dot.ForegroundKey = RunRows.Colour(row.State);
         }
         ToolTip.SetTip(dot, row.StateTip);
+        AutomationProperties.SetName(dot, row.StateTip);
         string? health = row.Heading ? null : row.Health;
         if (health != tagged)
         {
@@ -279,7 +285,7 @@ public sealed class RunRowView : DockPanel
         trailing.Text = row.Trailing ?? string.Empty;
         trailing.IsVisible = row.Trailing is not null;
         name.Text = row.Label;
-        name.FontWeight = row.Heading ? FontWeight.SemiBold : FontWeight.Normal;
+        name.Classes.Set(StyleClasses.Strong, row.Heading);
         name.MaxWidth = row.Heading ? double.PositiveInfinity : 260;
         detail.Text = row.Detail ?? string.Empty;
         detail.IsVisible = !row.Heading && row.Detail is { Length: > 0 };

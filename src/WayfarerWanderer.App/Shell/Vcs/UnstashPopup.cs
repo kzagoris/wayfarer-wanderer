@@ -51,7 +51,7 @@ public sealed class UnstashPopup : UserControl
             {
                 Children =
                 {
-                    new TextBlock { Classes = { StyleClasses.PopupTitle }, Text = "Unstash Changes", Margin = new Thickness(12, 10, 12, 6) },
+                    new TextBlock { Classes = { ShellClasses.PopupTitle }, Text = "Unstash Changes", Margin = new Thickness(12, 10, 12, 6) },
                     stashes.Count == 0
                         ? new TextBlock { Classes = { StyleClasses.Muted }, Text = "Nothing is stashed", Margin = new Thickness(12, 0, 12, 10) }
                         : list,

@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.Globalization;
-using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Media;
 using Avalonia.Media.TextFormatting;
@@ -315,15 +314,29 @@ public sealed partial class CodeEditor
 
     /// <summary>A formatted line, the last frame that drew or measured with it, and the x of the last few columns asked of it
     /// (where squiggles, selections and hints stand), which the line's layout allocates to read again in every frame.</summary>
-    private sealed class Formatted(TextLine line)
+    private sealed class Formatted(TextLine line, FormatKey key)
     {
         private const int KeptDistances = 8;
 
         private (int Column, double X)[]? distances;
         private int kept;
         private int replaced;
+        private Address[]? addresses;
+        private Func<string, object?>? addressesBy;
 
         public TextLine Line { get; } = line;
+
+        /// <summary>The addresses in the line's comments and strings, in its columns, as <paramref name="by"/> takes them:
+        /// found the first time they are asked for.</summary>
+        public Address[] Addresses(Func<string, object?> by)
+        {
+            if (addresses is null || !ReferenceEquals(addressesBy, by))
+            {
+                addresses = FindAddresses(key.Text, key.Runs, by);
+                addressesBy = by;
+            }
+            return addresses;
+        }
         public long Frame { get; private set; }
         public bool Disposed { get; private set; }
 
@@ -719,7 +732,7 @@ public sealed partial class CodeEditor
 
         public Formatted Add(FormatKey key, TextLine text)
         {
-            Formatted line = new(text);
+            Formatted line = new(text, key);
             formatted[key] = line;
             line.Touch(Frame);
             return line;
@@ -1322,61 +1335,6 @@ public sealed partial class CodeEditor
                 Lacking!.Add(grapheme.ToString());
             }
             return Tab;
-        }
-    }
-
-    /// <summary>Labels drawn (line numbers, hints, placeholders, annotations), by what they show, each with the frame that
-    /// last drew it: a row drawn later draws again those the rows on screen drew without formatting them, and a frame
-    /// disposes those no row on screen drew (<see cref="Begin"/>).</summary>
-    private sealed class LabelCache<TKey>
-        where TKey : notnull
-    {
-        private readonly Dictionary<TKey, (TextLine Line, long Drawn)> kept = [];
-        private long now;
-
-        public TextLine Get(TKey key, Func<TextLine> format) => TryGet(key, out TextLine? line) ? line : Add(key, format());
-
-        /// <summary>The label kept for what it shows, kept on for this frame.</summary>
-        public bool TryGet(TKey key, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out TextLine? line)
-        {
-            ref (TextLine Line, long Drawn) entry = ref CollectionsMarshal.GetValueRefOrNullRef(kept, key);
-            if (System.Runtime.CompilerServices.Unsafe.IsNullRef(ref entry))
-            {
-                line = null;
-                return false;
-            }
-            entry.Drawn = now;
-            line = entry.Line;
-            return true;
-        }
-
-        public TextLine Add(TKey key, TextLine line)
-        {
-            kept[key] = (line, now);
-            return line;
-        }
-
-        /// <summary>Starts a frame, disposing the labels last drawn before <paramref name="keepFrom"/>.</summary>
-        public void Begin(long frame, long keepFrom)
-        {
-            now = frame;
-            foreach ((TKey key, (TextLine line, long drawn)) in kept)
-            {
-                if (drawn < keepFrom)
-                {
-                    line.Dispose();
-                    kept.Remove(key);
-                }
-            }
-        }
-
-        public void Clear()
-        {
-            foreach ((TextLine line, long _) in kept.Values)
-            {
-                line.Dispose();
-            }
-            kept.Clear();
         }
     }
 

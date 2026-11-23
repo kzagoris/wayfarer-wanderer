@@ -49,7 +49,7 @@ public static partial class TemplatePacks
     /// <summary>The workloads whose templates New Project offers where they are not installed, each on the systems it
     /// installs on, Apple's where <paramref name="apple"/> (macOS, Windows), MAUI's elsewhere as its Android part alone, which
     /// none is offered to install where this machine builds no Android app (<paramref name="androidHost"/>, as
-    /// <see cref="AndroidHosts.Unbuilt(string?)"/> names it); their kinds from each workload's templates at the version named.</summary>
+    /// <see cref="AndroidHosts.UnbuiltAsync"/> names it); their kinds from each workload's templates at the version named.</summary>
     public static IEnumerable<TemplatePack> Workloads(bool apple, string? androidHost)
     {
         yield return new TemplatePack(apple ? "maui" : "maui-android", "Install the .NET MAUI workload for creating apps for Android, iOS, Mac Catalyst and Windows from one project",
@@ -95,7 +95,7 @@ public static partial class TemplatePacks
                 "A cross-platform Avalonia UI Application using the MVVM pattern targeting Desktop, Mobile and Browser with WebAssembly",
                 ["Desktop", "Xaml", "Avalonia", "Browser", "Mobile", "Android", "iOS"], "AvaloniaApplication"),
         ]),
-        new("Aspire.ProjectTemplates", "Install Aspire templates for creating cloud-native apps", "13.6.5", "Microsoft",
+        new("Aspire.ProjectTemplates", "Install Aspire templates for creating cloud-native apps", "17.0.0", "Microsoft",
         [
             new("Aspire Starter App (ASP.NET Core/Blazor)", "aspire-starter", true, ["C#"],
                 "A project template for creating an Aspire app with a Blazor web frontend and web API backend service, with optional Redis caching.",

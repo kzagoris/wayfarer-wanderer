@@ -36,14 +36,14 @@ public sealed class AspireView : DockPanel, IDisposable
     private const string TelemetryTab = AspireModel.TelemetryTab;
     private const string StatsTab = AspireModel.StatsTab;
 
-    private readonly TextBlock status = new() { Classes = { StyleClasses.Muted }, Margin = new Thickness(8, 0), VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-    private readonly TextBlock empty = new() { Classes = { StyleClasses.EmptyText } };
+    private readonly TextBlock status = new() { Classes = { StyleClasses.Muted }, Margin = new Thickness(Gaps.Normal, 0), VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+    private readonly EmptyState empty = new();
     private readonly List<(Button Button, string Action)> tools = [];
     private readonly Button commands;
     private readonly ContentControl page = new();
     private readonly ContentControl appHostConsole = new();
-    private readonly TextBlock readiness = new() { Classes = { StyleClasses.Muted }, Margin = new Thickness(8, 6), TextWrapping = TextWrapping.Wrap };
-    private readonly IReadOnlyDictionary<string, ToggleButton> tabs;
+    private readonly TextBlock readiness = new() { Classes = { StyleClasses.Muted }, Margin = new Thickness(Gaps.Normal, Gaps.Small), TextWrapping = TextWrapping.Wrap };
+    private readonly ToolTabs.Strip<string> tabs;
     private readonly Dictionary<string, Control> pages;
     private readonly TextBlock consoleStatus = Said();
     private AspireModel model;
@@ -64,7 +64,7 @@ public sealed class AspireView : DockPanel, IDisposable
     public AspireView(AspireModel model)
     {
         this.model = model;
-        AppSelector = new ComboBox { MaxWidth = 300, MinWidth = 200, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+        AppSelector = new ToolDropDown("No AppHost running") { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, Gaps.Small, 0) };
         AutomationProperties.SetName(AppSelector, "Aspire AppHost");
         ToolTip.SetTip(AppSelector, "Running AppHost (every request uses its absolute project path)");
         ToolFlow bar = RunWindowFrame.Tools(AppSelector);
@@ -346,10 +346,7 @@ public sealed class AspireView : DockPanel, IDisposable
 
     private void ShowPage(bool another)
     {
-        foreach ((string name, ToggleButton tab) in tabs)
-        {
-            tab.IsChecked = name == model.ShownPage;
-        }
+        tabs.Choice = model.ShownPage;
         page.Content = pages[model.ShownPage];
         if (another)
         {
@@ -385,9 +382,7 @@ public sealed class AspireView : DockPanel, IDisposable
         ContextMenu menu = new();
         foreach (Uri target in AspireModel.Links(resource))
         {
-            MenuItem item = new() { Header = target.AbsoluteUri };
-            item.Click += (_, _) => model.AskLink(target, () => requestAction?.Invoke(AppActions.AspireOpenLink));
-            menu.Items.Add(item);
+            menu.Items.Add(ListMenus.Item(target.AbsoluteUri, () => model.AskLink(target, () => requestAction?.Invoke(AppActions.AspireOpenLink))));
         }
         menu.Open(tools.Single(t => t.Action == AppActions.AspireOpenLink).Button);
     }
@@ -416,11 +411,15 @@ public sealed class AspireView : DockPanel, IDisposable
     [
         .. selected.Resource.Commands.Where(command => !command.Hidden).OrderBy(Order).Select(command =>
         {
-            MenuItem item = ListMenus.Item(command.DisplayName, null, () => model.AskCommand(selected, command.Name, () => requestAction?.Invoke(AppActions.AspireCommand)),
-                enabled: !model.Executing && command.Enabled && (!command.HasArguments || model.ArgumentCommand is not null));
-            ToolTip.SetTip(item, command.HasArguments && model.ArgumentCommand is null
-                ? "This command needs an argument form. Use the Aspire CLI; Passenger will not send incomplete arguments."
-                : command.Description ?? command.Name);
+            string? whyNot = model.Executing ? Refusals.CommandRunning
+                : !command.Enabled ? Refusals.CommandDisabled
+                : command.HasArguments && model.ArgumentCommand is null ? "This command needs an argument form. Use the Aspire CLI; Passenger will not send incomplete arguments."
+                : null;
+            MenuItem item = ListMenus.Item(command.DisplayName, () => model.AskCommand(selected, command.Name, () => requestAction?.Invoke(AppActions.AspireCommand)), whyNot);
+            if (whyNot is null)
+            {
+                ToolTip.SetTip(item, command.Description ?? command.Name);
+            }
             return (Control)item;
         }),
     ];
@@ -589,7 +588,7 @@ public sealed class AspireView : DockPanel, IDisposable
             Health = AspireDetailsPane.Health(resource),
             Links = [.. AspireModel.Links(resource).Take(3).Select(url => new RunLink(url.Authority, url, url.AbsoluteUri))],
             Detail = resource.Source is { } source ? Path.IsPathFullyQualified(source) ? Path.GetFileName(source) : source
-                : AspireJson.String(resource.Data, "resourceType"),
+                : resource.TypeShown,
             Tip = resource.ToString(),
         };
     }

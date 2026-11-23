@@ -8,11 +8,11 @@ namespace Passenger.App.Endpoints;
 /// closes it with <see cref="Document"/>; Cancel, Escape or a close, with none.</summary>
 public sealed class OpenApiDocumentDialog : IdeWindow
 {
-    private readonly TextBlock why = new() { Classes = { StyleClasses.Muted }, FontSize = 12, TextWrapping = Avalonia.Media.TextWrapping.Wrap };
+    private readonly TextBlock why = new() { Classes = { StyleClasses.Muted, StyleClasses.Caption }, TextWrapping = Avalonia.Media.TextWrapping.Wrap };
 
     public OpenApiDocumentDialog(string project, string? named)
     {
-        Address = new TextBox { Name = "OpenApiDocument", Classes = { StyleClasses.Search }, Text = named ?? string.Empty, PlaceholderText = OpenApiSources.Defaults[0] };
+        Address = new TextBox { Name = "OpenApiDocument", Text = named ?? string.Empty, PlaceholderText = OpenApiSources.Defaults[0] };
         Ok = DialogFooter.Default();
         Ok.Click += (_, _) => Accept();
         Button cancel = DialogFooter.Cancel(() => Close(false));

@@ -48,6 +48,17 @@ public sealed partial record LaunchPlan
     /// (<see cref="AppHosts"/>).</summary>
     public bool ByAppHost { get; init; }
 
+    /// <summary>The x86 .NET installation its program runs on, where it runs as a 32-bit x86 process (<see cref="X86Programs"/>);
+    /// null for any other.</summary>
+    public string? X86Dotnet { get; init; }
+
+    /// <summary>Why Passenger's debugger cannot debug its program: one known to run on Windows as a 32-bit x86 process, by
+    /// its build (<see cref="X86Dotnet"/>) or by its own native header (a test host's apphost a runner names), never a .NET
+    /// assembly's, whose machine is not its processor; null where it can, or where that is not known.</summary>
+    public string? WhyNotDebugged => OperatingSystem.IsWindows() && (X86Dotnet is not null
+        || (System.IO.Path.IsPathRooted(Program) && ProgramProcessors.Of(Program) is [System.Runtime.InteropServices.Architecture.X86]))
+        ? Refusals.X86Undebugged(ProgramName) : null;
+
     /// <summary>The program's arguments, the assembly first when it runs under <c>dotnet</c>.</summary>
     public IReadOnlyList<string> Arguments { get; init; } = [];
 
@@ -103,6 +114,10 @@ public sealed partial record LaunchPlan
 
     /// <summary>Where the browser opens once the program listens, or null when the configuration opens none.</summary>
     public string? BrowserUrl { get; init; }
+
+    /// <summary>The browser its configuration names for its page, as a command line, in place of Settings' (<see cref="PageBrowsers"/>);
+    /// empty for Settings'.</summary>
+    public string BrowserLine { get; init; } = string.Empty;
 
     /// <summary>The container's service whose HTTP answer at <see cref="BrowserUrl"/> opens the browser, since the engine
     /// takes connections on its published port before its program listens; null for a program whose port taking a connection
@@ -229,14 +244,19 @@ public sealed partial record LaunchPlan
     public string ProgramName => GameName ?? System.IO.Path.GetFileNameWithoutExtension(Built ?? Program);
 
     /// <summary>Null when the plan can launch now, its build done: else that the build made no program or apphost (unless
-    /// what starts it builds it), that the working folder is gone ("Could not run Hello: its working folder ... does not exist"),
-    /// unless what starts it builds it there (<see cref="WorksWhereBuilt"/>), or that its windows would reach the person's
-    /// screen from a Passenger nobody sees (<see cref="UnseenApps.WhyNot"/>).</summary>
+    /// what starts it builds it), that the x86 .NET a 32-bit program runs on lacks its frameworks (<see cref="X86Programs.Lacking(string,string,IReadOnlyDictionary{string,string})"/>),
+    /// that the working folder is gone ("Could not run Hello: its working folder ... does not exist"), unless what starts it
+    /// builds it there (<see cref="WorksWhereBuilt"/>), or that its windows would reach the person's screen from a Passenger
+    /// nobody sees (<see cref="UnseenApps.WhyNot"/>).</summary>
     public string? WhyNot(string verb, bool built = true)
     {
         if (built && (Built is { } file && !File.Exists(file) ? file : ByAppHost && !File.Exists(Program) ? Program : null) is { } missing)
         {
             return $"Could not {verb} {ProgramName}: {System.IO.Path.GetFileName(missing)} has not been built";
+        }
+        if (X86Dotnet is { } x86 && Built is { } assembly && X86Programs.Lacking(x86, assembly, Environment) is { Count: > 0 } lacking)
+        {
+            return $"Could not {verb} {ProgramName}: {Refusals.X86RuntimeMissing(x86, lacking)}";
         }
         return !Directory.Exists(WorkingDirectory) && (built || !WorksWhereBuilt)
             ? $"Could not {verb} {ProgramName}: its working folder {WorkingDirectory} does not exist"
@@ -260,7 +280,11 @@ public sealed partial record LaunchPlan
     public static async Task<LaunchPlan> ResolveAsync(RunConfiguration configuration, IReadOnlyList<ProjectModel> projects, WorkspaceModel? workspace, string stateFolder,
         CancellationToken cancel = default, string? godot = null, string? atHand = null, IReadOnlyDictionary<string, string>? godotFolders = null, bool? unseen = null,
         Func<ProjectModel, Devices.KeptTarget?>? targets = null) =>
-        await ResolveWithinAsync(configuration, projects, workspace, stateFolder, cancel, godot, atHand, godotFolders, unseen, targets) with { Workspace = workspace };
+        await ResolveWithinAsync(configuration, projects, workspace, stateFolder, cancel, godot, atHand, godotFolders, unseen, targets) with
+        {
+            Workspace = workspace,
+            BrowserLine = configuration.Browser,
+        };
 
     private static async Task<LaunchPlan> ResolveWithinAsync(RunConfiguration configuration, IReadOnlyList<ProjectModel> projects, WorkspaceModel? workspace, string stateFolder,
         CancellationToken cancel, string? godot, string? atHand, IReadOnlyDictionary<string, string>? godotFolders, bool? unseen,
@@ -314,12 +338,12 @@ public sealed partial record LaunchPlan
             ?? throw new LaunchException($"{configuration.Name} cannot run: its project {System.IO.Path.GetFileName(configuration.Project)} is not loaded in the open folder");
         // The target chosen to run on decides the framework built: its platform's, unless the configuration names one of it.
         Devices.KeptTarget? device = Devices.DeviceTargets.PlatformsOf(project.TargetFrameworks).Count > 0 ? targets?.Invoke(project) : null;
-        if (device is not null && Devices.DeviceTargets.FrameworkFor(project.TargetFrameworks, device.Platform) is null)
+        if (device is not null && Devices.DeviceTargets.FrameworkFor(project, device.Platform) is null)
         {
             device = null;
         }
         string? framework = device is not null && Devices.DeviceTargets.PlatformOf(configuration.Framework) != device.Platform && project.TargetFrameworks.Count > 1
-            ? Devices.DeviceTargets.FrameworkFor(project.TargetFrameworks, device.Platform)
+            ? Devices.DeviceTargets.FrameworkFor(project, device.Platform)
             : FrameworkOf(configuration.Framework, project);
         Devices.TargetPlatform? platform = device?.Platform ?? Devices.DeviceTargets.PlatformOf(framework ?? project.TargetFrameworks.FirstOrDefault() ?? string.Empty);
         if (device is null && configuration.Program.Length == 0 && platform is Devices.TargetPlatform.Android or Devices.TargetPlatform.Ios)
@@ -398,6 +422,7 @@ public sealed partial record LaunchPlan
         int leading = 0;
         AppHost? host = null;
         string? underDotnet = null;
+        string? x86 = null;
         if (configuration.Program is { Length: > 0 } named)
         {
             program = Executable(Expand(named), project.Folder);
@@ -415,6 +440,11 @@ public sealed partial record LaunchPlan
             arguments.AddRange(ofProject);
             bool assembly = target.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
             (host, underDotnet) = assembly ? AppHosts.Of(properties, target) : (null, null);
+            if (assembly && (host is { X86: true } || X86Programs.Builds(properties)))
+            {
+                // A 64-bit .NET loads no x86 assembly: Windows runs it on its x86 .NET, as its apphost or the x86 dotnet finds it.
+                x86 = OperatingSystem.IsWindows() ? X86Programs.Root(Variables()) : throw new LaunchException($"{configuration.Name} cannot run here: {Refusals.X86OnWindowsAlone}");
+            }
             if (host is not null)
             {
                 program = host.Program;
@@ -422,7 +452,7 @@ public sealed partial record LaunchPlan
             }
             else if (assembly)
             {
-                program = Dotnet.Host(project.Folder);
+                program = x86 is null ? Dotnet.Host(project.Folder) : System.IO.Path.Combine(x86, Dotnet.HostName);
                 arguments.Insert(0, target);
                 built = target;
                 leading = 1;
@@ -437,11 +467,11 @@ public sealed partial record LaunchPlan
             ? System.IO.Path.TrimEndingDirectorySeparator(PathNames.Canonical(System.IO.Path.Combine(project.Folder, folder)))
             : System.IO.Path.GetDirectoryName(target)!;
         Dictionary<string, string> environment = Variables();
-        // The apphost takes its runtime from the .NET that builds it, as dotnet run's does, or the one the configuration names, over any the IDE inherited.
+        // The apphost takes its runtime from the .NET that builds it (an x86 one's from the x86 .NET), or the one the configuration names, over any the IDE inherited.
         if (host is not null && !environment.Keys.Any(k => k.Equals(host.RootVariable, StringComparison.OrdinalIgnoreCase)))
         {
-            environment[host.RootVariable] = environment.Where(v => v.Key.Equals(RuntimeVariables.Root, StringComparison.OrdinalIgnoreCase)).Select(v => v.Value).FirstOrDefault()
-                ?? Dotnet.Root(project.Folder);
+            environment[host.RootVariable] = host.X86 && x86 is not null ? x86
+                : environment.Where(v => v.Key.Equals(RuntimeVariables.Root, StringComparison.OrdinalIgnoreCase)).Select(v => v.Value).FirstOrDefault() ?? Dotnet.Root(project.Folder);
         }
         string? other = DesktopPrograms.NamedProject(program, arguments, working) is { } runs && !PathNames.Same(runs, project.Path) && !PathNames.Same(runs, project.Folder) ? runs : null;
         if (SandboxedState(built ?? program, environment, stateFolder) is { } sandbox)
@@ -453,6 +483,7 @@ public sealed partial record LaunchPlan
             Name = configuration.Name,
             Program = program,
             ByAppHost = host is not null,
+            X86Dotnet = x86,
             Arguments = arguments,
             Leading = leading,
             ArgumentsOfProject = ofProject.Count > 0,

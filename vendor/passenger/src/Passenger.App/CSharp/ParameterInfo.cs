@@ -19,7 +19,9 @@ internal interface IOwnSignatures
 /// <summary>Parameter Info: the card over the caret of the signature of the call it is in, its parameter there's
 /// documentation (else the signature's), shown after an opening bracket or a comma, following the caret moved through the
 /// call, and gone after the closing bracket or once the caret leaves it; a language's own (<see cref="Own"/>) first where
-/// it has one. A screen reader is told the signature as it shows, then the parameter the caret is at as it moves to another.</summary>
+/// it has one. Where the server says which overloads the arguments so far still fit (C#'s), every overload shows, the
+/// parameter the caret's argument fills strong in each that fits, the rest set back. A screen reader is told the
+/// signature as it shows, then the parameter the caret is at as it moves to another.</summary>
 internal sealed class ParameterInfo
 {
     private readonly AssistContext context;
@@ -93,6 +95,9 @@ internal sealed class ParameterInfo
         following.Stop();
         card.IsVisible = false;
         told = null;
+        answer = null;
+        chosen = -1;
+        stepped = false;
     }
 
     public async Task Show()
@@ -128,6 +133,7 @@ internal sealed class ParameterInfo
             }
             if (signed is { } answered)
             {
+                answer = null;
                 card.IsVisible = answered && parts.Count > 0;
                 if (card.IsVisible)
                 {
@@ -162,26 +168,15 @@ internal sealed class ParameterInfo
             {
                 card.IsVisible = false;
                 told = null;
+                answer = null;
                 return;
             }
-            int overload = Math.Clamp(help.ActiveSignature ?? 0, 0, help.Signatures.Count - 1);
-            SignatureInformation signature = help.Signatures[overload];
-            card.Clear();
-            card.AddCode(signature.Label);
-            int active = signature.ActiveParameter ?? help.ActiveParameter ?? -1;
-            List<string> names = [.. ParameterNames(signature)];
-            if (signature.Parameters is { } parameters && active >= 0 && active < parameters.Count
-                && Shapes.Text(parameters[active].Documentation) is { Length: > 0 } about)
-            {
-                card.AddText(SentencesApart(about, names));
-            }
-            else if (Shapes.Text(signature.Documentation) is { Length: > 0 } documentation)
-            {
-                card.AddText(SentencesApart(documentation, names));
-            }
-            card.IsVisible = true;
+            // The overload stepped to stays chosen while the call's overloads are the same.
+            stepped &= answer is { } before && before.Signatures.Select(s => s.Label).SequenceEqual(help.Signatures.Select(s => s.Label));
+            int overload = stepped ? chosen : Math.Clamp(help.ActiveSignature ?? 0, 0, help.Signatures.Count - 1);
+            answer = help;
+            Draw(overload, context.Editors.Active is { } file && file.Text == document ? file.Language : null);
             popups.Place(card, caret, above: true);
-            Tell(signature.Label, help.Signatures.Count > 1 ? $"overload {overload + 1} of {help.Signatures.Count}" : null, ParameterLabel(signature, active));
         }
         catch (OperationCanceledException)
         {
@@ -191,6 +186,74 @@ internal sealed class ParameterInfo
         {
             // No signature shown; the next bracket or comma asks again.
         }
+    }
+
+    /// <summary>The most overloads Parameter Info lists at once, the rest reached by stepping through them.</summary>
+    private const int MostOverloads = 8;
+
+    /// <summary>The server's last answer shown, and the overload chosen in it: the server's, or the one stepped to.</summary>
+    private SignatureHelp? answer;
+    private int chosen = -1;
+
+    /// <summary>Whether the person stepped to the overload chosen, which then stays chosen as the server answers again.</summary>
+    private bool stepped;
+    private Languages.Language? shownIn;
+
+    /// <summary>Whether the card shows a call of several overloads, which the keys step through.</summary>
+    public bool Steps => card.IsVisible && answer is { Signatures.Count: > 1 } help && help.Signatures.Any(s => s.Fits is not null);
+
+    /// <summary>Chooses the next (or, for a negative step, previous) overload, going round past either end, its documentation
+    /// under the list; the server is not asked again.</summary>
+    public void Step(int by)
+    {
+        if (!Steps || answer is not { } help)
+        {
+            return;
+        }
+        stepped = true;
+        Draw((chosen + by + help.Signatures.Count) % help.Signatures.Count, shownIn);
+        popups.Place(card, context.Caret, above: true);
+    }
+
+    /// <summary>The card of an answer, <paramref name="overload"/> chosen: of a call of several overloads, every one as a
+    /// row, those the arguments so far still fit with the parameter the caret's fills, at most <see cref="MostOverloads"/>
+    /// round the chosen one and how many there are; else the signature alone; then the chosen one's documentation.</summary>
+    private void Draw(int overload, Languages.Language? language)
+    {
+        SignatureHelp help = answer!;
+        chosen = overload;
+        shownIn = language;
+        SignatureInformation signature = help.Signatures[overload];
+        card.Clear();
+        int count = help.Signatures.Count;
+        if (count > 1 && help.Signatures.Any(s => s.Fits is not null))
+        {
+            int top = Math.Clamp(overload - (MostOverloads / 2), 0, Math.Max(0, count - MostOverloads));
+            for (int i = top; i < Math.Min(count, top + MostOverloads); i++)
+            {
+                SignatureInformation each = help.Signatures[i];
+                bool fits = each.Fits != false;
+                card.AddOverload(each.Label, each.Code, language, fits, fits ? each.ActiveParameter ?? help.ActiveParameter ?? -1 : -1, chosen: i == overload);
+            }
+            card.AddText($"Overload {overload + 1} of {Numbers.Said(count)}");
+        }
+        else
+        {
+            card.AddServed(signature.Label, signature.Code, language);
+        }
+        int active = signature.ActiveParameter ?? help.ActiveParameter ?? -1;
+        List<string> names = [.. ParameterNames(signature)];
+        if (signature.Parameters is { } parameters && active >= 0 && active < parameters.Count
+            && Shapes.Text(parameters[active].Documentation) is { Length: > 0 } about)
+        {
+            card.AddText(SentencesApart(about, names));
+        }
+        else if (Shapes.Text(signature.Documentation) is { Length: > 0 } documentation)
+        {
+            card.AddText(SentencesApart(documentation, names));
+        }
+        card.IsVisible = true;
+        Tell(signature.Label, count > 1 ? $"overload {overload + 1} of {Numbers.Said(count)}" : null, ParameterLabel(signature, active));
     }
 
     /// <summary>Tells a screen reader the card shown: the whole signature (with which of its overloads, and the parameter
@@ -233,7 +296,7 @@ internal sealed class ParameterInfo
 
         public int Count => parts.Count;
 
-        public void AddCode(string code) => parts.Add(card => card.AddCode(code));
+        public void AddCode(string code, Languages.Language? language = null) => parts.Add(card => card.AddCode(code, language));
 
         public void AddText(string text) => parts.Add(card => card.AddText(text));
 

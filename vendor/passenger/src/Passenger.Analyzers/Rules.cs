@@ -115,6 +115,31 @@ internal static class Rules
             + "scanner, an indexer, another Passenger reading it). AtomicFile.Move renames with POSIX semantics, which only a "
             + "program sharing no deletion refuses, and moves plainly where the file system has no such rename (FAT, a share).");
 
+    public static readonly DiagnosticDescriptor BareParallelLoop = new(
+        "PSG0010",
+        "A Parallel loop runs on the thread pool",
+        "{0} runs its loop on the thread pool, every thread of which it may take until the loop ends: run it through ApartScheduler.ForEach, on threads of its own",
+        Category,
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A synchronous Parallel loop's workers take the pool's threads for as long as the loop lasts, and as each "
+            + "finishes a turn and queues the next the pool sees work done and adds no thread: every other wait of the process "
+            + "on the pool (a protocol's reads and answers, a request, an await) waits until the loop ends. ApartScheduler.ForEach "
+            + "runs the loop on threads of its own, ended with it.");
+
+    public static readonly DiagnosticDescriptor CultureNumber = new(
+        "PSG0011",
+        "A number is written in the machine's culture",
+        "This {0} is written in the culture of the machine it runs on, so a German one reads 1,5 for 1.5 and 1.234 for 1,234: say it to a person through Numbers (Said, Fixed), or write it for a program with the invariant culture",
+        Category,
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A number the IDE writes reads alike on every machine: its digits are the IDE's own, a comma between "
+            + "thousands and a point before a fraction, as sizes and whiles are said, whatever culture the system runs in. "
+            + "Numbers says a count or a measure to a person; a number written for a program (a command line, a file) is "
+            + "formatted with the invariant culture. A whole number with no format sets nothing apart and passes, as does a "
+            + "provider the code chose itself (content shown as its own program shows it, a program's values in its culture).");
+
     public static readonly DiagnosticDescriptor KeysUnread = new(
         "PSG9001",
         "A resource keys file is not read",

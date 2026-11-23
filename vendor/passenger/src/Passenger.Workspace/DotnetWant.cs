@@ -16,6 +16,10 @@ public enum DotnetLack
     /// <summary>A dotnet with runtimes alone, no SDK.</summary>
     RuntimeOnly,
 
+    /// <summary>For an x64 Passenger the system translates, no x64 SDK: none at all, or only the system's own processor's,
+    /// whose MSBuild it cannot load (<see cref="DotnetMachine.SystemsOwn"/>, <see cref="MissingSdk.ForOtherProcessor"/>).</summary>
+    OtherProcessor,
+
     /// <summary>The SDK a global.json over the folder asks for is not installed.</summary>
     GlobalJsonSdk,
 
@@ -54,32 +58,53 @@ public sealed partial record DotnetWant(DotnetLack Lack, SdkWanted? Install)
     /// project's .NET, newest first: those global.json could ask for.</summary>
     public IReadOnlyList<string> Builders { get; init; } = [];
 
+    /// <summary>For <see cref="DotnetLack.OtherProcessor"/>, the installation of the system's own processor holding its SDK;
+    /// null where there is no SDK at all.</summary>
+    public string? SystemsOwn { get; init; }
+
+    /// <summary>Whether the machine was read by an x64 Passenger the system translates (<see cref="DotnetMachine.Translated"/>),
+    /// for which Install .NET SDK installs nothing: the SDK it installs is the system's own processor's, which it cannot load.</summary>
+    public bool Translated { get; init; }
+
+    /// <summary>The SDK Install .NET SDK installs to mend the want: <see cref="Install"/>, but none where <see cref="Translated"/>.</summary>
+    public SdkWanted? Installs => Translated ? null : Install;
+
     /// <summary>The global.json the want names, where it names one: the one that chose the SDK, or that asks for one missing.</summary>
     public string? GlobalJson => ChosenBy?.Path ?? Missing?.GlobalJson;
 
     public static readonly DotnetWant Nothing = new(DotnetLack.None, null);
 
     /// <summary>Whether the folder's projects have no SDK at all to load, build and run them with, so what needs one refuses.</summary>
-    public bool NoSdkAtAll => Lack is DotnetLack.NoDotnet or DotnetLack.RuntimeOnly or DotnetLack.GlobalJsonSdk or DotnetLack.NoSdk;
+    public bool NoSdkAtAll => Lack is DotnetLack.NoDotnet or DotnetLack.RuntimeOnly or DotnetLack.OtherProcessor or DotnetLack.GlobalJsonSdk or DotnetLack.NoSdk;
 
-    /// <summary>The want of the machine and the folder: the machine's first, then the folder's SDK as its project host found
-    /// it (<paramref name="missing"/>, or the version it loaded, which the global.json <paramref name="globalJson"/> may have
-    /// chosen), then each project's frameworks against that version. An SDK global.json chose that does not build a project
-    /// wants nothing installed where an SDK installed builds it: global.json is to ask for that one.</summary>
+    /// <summary>The want of the machine and the folder: the machine's first (for a Passenger the system translates, no SDK
+    /// at all, or an SDK of the system's own processor alone, is no SDK it loads), then the folder's SDK as its project host
+    /// found it (<paramref name="missing"/>, or the version it loaded, which the global.json <paramref name="globalJson"/> may
+    /// have chosen), then each project's frameworks against that version. An SDK global.json chose that does not build a
+    /// project wants nothing installed where an SDK installed builds it: global.json is to ask for that one.</summary>
     public static DotnetWant Of(DotnetMachine? machine, MissingSdk? missing, string? folderSdk, IEnumerable<(string Name, IReadOnlyList<string> Frameworks)> projects,
-        GlobalJsonSdk? globalJson = null)
+        GlobalJsonSdk? globalJson = null) =>
+        machine is null ? Nothing : Wanted(machine, missing, folderSdk, projects, globalJson) with { Translated = machine.Translated };
+
+    /// <summary>The want <see cref="Of"/> gives, but whether the machine was read translated.</summary>
+    private static DotnetWant Wanted(DotnetMachine machine, MissingSdk? missing, string? folderSdk, IEnumerable<(string Name, IReadOnlyList<string> Frameworks)> projects,
+        GlobalJsonSdk? globalJson)
     {
-        if (machine is null)
-        {
-            return Nothing;
-        }
         if (machine.Found is not { } found)
         {
-            return new DotnetWant(DotnetLack.NoDotnet, SdkWanted.Newest);
+            return machine.Translated ? new DotnetWant(DotnetLack.OtherProcessor, null) { Missing = missing } : new DotnetWant(DotnetLack.NoDotnet, SdkWanted.Newest);
+        }
+        if (machine.SystemsOwn is { } own)
+        {
+            return OtherProcessor(own.Root, own.NewestSdk);
         }
         if (machine.NewestSdk is not { } newest)
         {
-            return new DotnetWant(DotnetLack.RuntimeOnly, SdkWanted.Newest) { Root = found.Root };
+            return machine.Translated ? OtherProcessor(null, null) : new DotnetWant(DotnetLack.RuntimeOnly, SdkWanted.Newest) { Root = found.Root };
+        }
+        if (missing is { ForOtherProcessor: true })
+        {
+            return OtherProcessor(found.Root, newest);
         }
         if (missing is { Asked: { } asked })
         {
@@ -117,6 +142,9 @@ public sealed partial record DotnetWant(DotnetLack Lack, SdkWanted? Install)
         return found.Place == DotnetPlace.Installed
             ? new DotnetWant(DotnetLack.OffPath, null) { Root = found.Root, Sdk = sdk }
             : Nothing with { Root = found.Root, Sdk = sdk };
+
+        // No SDK installs that it loads: the download is Passenger for the system's own processor, or the x64 SDK by hand.
+        DotnetWant OtherProcessor(string? own, string? sdk) => new(DotnetLack.OtherProcessor, null) { Root = found.Root, Sdk = sdk, Missing = missing, SystemsOwn = own };
     }
 
     /// <summary>The .NET an SDK's version builds up to: 10.0 for 10.0.403 and 10.0.100-rc.1.</summary>

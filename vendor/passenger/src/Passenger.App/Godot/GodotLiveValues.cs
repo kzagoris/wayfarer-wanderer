@@ -9,6 +9,7 @@ using Passenger.App.LiveTree;
 using Passenger.App.Workspace;
 using Passenger.Core;
 using Passenger.Editor;
+using Passenger.Workspace;
 
 namespace Passenger.App.Godot;
 
@@ -326,7 +327,7 @@ public sealed class GodotLiveValues
     private GodotScriptMembers? MembersOf(OpenDocument document, GodotGame read)
     {
         bool csharp = document.Path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
-        if ((!csharp && !document.Path.EndsWith(".gd", StringComparison.OrdinalIgnoreCase)) || !PathNames.IsUnder(document.Path, read.Folder))
+        if ((!csharp && !GodotFileKinds.IsScript(document.Path)) || !PathNames.IsUnder(document.Path, read.Folder))
         {
             return null;
         }
@@ -367,7 +368,7 @@ public sealed class GodotLiveValues
         }
         if (answer.Count > 1)
         {
-            hints.Add((new LineAnnotation(script.ClassLine, $"{answer.NodeName}, chosen of {answer.Count} nodes", LineAnnotationLook.Muted), string.Empty, default));
+            hints.Add((new LineAnnotation(script.ClassLine, $"{answer.NodeName}, chosen of {Numbers.Said(answer.Count)} nodes", LineAnnotationLook.Muted), string.Empty, default));
         }
         foreach (GodotScriptMember member in seen)
         {
@@ -416,13 +417,12 @@ public sealed class GodotLiveValues
             return true;
         }
         // Each part's line named beside its colour with its lowest and highest, as many to a row as fit, its words wrapping alone.
-        WrapPanel legend = new() { ItemSpacing = 14, LineSpacing = 4 };
+        WrapPanel legend = new() { ItemSpacing = Gaps.Wide, LineSpacing = Gaps.Tight };
         for (int i = 0; i < parts; i++)
         {
-            Border swatch = new() { Width = 9, Height = 9, Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Left };
+            Border swatch = new() { Width = 9, Height = 9, Margin = new Thickness(0, 0, Gaps.Small, 0), VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Left };
             swatch.Bind(Border.BackgroundProperty, swatch.GetResourceObservable(brushes[i]));
-            TextBlock words = MutedText.Wrapped($"{(i < names.Count ? names[i] : $"{i}")} {Range(i)}");
-            words.FontSize = 12;
+            TextBlock words = MutedText.CaptionWrapped($"{(i < names.Count ? names[i] : $"{i}")} {Range(i)}");
             legend.Children.Add(new DockPanel { Children = { swatch, words } });
         }
         card.AddChart(legend);

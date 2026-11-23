@@ -35,8 +35,8 @@ public sealed partial class EditorWindow
     private readonly Button maximizeButton = new() { Classes = { StyleClasses.WindowButton } };
     private readonly Shape maximizeGlyph = new() { Data = Geometry.Parse(RestoredGlyph) };
     private readonly TextBlock projectName = new() { Classes = { StyleClasses.ProjectName }, Text = NoProject, VerticalAlignment = VerticalAlignment.Center, MaxWidth = 240, TextTrimming = TextTrimming.CharacterEllipsis };
-    private readonly TextBlock projectBadgeText = new() { Classes = { StyleClasses.ProjectBadgeText }, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-    private readonly Border projectBadge = new() { Classes = { StyleClasses.ProjectBadge }, Width = 20, Height = 20, Margin = new Thickness(0, 0, 7, 0), IsVisible = false };
+    private readonly TextBlock projectBadgeText = new() { Classes = { ShellClasses.ProjectBadgeText }, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+    private readonly Border projectBadge = new() { Classes = { ShellClasses.ProjectBadge }, Width = 20, Height = 20, Margin = new Thickness(0, 0, 7, 0), IsVisible = false };
     private readonly TextBlock vcsName = new() { Text = NoVcs, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
     private readonly TextBlock runConfigName = new() { Text = NoConfiguration, VerticalAlignment = VerticalAlignment.Center, MaxWidth = 200, TextTrimming = TextTrimming.CharacterEllipsis };
     private readonly List<(Button Button, string Action)> toolbarActions = [];

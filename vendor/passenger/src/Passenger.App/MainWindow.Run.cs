@@ -16,6 +16,49 @@ namespace Passenger.App;
 /// tab of the Terminal window a configuration that uses one runs in.</summary>
 public partial class MainWindow
 {
+    /// <summary>How a start of a configuration that runs goes on: asked of the person where Settings says so, never of an
+    /// agent's start or where nobody sees the window; Cancel once the start is stopped meanwhile. Don't ask again, ticked
+    /// as a way on is chosen, turns the question off.</summary>
+    private async Task<RunAgain> AskRunAgainAsync(string configuration, string doing, CancellationToken stop)
+    {
+        if (!settings.AskBeforeRerun || Unseen || AgentsOwn || AgentAsks.Beside || AgentAsks.Inputting)
+        {
+            return RunAgain.StopAndRerun;
+        }
+        ChoiceDialog question = new($"{configuration} Is Running",
+            $"{configuration} runs now. Stop it and {doing} it again, only stop it, or leave it running?", [StopAndRerun, StopAlone], StopAndRerun, offersNotAgain: true);
+        RunAgainQuestion = question;
+        try
+        {
+            using CancellationTokenRegistration closing = stop.Register(() => UiThread.Post(() =>
+            {
+                if (question.IsVisible)
+                {
+                    question.Close(null);
+                }
+            }));
+            string? answer = await question.ShowDialog<string?>(this);
+            if (answer is not null && question.NotAgain)
+            {
+                ApplySettings(settings with { AskBeforeRerun = false });
+            }
+            return answer switch { StopAndRerun => RunAgain.StopAndRerun, StopAlone => RunAgain.Stop, _ => RunAgain.Cancel };
+        }
+        finally
+        {
+            if (RunAgainQuestion == question)
+            {
+                RunAgainQuestion = null;
+            }
+        }
+    }
+
+    private const string StopAndRerun = "Stop and Rerun";
+    private const string StopAlone = "Stop";
+
+    /// <summary>The question of a start of a configuration that runs, while it is asked.</summary>
+    public ChoiceDialog? RunAgainQuestion { get; private set; }
+
     /// <summary>Whether a program Run started runs, in the Run window or the terminal.</summary>
     public bool IsRunning => buildRun.IsRunning;
 
@@ -55,6 +98,7 @@ public partial class MainWindow
             Folder = Folder,
             WriteProfiles = WriteLaunchProfilesAsync,
             GodotSetting = settings.GodotExecutable,
+            BrowserSetting = settings.Browser,
             ReadServices = ReadServices(Projects, Engine),
             WriteToProfile = WriteToLaunchProfileAsync,
             Actions = Actions,
@@ -243,7 +287,7 @@ public partial class MainWindow
         string profile = LaunchSettingsEdits.ProfileName(project, shared);
         if (profile.Length == 0)
         {
-            return "A configuration needs a name";
+            return Refusals.ConfigurationUnnamed;
         }
         if (LaunchProfile.Read(project).FirstOrDefault(p => string.Equals(p.Name, profile, StringComparison.OrdinalIgnoreCase)) is { } taken)
         {
@@ -512,6 +556,14 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>A build that needs rebuilding (its XAML never compiled): the Build window offers, over its output, Rebuild
+    /// Solution, saying why.</summary>
+    private void OfferRebuild(string said)
+    {
+        UiThread.Check();
+        BottomPanel.Build.ShowOffer(said, actions![AppActions.RebuildSolution]!.Title, () => Request(AppActions.RebuildSolution));
+    }
+
     /// <summary>Run, Debug or Profile in the Terminal: the configuration whose program said it needs a terminal set to run in
     /// one, kept with the folder as Edit Configurations keeps its Use external console, chosen, and started again through
     /// <paramref name="start"/>, Run's, Debug's or Profile's action, which stops the run it ends first.</summary>
@@ -565,7 +617,7 @@ public partial class MainWindow
         {
             0 when !buildRun.IsRunningConfiguration(configuration.Name) => configuration.Name,
             0 or 1 => $"{configuration.Name} (running)",
-            _ => $"{configuration.Name} ({running} apps running)",
+            _ => $"{configuration.Name} ({Numbers.Said(running)} apps running)",
         };
     }
 
@@ -608,18 +660,14 @@ public partial class MainWindow
             }
             NodePackage? read = session.NodeFiles.Packages.FirstOrDefault(p => PathNames.Same(p.Manifest, package.Key));
             string header = read is null ? PathNames.Shown(Path.GetDirectoryName(package.Key)!, session.Folder) : $"{read.Name} ({NodeProjects.ProgramOf(read.Manager)})";
-            MenuItem holding = new() { Header = header, ToggleType = MenuItemToggleType.Radio, IsChecked = package.Any(c => c.Name == session.Configurations.Chosen?.Name) };
-            holding.ItemsSource = (Control[])[.. package.Select(Choice)];
-            menu.Items.Add(holding);
+            menu.Items.Add(MenuChoice.Holding(header, package.Any(c => c.Name == session.Configurations.Chosen?.Name), () => [.. package.Select(Choice)]));
         }
         if (menu.Items.Count == 0)
         {
-            menu.Items.Add(new MenuItem { Header = "No executable projects", IsEnabled = false });
+            menu.Items.Add(ToolWindows.ListMenus.Notice("No executable projects"));
         }
         menu.Items.Add(new Separator());
-        MenuItem edit = new() { Header = "Edit Configurations…" };
-        edit.Click += (_, _) => Request(AppActions.EditConfigurations);
-        menu.Items.Add(edit);
+        menu.Items.Add(RowMenuItem(AppActions.EditConfigurations));
         Open(menu, RunConfigButton);
 
         MenuItem Choice(RunConfiguration each)
@@ -637,11 +685,11 @@ public partial class MainWindow
         static StackPanel Greyed(string name, string why) => new()
         {
             Orientation = Avalonia.Layout.Orientation.Horizontal,
-            Spacing = 8,
+            Spacing = Gaps.Normal,
             Children =
             {
                 new TextBlock { Text = name, Classes = { StyleClasses.Muted } },
-                new TextBlock { Text = why, Classes = { StyleClasses.Muted }, FontSize = 11, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center },
+                new TextBlock { Text = why, Classes = { StyleClasses.Muted, StyleClasses.Caption }, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center },
             },
         };
     }

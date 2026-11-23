@@ -5,6 +5,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Microsoft.CodeAnalysis.CSharp;
 using Passenger.App.Docking;
+using Passenger.App.ToolWindows;
 using Passenger.App.Workspace;
 using Passenger.Core;
 using Passenger.Editor;
@@ -24,7 +25,7 @@ public sealed partial class EditorArea : UserControl
     private readonly ContentControl emptyState = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
     private readonly StackPanel folderHint;
     private readonly TextBlock emptyTitle;
-    private readonly TextBlock emptyHint;
+    private readonly EmptyState emptyHint;
     private readonly List<Action<CodeEditor>> editorHooks = [];
     private readonly Dictionary<OpenDocument, int> held = [];
     // Open files the person let a write go over what another program holds of them, each until its next save.
@@ -43,16 +44,15 @@ public sealed partial class EditorArea : UserControl
         // In a narrow editor the title ends in an ellipsis and the hint, just under it, wraps as empty places' words do.
         emptyTitle = new TextBlock
         {
+            Classes = { StyleClasses.HeroTitle },
             Text = Product.Name,
-            FontSize = 28,
-            FontWeight = FontWeight.SemiBold,
             HorizontalAlignment = HorizontalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            Margin = new Thickness(16, 0),
+            Margin = new Thickness(Gaps.Group, 0),
         };
         emptyTitle.Bind(TextBlock.ForegroundProperty, emptyTitle.GetResourceObservable(TokenKeys.Text));
-        emptyHint = new TextBlock { Classes = { StyleClasses.EmptyText }, Text = "Open a solution, project or folder to start.", Margin = new Thickness(16, 0) };
-        folderHint = new StackPanel { Spacing = 10, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Children = { emptyTitle, emptyHint } };
+        emptyHint = new EmptyState("Open a solution, project or folder to start.");
+        folderHint = new StackPanel { Spacing = Gaps.Normal, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Children = { emptyTitle, emptyHint } };
         emptyState.Content = folderHint;
         main = NewFrame(new EditorFrame.Leaf(activeGroup), activeGroup, emptyState);
         Content = main.Surface;
@@ -194,6 +194,51 @@ public sealed partial class EditorArea : UserControl
         }
     }
 
+    /// <summary>Where an open file's outline comes from for the navigation bar over its editors, null for a file with none.
+    /// Asked on the UI thread.</summary>
+    public Func<OpenDocument, Navigation.FileOutline?> NavigationOutlineOf { get; set; } = _ => null;
+
+    private bool showsNavigationBar = true;
+
+    /// <summary>Whether each group shows the navigation bar over its editor while its file has an outline.</summary>
+    public bool ShowsNavigationBar
+    {
+        get => showsNavigationBar;
+        set
+        {
+            if (value == showsNavigationBar)
+            {
+                return;
+            }
+            showsNavigationBar = value;
+            OutlinesMayHaveCome();
+            NavigationBarChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>The navigation bars were turned on or off (<see cref="ShowsNavigationBar"/>), Settings' preview too.</summary>
+    public event EventHandler? NavigationBarChanged;
+
+    /// <summary>Whether the navigation bar over an editor of a file names where its caret is: while the bars are on and the
+    /// file has an outline. The one rule the bar shows by, and by which the status bar's path leaves the caret's type and
+    /// member to it, so one place says them.</summary>
+    public bool NamesWhereInBar(OpenDocument document) => showsNavigationBar && NavigationOutlineOf(document) is not null;
+
+    /// <summary>The files' outlines may have come, or gone, since the navigation bars last asked (a language server
+    /// started, or has a file now): each bar shows or hides again, and one without its file's outline asks for it.</summary>
+    public void OutlinesMayHaveCome()
+    {
+        foreach (EditorGroup group in AllGroups)
+        {
+            group.Navigation.FollowSource();
+        }
+    }
+
+    /// <summary>A navigation bar's part asked to list where it may go, for the window to show the list under it.</summary>
+    public event EventHandler<NavigationList>? NavigationListRequested;
+
+    internal void NavigationListAsked(NavigationList list) => NavigationListRequested?.Invoke(this, list);
+
     /// <summary>Whether a file is an SVG, which shows its picture beside its text.</summary>
     public static bool IsSvg(OpenDocument document) => document.Path.EndsWith(".svg", StringComparison.OrdinalIgnoreCase);
 
@@ -323,7 +368,7 @@ public sealed partial class EditorArea : UserControl
     {
         folderName = Path.GetFileName(folder);
         emptyTitle.Text = folderName;
-        ActionTips.SetWords(emptyHint, AppActions.GoToFile, keys => $"Open a file from the Explorer or with {ActionTips.Named("Go to File", keys)}.");
+        emptyHint.SayWithKeys(AppActions.GoToFile, keys => $"Open a file from the Explorer or with {ActionTips.Named("Go to File", keys)}.");
         emptyState.Content = folderHint;
         TitleWindows();
     }

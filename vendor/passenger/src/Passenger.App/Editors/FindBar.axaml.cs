@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -12,9 +13,41 @@ namespace Passenger.App.Editors;
 /// <summary>Find and replace in the open file. Matches are found as the query is typed and drawn in
 /// the editor; the one nearest after the caret is selected, and the count says which of how many. A regex too slow for
 /// the UI thread's moment is searched again off it, the count saying so meanwhile. While a table lies over the editor,
-/// its cells are searched instead (read-only: replacing is the Text view's); a read-only file's replace row is greyed.</summary>
+/// its cells are searched instead (read-only: replacing is the Text view's); a read-only file's replace row is greyed.
+/// Its options are Find in Files' (<see cref="OptionToggles"/>), their keys heard while it has the keys.</summary>
 public partial class FindBar : UserControl
 {
+    /// <summary>The bar's room round its rows.</summary>
+    public static readonly Thickness BarPadding = new(Gaps.Normal, Gaps.Small);
+
+    /// <summary>The room the query's option toggles take over its right end, and a step clear of them.</summary>
+    private const double OptionsRoom = 96;
+
+    /// <summary>The query's room: its words where every search field's start, clear at its right of the toggles over it.</summary>
+    public static readonly Thickness QueryPadding = new(FieldInsets.Padding.Left, FieldInsets.Padding.Top, OptionsRoom, FieldInsets.Padding.Bottom);
+
+    /// <summary>The toggles a tight step in from the field's right edge.</summary>
+    public static readonly Thickness OptionsMargin = new(0, 0, Gaps.Tight, 0);
+
+    /// <summary>The query's and the replacement's width where the bar has room for it.</summary>
+    public const double FieldWidth = 380;
+
+    /// <summary>The room a field keeps to type in, a few words', however narrow the bar: what follows it takes a row below.</summary>
+    public const double TypingRoom = 120;
+
+    public static readonly Thickness CountMargin = new(0, 0, Gaps.Normal, 0);
+
+    /// <summary>A row's parts laid out by the shared row that wraps (ToolFlow): its field first, <see cref="FieldWidth"/> wide
+    /// where there is room and down to its typing room where not, what follows it after it, or on a row below.</summary>
+    private static void Flowing(Panel row, Control field, double typing, params Control[] after)
+    {
+        row.Children.Clear();
+        ToolWindows.ToolFlow.SetFills(field, new ToolWindows.ToolLayout.Fills(typing, FieldWidth));
+        ToolWindows.ToolFlow flow = new() { Spacing = Gaps.Normal, Children = { field } };
+        flow.Children.AddRange(after);
+        row.Children.Add(flow);
+    }
+
     private const string Searching = "Searching…";
 
     private CodeEditor? editor;
@@ -41,15 +74,35 @@ public partial class FindBar : UserControl
     private TableSearch cells = TableSearch.None;
     private CancellationTokenSource? searching;
 
+    /// <summary>What Replace All came to, said in the count's place while the text is the one it left (<see cref="toldOf"/>)
+    /// and the search the one it ran, so the search its own edits bring does not wipe it; null when it stands no longer.</summary>
+    private string? told;
+    private TextSnapshot? toldOf;
+
     public FindBar()
     {
         InitializeComponent();
+        // The bar is one the keys go through, from the query to its buttons.
+        ToolButtons.Give(PreviousButton, IconKeys.ArrowUp, "Previous occurrence", keys: true);
+        ToolButtons.Give(NextButton, IconKeys.ArrowDown, "Next occurrence", keys: true);
+        ToolButtons.Give(CloseButton, IconKeys.Close, "Close", keys: true, glyph: true);
+        // In a narrow pane (a console, a diff) each field keeps room to type in, what follows it taking a row below.
+        Flowing(QueryRow, QueryRoom, QueryPadding.Left + TypingRoom + QueryPadding.Right, CountRow, ToolWindows.ToolFlow.Spring(), CloseButton);
+        Flowing(ReplaceRow, ReplaceWith, FieldInsets.Padding.Left + TypingRoom + FieldInsets.Padding.Right, ReplaceButtons);
         IsVisible = false;
-        RegexGlyph.InCodeFont();
-        Query.TextChanged += (_, _) => Search(jump: true);
-        MatchCase.IsCheckedChanged += (_, _) => Search(jump: true);
-        WholeWords.IsCheckedChanged += (_, _) => Search(jump: true);
-        UseRegex.IsCheckedChanged += (_, _) => Search(jump: true);
+        OptionToggles.Give(MatchCase, OptionToggles.MatchCase);
+        OptionToggles.Give(WholeWords, OptionToggles.Words);
+        OptionToggles.Give(UseRegex, OptionToggles.Regex);
+        // The arrows do what Find Previous and Find Next do, so their tips name those actions' keys.
+        ActionTips.Set(PreviousButton, AppActions.FindPrevious, "Previous occurrence");
+        ActionTips.Set(NextButton, AppActions.FindNext, "Next occurrence");
+        // On the way down, so an option's key never types into the field it is pressed in.
+        AddHandler(KeyDownEvent, (_, e) => OptionToggles.Hear(e, (OptionToggles.MatchCase, MatchCase), (OptionToggles.Words, WholeWords), (OptionToggles.Regex, UseRegex)),
+            RoutingStrategies.Tunnel);
+        Query.TextChanged += (_, _) => SearchAnew();
+        MatchCase.IsCheckedChanged += (_, _) => SearchAnew();
+        WholeWords.IsCheckedChanged += (_, _) => SearchAnew();
+        UseRegex.IsCheckedChanged += (_, _) => SearchAnew();
         NextButton.Click += (_, _) => Next();
         PreviousButton.Click += (_, _) => Previous();
         CloseButton.Click += (_, _) => Close();
@@ -61,7 +114,7 @@ public partial class FindBar : UserControl
         ReplaceWith.AddHandler(KeyDownEvent, OnFieldKeyDown, RoutingStrategies.Tunnel);
     }
 
-    /// <summary>What the count beside the arrows says: "2/5", "0 results", a bad regex's error.</summary>
+    /// <summary>What the count beside the arrows says: "2/5", "0 results", a bad regex's error, what Replace All came to.</summary>
     public string CountText => Count.Text ?? string.Empty;
 
     public SearchQuery CurrentQuery => new(Query.Text ?? string.Empty, MatchCase.IsChecked == true, WholeWords.IsChecked == true, UseRegex.IsChecked == true);
@@ -105,6 +158,7 @@ public partial class FindBar : UserControl
         editor = null;
         beside?.SetHighlights([], -1);
         beside = null;
+        Untell();
         Follow(null);
         result = SearchResult.None;
         searched = null;
@@ -183,6 +237,7 @@ public partial class FindBar : UserControl
     public void Close()
     {
         IsVisible = false;
+        Untell();
         searching?.Cancel();
         editor?.SetHighlights([], -1);
         beside?.SetHighlights([], -1);
@@ -200,6 +255,13 @@ public partial class FindBar : UserControl
     public void Next() => Step(forward: true);
 
     public void Previous() => Step(forward: false);
+
+    /// <summary>The search changed (its query or an option): what Replace All came to no longer stands.</summary>
+    private void SearchAnew()
+    {
+        Untell();
+        Search(jump: true);
+    }
 
     private void Search(bool jump)
     {
@@ -291,6 +353,7 @@ public partial class FindBar : UserControl
 
     private void Step(bool forward)
     {
+        Untell();
         if (grid is not null)
         {
             StepCells(grid, forward);
@@ -350,6 +413,7 @@ public partial class FindBar : UserControl
         {
             return;
         }
+        Untell();
         TextSnapshot text = editor.Document.Snapshot;
         SearchResult found = TextSearch.FindAll(text, query, TextSearch.AtOnce, int.MaxValue);
         if (found.Stopped)
@@ -387,7 +451,7 @@ public partial class FindBar : UserControl
         }
         if (found.Stopped)
         {
-            Count.Text = $"{found.Problem} Nothing was replaced.";
+            Tell($"{found.Problem} Nothing was replaced.", shown, Urgency.Assertive);
             return;
         }
         Replace(shown, edits, why);
@@ -397,11 +461,37 @@ public partial class FindBar : UserControl
     {
         if (why is not null)
         {
-            Count.Text = $"Nothing was replaced: {why}.";
+            Tell($"Nothing was replaced: {why}.", shown, Urgency.Assertive);
             return;
         }
         shown.ApplyEdits(edits);
-        Count.Text = $"Replaced {edits.Count}";
+        Tell($"Replaced {Numbers.Said(edits.Count)}", shown, Urgency.Polite);
+    }
+
+    /// <summary>Says what Replace All came to in the count's place, where it stays until the search or the text changes,
+    /// and tells a screen reader, a refusal at once.</summary>
+    private void Tell(string said, CodeEditor shown, Urgency urgency)
+    {
+        told = said;
+        toldOf = shown.Document.Snapshot;
+        Count.Text = said;
+        Announcer.Of(TopLevel.GetTopLevel(this))?.Tell(said, urgency);
+    }
+
+    /// <summary>What Replace All came to while it stands, or null once the text it left is no longer the one shown.</summary>
+    private string? Told()
+    {
+        if (told is not null && !ReferenceEquals(editor?.Document.Snapshot, toldOf))
+        {
+            Untell();
+        }
+        return told;
+    }
+
+    private void Untell()
+    {
+        told = null;
+        toldOf = null;
     }
 
     private void Show()
@@ -414,14 +504,15 @@ public partial class FindBar : UserControl
     /// <summary>The matches marked in the editor beside the one searched, as last shown.</summary>
     public int MarkedBeside => beside?.Highlights.Count ?? 0;
 
-    /// <summary>The count, or that a regex too slow for the UI thread is being searched off it.</summary>
+    /// <summary>The count, what Replace All came to while it stands, or that a regex too slow for the UI thread is being
+    /// searched off it.</summary>
     private void ShowCount() =>
-        Count.Text = result.Stopped && finding ? Searching : Counted(result.Problem, result.Matches.Count, result.Truncated);
+        Count.Text = Told() ?? (result.Stopped && finding ? Searching : Counted(result.Problem, result.Matches.Count, result.Truncated));
 
     private string Counted(string? problem, int count, bool truncated) =>
         problem ?? (string.IsNullOrEmpty(Query.Text) ? string.Empty
             : count == 0 ? "0 results"
-            : $"{current + 1}/{count}{(truncated ? "+" : string.Empty)}");
+            : $"{current + 1}/{Numbers.Said(count)}{(truncated ? "+" : string.Empty)}");
 
     /// <summary>The text changed under an open bar: its matches move with the edit (the editor's highlights are carried by
     /// the text), and the text as it stands is searched off the UI thread, since a search reads the whole file and a key

@@ -23,6 +23,9 @@ namespace Passenger.App.ToolWindows;
 /// none, why. Double-click or F4 goes to a test's source.</summary>
 public sealed class TestsView : DockPanel
 {
+    /// <summary>The column a test's state mark is centred in, an icon's width.</summary>
+    private const double StateColumn = 16;
+
     /// <summary>The most failed tests a group's details show, so choosing a project of thousands shows at once.</summary>
     private const int GroupDetailsLimit = 100;
 
@@ -44,7 +47,7 @@ public sealed class TestsView : DockPanel
     /// <summary>The details' editor, made as the window is first shown or they are asked for (<see cref="Details"/>).</summary>
     private CodeEditor? details;
     private readonly TextBlock status;
-    private readonly TextBlock placeholder;
+    private readonly EmptyState placeholder;
     private readonly TextBox search;
     private readonly Button groupBy;
     private readonly Button stop;
@@ -89,11 +92,11 @@ public sealed class TestsView : DockPanel
         });
         ListMenus.Attach(tree, () => tree.SelectedItem is not TestNode chosen ? [] :
         [
-            ListMenus.Item("Run", Keys(AppActions.RunTests), () => RunRequested?.Invoke(this, false)),
-            ListMenus.Item("Debug", Keys(AppActions.DebugTests), () => RunRequested?.Invoke(this, true)),
-            ListMenus.Item("Run Until Failure", Keys(AppActions.RunTestsUntilFailure), () => UntilFailureRequested?.Invoke(this, EventArgs.Empty)),
+            ListMenus.Keyed("Run", AppActions.RunTests, () => RunRequested?.Invoke(this, false)),
+            ListMenus.Keyed("Debug", AppActions.DebugTests, () => RunRequested?.Invoke(this, true)),
+            ListMenus.Keyed("Run Until Failure", AppActions.RunTestsUntilFailure, () => UntilFailureRequested?.Invoke(this, EventArgs.Empty)),
             new Separator(),
-            ListMenus.Item("Go to Source", "F4", () => GoToRequested?.Invoke(this, chosen), chosen.Path is not null),
+            ListMenus.Source(() => GoToRequested?.Invoke(this, chosen), chosen.Path is null ? Refusals.TestUnplaced : null),
         ]);
         // Results come by the thousand: the details and the filters' counts are written again once they have, not once each.
         model.ResultApplied += (_, _) =>
@@ -107,9 +110,9 @@ public sealed class TestsView : DockPanel
             QueueCounts();
         };
         model.ViewChanged += (_, _) => ShowFilters();
-        status = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0), TextTrimming = TextTrimming.CharacterEllipsis };
+        status = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(Gaps.Normal, 0), TextTrimming = TextTrimming.CharacterEllipsis };
         status.Classes.Add(StyleClasses.Muted);
-        placeholder = new TextBlock { Text = model.EmptyText, Classes = { StyleClasses.EmptyText } };
+        placeholder = new EmptyState { Text = model.EmptyText };
         model.Rows.CollectionChanged += (_, _) => ShowPlaceholder();
         model.EmptyTextChanged += (_, _) => ShowPlaceholder();
 
@@ -119,8 +122,7 @@ public sealed class TestsView : DockPanel
         PaneSplit split = new(new Panel { Children = { tree, placeholder } }, result, "2*,1,3*", "3*,1,2*");
 
         // Above the tree: what changes it, then a filter for each outcome; the search on the right.
-        search = FilterBox.Of();
-        ToolFlow.SetFills(search, new ToolLayout.Fills(160, 220));
+        search = SearchBox.Finding("Filter tests");
         search.TextChanged += (_, _) => model.SearchFor(search.Text ?? string.Empty);
         search.KeyDown += OnSearchKey;
         groupBy = ToolButtons.Of(IconKeys.GroupBy, "Group By", ShowGroupBy);
@@ -133,11 +135,11 @@ public sealed class TestsView : DockPanel
         };
         ToolFlow bar = new()
         {
-            Margin = new Thickness(6, 2),
+            Margin = new Thickness(Gaps.Small, Gaps.Hair),
             Children =
             {
                 groupBy,
-                Divider(),
+                ToolBars.Rule(),
                 all,
             },
         };
@@ -191,10 +193,10 @@ public sealed class TestsView : DockPanel
             LineCommentPrefix = null,
             ShowLineNumbers = false,
             ShowErrorStripe = false,
-            FontSize = 12,
+            FontSize = TypeRamp.Code,
             Highlighter = Links,
             Links = Links.On,
-            Margin = new Thickness(6, 4, 0, 0),
+            Margin = new Thickness(Gaps.Small, Gaps.Tight, 0, 0),
         };
         details.LinkClicked += (_, link) => LinkClicked?.Invoke(this, (LinkTarget)link.Target);
         result.Children.Add(details);
@@ -231,9 +233,6 @@ public sealed class TestsView : DockPanel
 
     /// <summary>A test's source to show.</summary>
     public event EventHandler<TestNode>? GoToRequested;
-
-    private static string? Keys(string action) =>
-        AppActions.Keymap().ShortcutsFor(action).FirstOrDefault(s => s.Second is null) is { } shortcut ? new Avalonia.Input.KeyGesture(shortcut.First.Key, shortcut.First.Modifiers).ToString() : null;
 
     /// <summary>The rows chosen, for Run Selected and Debug Selected.</summary>
     public IReadOnlyList<TestNode> Selected => [.. tree.SelectedItems?.OfType<TestNode>() ?? []];
@@ -281,9 +280,30 @@ public sealed class TestsView : DockPanel
         if (failed.Count > GroupDetailsLimit)
         {
             int more = failing.Count() - GroupDetailsLimit;
-            shown += $"\n\n…and {more} more failed";
+            shown += $"\n\n…and {Numbers.Said(more)} more failed";
         }
         Show(shown);
+    }
+
+    /// <summary>The chosen row's result as plain text (Read as Text), named by the row and its outcome: the outcome, then the
+    /// details shown; null with no row chosen.</summary>
+    public (string Title, string Text)? ChosenAsText()
+    {
+        if (tree.SelectedItem is not TestNode node)
+        {
+            return null;
+        }
+        ShowDetails();
+        string outcome = node.State switch
+        {
+            TestState.Passed => "passed",
+            TestState.Failed => "failed",
+            TestState.Skipped => "skipped",
+            TestState.Running => "running",
+            _ => "not run",
+        };
+        string details = detailsText.Snapshot.ToString();
+        return ($"{node.Name}, {outcome}", details.Length == 0 ? $"{node.Name}: {outcome}" : $"{node.Name}: {outcome}\n\n{details}");
     }
 
     /// <summary>The details' text, written only when it changed, from its top.</summary>
@@ -341,17 +361,10 @@ public sealed class TestsView : DockPanel
     /// those chosen.</summary>
     private ToggleButton Filter(string icon, string brush, string name, out TextBlock count)
     {
-        ToggleButton button = ToolButtons.Counted(icon, brush, $"Filter {name}\nHold {(OperatingSystem.IsMacOS() ? "⌘" : "Ctrl")} to select multiple filters", out count);
+        ToggleButton button = ToolButtons.Counted(icon, brush, $"Filter {name}\nHold {KeyWords.Held(Keystroke.Command)} to select multiple filters", out count);
         button.AddHandler(PointerPressedEvent, (_, e) => adding = (e.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Meta | KeyModifiers.Shift)) != 0,
             RoutingStrategies.Tunnel, handledEventsToo: true);
         return button;
-    }
-
-    private Border Divider()
-    {
-        Border line = new() { Width = 1, Height = 18, Margin = new Thickness(4, 0), VerticalAlignment = VerticalAlignment.Center };
-        line.Bind(Border.BackgroundProperty, line.GetResourceObservable(TokenKeys.Divider));
-        return line;
     }
 
     /// <summary>An outcome's filter clicked: that outcome alone (All again if it was so already), or with a modifier held
@@ -382,11 +395,11 @@ public sealed class TestsView : DockPanel
     private void ShowFilters()
     {
         int[] counts = Model.Counts();
-        allCount.Text = counts.Sum().ToString(System.Globalization.CultureInfo.CurrentCulture);
+        allCount.Text = Numbers.Said(counts.Sum());
         all.IsChecked = Model.Outcomes.Count == 0;
         foreach ((TestState state, (ToggleButton button, TextBlock count)) in filters)
         {
-            count.Text = counts[(int)state].ToString(System.Globalization.CultureInfo.CurrentCulture);
+            count.Text = Numbers.Said(counts[(int)state]);
             button.IsChecked = Model.Outcomes.Contains(state);
             button.IsVisible = counts[(int)state] > 0 || Model.Outcomes.Contains(state);
         }
@@ -419,17 +432,13 @@ public sealed class TestsView : DockPanel
         List<Control> items = [];
         foreach ((string name, IReadOnlyList<TestGroupLevel> levels) in TestGroupings.Predefined)
         {
-            MenuItem item = new() { Header = name, ToggleType = MenuItemToggleType.Radio, IsChecked = levels.SequenceEqual(Model.Grouping) };
-            item.Click += (_, _) => Model.Group(levels);
-            items.Add(item);
+            items.Add(MenuChoice.Of(name, levels.SequenceEqual(Model.Grouping), () => Model.Group(levels)));
         }
         items.Add(new Separator());
         foreach (TestGroupLevel level in Enum.GetValues<TestGroupLevel>())
         {
             bool on = Model.Grouping.Contains(level);
-            MenuItem item = new() { Header = TestGroupings.Title(level), ToggleType = MenuItemToggleType.CheckBox, IsChecked = on };
-            item.Click += (_, _) => Model.Group(on ? Model.Grouping.Where(l => l != level) : [.. Model.Grouping, level]);
-            items.Add(item);
+            items.Add(ListMenus.Toggle(TestGroupings.Title(level), on, _ => Model.Group(on ? Model.Grouping.Where(l => l != level) : [.. Model.Grouping, level])));
         }
         ContextMenu menu = new() { ItemsSource = items, Placement = PlacementMode.BottomEdgeAlignedLeft };
         OpenMenu?.Close();
@@ -465,7 +474,7 @@ public sealed class TestsView : DockPanel
     /// another node.</summary>
     private sealed class TestRow : StackPanel
     {
-        private readonly RowIcon chevron;
+        private readonly RowExpander chevron;
         private readonly RowIcon state;
         private readonly TextBlock label;
         private readonly TextBlock duration;
@@ -477,23 +486,14 @@ public sealed class TestsView : DockPanel
         {
             Orientation = Orientation.Horizontal;
             Height = ListRow.Height;
-            chevron = RowIcon.Chevron();
-            Border toggle = new() { Width = 18, Height = ListRow.Height, Background = Brushes.Transparent, Child = chevron };
-            toggle.PointerPressed += (_, e) =>
-            {
-                if (DataContext is TestNode node)
-                {
-                    model.Toggle(node);
-                    e.Handled = true;
-                }
-            };
+            chevron = RowExpander.Of<TestNode>(model.Toggle);
             state = new RowIcon { VerticalAlignment = VerticalAlignment.Center };
             label = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
-            duration = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0), FontSize = 12 };
+            duration = new TextBlock { Classes = { StyleClasses.Caption }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(Gaps.Wide, 0, 0, 0) };
             duration.Classes.Add(StyleClasses.Muted);
-            earlier = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0), FontSize = 12 };
+            earlier = new TextBlock { Classes = { StyleClasses.Caption }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(Gaps.Wide, 0, 0, 0) };
             earlier.Classes.Add(StyleClasses.Muted);
-            Children.Add(toggle);
+            Children.Add(chevron);
             Children.Add(state);
             Children.Add(label);
             Children.Add(duration);
@@ -542,7 +542,7 @@ public sealed class TestsView : DockPanel
             }
             Margin = node.Indent;
             label.Text = node.Name;
-            chevron.IsVisible = node.HasChildren;
+            chevron.Expands = node.HasChildren;
             ShowExpanded(node);
             ShowState(node);
         }
@@ -562,7 +562,7 @@ public sealed class TestsView : DockPanel
                     ShowExpanded(node);
                     break;
                 case nameof(TestNode.HasChildren):
-                    chevron.IsVisible = node.HasChildren;
+                    chevron.Expands = node.HasChildren;
                     break;
                 case nameof(TestNode.Depth):
                     Margin = node.Indent;
@@ -570,14 +570,14 @@ public sealed class TestsView : DockPanel
             }
         }
 
-        private void ShowExpanded(TestNode node) => chevron.Turned = node.IsExpanded;
+        private void ShowExpanded(TestNode node) => chevron.IsOpen = node.IsExpanded;
 
         /// <summary>A test's mark, a grey ring not run, a blue dot running, a green tick passed, a red cross failed, a grey
         /// dash skipped, how long it took once it ran, and when, where that was an earlier session's run, and whether its
         /// code has changed since.</summary>
         private void ShowState(TestNode node)
         {
-            // Each mark centred in the same 16 wide: the dot running a size smaller, the tick passed a size larger.
+            // Each mark centred in the same column: the dot running a size smaller, the tick passed a size larger.
             (string icon, string brush, double size) = node.State switch
             {
                 TestState.Running => (IconKeys.TestRunning, TokenKeys.Test_Running, 9.0),
@@ -589,7 +589,7 @@ public sealed class TestsView : DockPanel
             state.DataKey = icon;
             state.ForegroundKey = brush;
             state.Width = state.Height = size;
-            state.Margin = new Thickness((16 - size) / 2, 0, ((16 - size) / 2) + 6, 0);
+            state.Margin = new Thickness((StateColumn - size) / 2, 0, ((StateColumn - size) / 2) + Gaps.Small, 0);
             duration.Text = node.State is TestState.Passed or TestState.Failed && node.Duration > TimeSpan.Zero ? Durations.Said(node.Duration) : string.Empty;
             earlier.Text = node.Kind is not (TestNodeKind.Method or TestNodeKind.Row) ? string.Empty
                 : node.EarlierRun is { } ran ? $"earlier run, {Earlier(ran)}{(node.CodeChanged ? "; code changed" : string.Empty)}"

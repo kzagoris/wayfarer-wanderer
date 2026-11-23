@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Passenger.Core;
 using Passenger.Debugger.Interop;
 
 namespace Passenger.Debugger;
@@ -68,6 +69,24 @@ public partial class ManagedDebugger
     /// <summary>Whether the program, running, is stopped for an update being made (<see cref="HoldForHotReload"/>).</summary>
     private bool _heldForHotReload;
 
+    /// <summary>Ends as the program's runtime loads its CoreLib, or the program ends.</summary>
+    private readonly TaskCompletionSource _coreLibCame = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Waits, up to <paramref name="limit"/>, for the program's runtime to load its CoreLib, which names the edits it
+    /// takes (<see cref="HotReloadCapabilities"/>): a program let go at its start loads it a moment after the attach. Ends
+    /// at once where it is loaded or the program has ended; past the limit, the capabilities are said unknown.</summary>
+    public async Task CoreLibLoadedAsync(TimeSpan limit)
+    {
+        try
+        {
+            await _coreLibCame.Task.WaitAsync(limit).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            _logger?.Invoke($"The program's runtime had not loaded its CoreLib {Durations.Said(limit)} after an update asked what it takes");
+        }
+    }
+
     /// <summary>The edits the program's runtime can take, as its CoreLib names them (MetadataUpdater.GetCapabilities),
     /// or why they are unknown.</summary>
     public (IReadOnlyList<string>? Capabilities, string? Unknown) HotReloadCapabilities()
@@ -111,7 +130,7 @@ public partial class ManagedDebugger
         }
         info.Editable = flags == CorDebugJITCompilerFlags.CORDEBUG_JIT_ENABLE_ENC;
         info.WhyNotEditable = info.Editable ? null
-            : !info.IsUserCode ? $"{info.ModuleName} is optimized code, which the runtime does not let be edited"
+            : !info.IsUserCode || info.BuiltOptimized ? $"{info.ModuleName} is optimized code, which the runtime does not let be edited"
             : $"{info.ModuleName} was loaded without Edit and Continue: debug it with Hot Reload on";
         if (info.Editable && _heldUpdates.Remove(info.MetadataReader.Mvid, out List<ModuleUpdate>? held))
         {
@@ -347,7 +366,7 @@ public partial class ManagedDebugger
             _logger?.Invoke($"  0x{method:X8}: {string.Join(", ", module.MetadataReader.Points(method).Select(p => $"IL_{p.Offset:X4} {p.StartLine}:{p.StartColumn}"))}");
         }
         Rebind(module, [.. update.UpdatedMethods]);
-        _logger?.Invoke($"Applied an update to {module.ModuleName}: {update.UpdatedMethods.Count} methods, {update.UpdatedTypes.Count} types, generation {module.MetadataReader.Generations}");
+        _logger?.Invoke($"Applied an update to {module.ModuleName}: {Numbers.Said(update.UpdatedMethods.Count)} methods, {Numbers.Said(update.UpdatedTypes.Count)} types, generation {module.MetadataReader.Generations}");
         return new ModuleApplied(update.Module, update.Name, true, null);
     }
 
@@ -415,6 +434,7 @@ public partial class ManagedDebugger
     /// new code holds there; otherwise it runs on in the old code, which the runtime offers again at its next statement.</summary>
     private void HandleFunctionRemapOpportunity(FunctionRemapOpportunityCorDebugManagedCallbackEventArgs remap)
     {
+        bool restep = false;
         try
         {
             ICorDebugFunction old = remap.OldFunction;
@@ -441,17 +461,19 @@ public partial class ManagedDebugger
                 }
                 int remapped = frame.TryRemapFunction((uint)there.Offset);
                 _logger?.Invoke($"Remap of 0x{token:X8} v{from} IL_{remap.OldILOffset:X4} to v{to} IL_{there.Offset:X4}: 0x{remapped:X8}");
-                if (remapped != Cor.S_OK && _restepAfterRemap == remap.Thread.Id)
-                {
-                    // Refused, no FunctionRemapComplete comes: the frame runs on in the old code, where its step goes on.
-                    _restepAfterRemap = null;
-                    SetupStepper(remap.Thread, _lastStep);
-                }
+                // Refused, no FunctionRemapComplete comes: the frame runs on in the old code, where its step goes on.
+                restep = remapped != Cor.S_OK && _restepAfterRemap == remap.Thread.Id;
             }
         }
         catch (Exception error) when (Failures.OfRuntime(error))
         {
             _logger?.Invoke($"A remap opportunity could not be taken: {error.Message}");
+        }
+        if (restep)
+        {
+            // A stepper refused here is the step's own event's failure, which stops the step where its thread stands.
+            _restepAfterRemap = null;
+            SetupStepper(remap.Thread, _lastStep);
         }
         Continue(clearVariables: false);
     }
@@ -504,23 +526,24 @@ public partial class ManagedDebugger
     private StepType _lastStep;
 
     /// <summary>A frame runs the new code of its method: a step under way on its thread goes on from its statement there, as
-    /// the step asked, through the new code.</summary>
+    /// the step asked, through the new code. A stepper refused there is the step's own event's failure, which stops the
+    /// step where its thread stands, saying why.</summary>
     private void HandleFunctionRemapComplete(FunctionRemapCompleteCorDebugManagedCallbackEventArgs complete)
     {
         if (_restepAfterRemap is int thread && thread == complete.Thread.Id)
         {
             _restepAfterRemap = null;
+            _stepper?.TryDeactivate();
+            _stepper = null;
+            SetupStepper(complete.Thread, _lastStep);
             try
             {
-                _stepper?.TryDeactivate();
-                _stepper = null;
-                SetupStepper(complete.Thread, _lastStep);
                 ICorDebugILFrame? now = complete.Thread.ActiveFrame as ICorDebugILFrame;
                 _logger?.Invoke($"The {_lastStep} under way on thread {thread} goes on in the new code, v{(now is null ? null : ModuleMetadataReader.VersionOf(now))} IL_{now?.IP.pnOffset:X4}");
             }
             catch (Exception error) when (Failures.OfRuntime(error))
             {
-                _logger?.Invoke($"The step could not go on in the new code: {error.Message}");
+                _logger?.Invoke($"The {_lastStep} under way on thread {thread} goes on in the new code, where its frame could not be read: {error.Message}");
             }
         }
         Continue(clearVariables: false);

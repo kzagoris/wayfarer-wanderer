@@ -14,8 +14,8 @@ namespace Passenger.App;
 /// <summary>What the folder's mobile projects (MAUI, .NET for Android, iOS, Mac Catalyst) need that this machine lacks,
 /// asked of their workloads off the window's thread as their projects evaluate (<see cref="MobileQuestions"/>) and said
 /// once in the banner over the window (<see cref="MobileWant"/>), in place of the load errors it explains in the status
-/// bar. Install Workloads installs the missing workloads into the .NET Passenger builds with, the one install of them New
-/// Project's Install runs too; Install Android SDK and Java runs the Android workload's own installer once the person
+/// bar. Install Workloads installs the missing workloads where the .NET Passenger builds with keeps them (<see
+/// cref="WorkloadFolders"/>), the one install of them New Project's Install runs too; Install Android SDK and Java runs the Android workload's own installer once the person
 /// accepted the SDK's licences; Get Xcode names where Xcode comes from. Each install has the projects loaded again. Make the
 /// Mobile Edits, or the fix on a line they change, makes the edits a project's heads need to build here in its project and
 /// Info.plist, one command of Undo.</summary>
@@ -101,7 +101,7 @@ public partial class MainWindow
         // What the person installed outside Passenger is seen as they come back to it.
         Activated += (_, _) =>
         {
-            if (MobileWant.Says)
+            if (MobileWant.MayChange)
             {
                 AskMobile(again: true);
             }
@@ -164,7 +164,7 @@ public partial class MainWindow
             string? folder = Folder;
             MobileWant want = await BackgroundWork.Run(async () =>
             {
-                string? androidHost = AndroidHosts.Unbuilt(folder);
+                string? androidHost = await AndroidHosts.UnbuiltAsync(folder);
                 List<ProjectNeeds> needs = [];
                 foreach ((string path, string name, IReadOnlyList<string> frameworks, Dictionary<string, string> globals) in asked)
                 {
@@ -408,31 +408,31 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>dotnet workload install of <paramref name="ids"/> into the .NET Passenger builds with, Install Workloads' and
-    /// New Project's one way: refused to an agent's input and where this user may not write it, asked of the person where it
-    /// <paramref name="asks"/>, its stages and lines said and handed on, the projects loaded again after. A .NET with no
-    /// workload set installs its newest first (dotnet workload update); downloads go to disk where the temporary folder is in
-    /// memory (<see cref="WorkloadInstalls"/>). Whether they were installed, and what it came to, as the status bar says it.</summary>
-    public async Task<(bool Installed, string Said)> InstallWorkloadsAsync(IReadOnlyList<string> ids, bool asks, Action<string>? stages, Action<string>? lines,
+    /// <summary>dotnet workload install of <paramref name="ids"/> where the .NET Passenger builds with puts them (<see
+    /// cref="WorkloadFoldersAsync"/>), Install Workloads' and New Project's one way: refused to an agent's input and where this
+    /// user may not write there, asked where it <paramref name="asks"/>, its stages and lines handed on, the projects loaded
+    /// again after; a workload set first where the .NET has none, downloads on disk (<see cref="WorkloadInstalls"/>). Whether
+    /// installed, what it came to and any command left the person to run.</summary>
+    public async Task<(bool Installed, string Said, string? ToRun)> InstallWorkloadsAsync(IReadOnlyList<string> ids, bool asks, Action<string>? stages, Action<string>? lines,
         CancellationToken stop)
     {
         UiThread.Check();
         if (RefusedToAgentsInput(Refusals.AgentInstallsMobile))
         {
-            return (false, Refusals.AgentInstallsMobile);
+            return (false, Refusals.AgentInstallsMobile, null);
         }
         string named = $"{Plural.Noun(ids.Count, "workload")} {Plural.Listed([.. ids])}";
         if (work.Begin(AppActions.InstallWorkloads, asks ? "Asking to install the .NET workloads" : $"Installing the .NET {named}") is not { } installing)
         {
-            return (false, ActionWork.Busy(work.Of(AppActions.InstallWorkloads)!));
+            return (false, ActionWork.Busy(work.Of(AppActions.InstallWorkloads)!), null);
         }
         using (installing)
         {
             using CancellationTokenSource stopping = CancellationTokenSource.CreateLinkedTokenSource(installing.Stopping, stop);
-            (bool, string) Came(bool installed, string said)
+            (bool, string, string?) Came(bool installed, string said, string? toRun = null)
             {
                 Told(installing, installed, said);
-                return (installed, said);
+                return (installed, said, toRun);
             }
             void Stage(string stage)
             {
@@ -444,14 +444,15 @@ public partial class MainWindow
                 installing.Say(line);
                 lines?.Invoke(line);
             }
-            string root = WorkloadStandIn?.Root ?? Dotnet.Root(Folder);
+            WorkloadFolders folders = await WorkloadFoldersAsync();
             string command = $"dotnet workload install {string.Join(' ', ids)}";
-            if (!await BackgroundWork.Run(() => Writable(root)))
+            if (folders.UserLocal is null && !await BackgroundWork.Run(() => Writable(folders.Root)))
             {
-                return Came(false, Refusals.WorkloadsNeedAdministrator(root, command));
+                string asAdministrator = WorkloadInstalls.AsAdministrator(folders.Root, ids);
+                return Came(false, Refusals.WorkloadsNeedAdministrator(folders.Root, asAdministrator), asAdministrator);
             }
             if (asks && !await ConfirmAsync($"Install the .NET {named}?",
-                $"Passenger runs {command} with the .NET in {PathNames.Shown(root, null)}, which downloads them from NuGet. "
+                $"Passenger runs {command}, which downloads them from NuGet and installs them {WorkloadInstalls.Into(folders)}. "
                 + $"{Plural.Listed([.. MobileWant.Projects])} then {Plural.Agreeing(MobileWant.Projects.Count, "loads", "load")} again.", "Install", null,
                 Refusals.AgentInstallsMobile))
             {
@@ -702,6 +703,16 @@ public partial class MainWindow
         ProjectTemplates.Forget();
         AskMobile(again: true);
         await mobileAsking;
+    }
+
+    /// <summary>Where Install Workloads puts the workloads (<see cref="WorkloadFolders.Installs"/>): the .NET the folder's
+    /// projects take, or with none open the one dotnet takes in the home folder, or a test's stand-in; and the user's own
+    /// folder where that .NET installs workloads for each user, needing no rights over the .NET itself.</summary>
+    public Task<WorkloadFolders> WorkloadFoldersAsync()
+    {
+        string? folder = Folder;
+        string? standIn = WorkloadStandIn?.Root;
+        return BackgroundWork.Run(() => Dotnet.WorkloadsAsync(folder, standIn));
     }
 
     /// <summary>Whether this user may write the .NET installation (a workload installs into it): a folder of their own,

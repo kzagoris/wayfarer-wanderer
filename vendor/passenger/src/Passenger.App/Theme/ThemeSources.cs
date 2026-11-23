@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -84,7 +83,11 @@ public sealed partial record ThemeSource(ThemeSourceKind Kind, string Name)
 
     /// <summary>The themes Passenger carries in its built-in source beside its own, by name, which the command line's
     /// <c>--look</c> names.</summary>
-    public static readonly IReadOnlyList<string> Carried = ["Cubicle"];
+    public static readonly IReadOnlyList<string> Carried = ["Cubicle", HighContrast];
+
+    /// <summary>The carried theme of high contrast, its words at WCAG AAA's 7:1, which Passenger takes while the system asks
+    /// for high contrast, as the window reads it of the system.</summary>
+    public const string HighContrast = "High Contrast";
 
     /// <summary>The themes Passenger carried before they moved to its themes repository, which the command line's
     /// <c>--look</c> names and 0.3's settings kept by these names.</summary>
@@ -224,7 +227,7 @@ public sealed partial record ThemeSource(ThemeSourceKind Kind, string Name)
         return kept.ToString().Trim('.');
     }
 
-    private static string Hash(string text) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..12];
+    private static string Hash(string text) => FileNames.Hash(text, 12);
 
     // GitHub's rules: an owner of letters, digits and single hyphens, a repository of letters, digits, '.', '-' and '_'.
     [GeneratedRegex(@"^([A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38})/([A-Za-z0-9._-]{1,100})$")]

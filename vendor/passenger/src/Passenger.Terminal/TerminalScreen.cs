@@ -22,7 +22,7 @@ public enum MouseTracking
 
 /// <summary>The screen a terminal shows: rows of cells, the cursor, the lines scrolled off the top, and the modes a
 /// program sets. Bytes from the program go in through <see cref="Feed"/> and are read as xterm reads them: UTF-8 text,
-/// C0 controls, and ESC, CSI, OSC and DCS sequences after the state machine in vt100.net's DEC parser, covering what
+/// C0 controls, and ESC, CSI, OSC and DCS sequences through the one reader of them (<see cref="SequenceReader"/>), covering what
 /// shells, editors and full-screen programs use (cursor movement, erasing, scroll regions, the alternate screen, 16,
 /// 256 and 24-bit colours, the line-drawing set, bracketed paste, mouse reports, the kitty keyboard protocol's flags,
 /// OSC 8's links).
@@ -36,25 +36,13 @@ public sealed class TerminalScreen
     /// <summary>The longest grapheme a cell holds, in UTF-16 units: a letter's marks beyond it are dropped.</summary>
     private const int MostJoined = 32;
 
-    /// <summary>The longest text an OSC keeps, in UTF-16 units: what a program writes past it is dropped.</summary>
-    private const int MostOsc = 8192;
-
     private readonly LineRing scrollback = new(ScrollbackLimit);
     private readonly Decoder utf8 = new UTF8Encoding(false).GetDecoder();
-    private readonly Parameters parameters = new();
-    private char[] osc = new char[256];
-    private int oscLength;
+    private readonly SequenceReader sequences = new();
     private char[] decoded = new char[4096];
     private TerminalLine[] main;
     private TerminalLine[]? alternate;
     private bool[] tabStops;
-    private State state;
-    private char privateMarker;
-
-    /// <summary>The sequence's first intermediate byte (ESC ( and CSI SP q's), and how many it has.</summary>
-    private int intermediate;
-    private int intermediates;
-
     private char highSurrogate;
     private CellStyle style = CellStyle.Plain;
     private int top;
@@ -68,9 +56,18 @@ public sealed class TerminalScreen
     /// <summary>Whether the decoder may hold the start of a character: the last bytes it took were not ASCII.</summary>
     private bool utf8Open;
 
+    /// <summary>The last character written, its whole grapheme where it is more than its first code point, and whether
+    /// it came just before what the output has now, so REP has it to repeat.</summary>
     private int lastRune = ' ';
-    private Saved saved;
-    private Saved savedMain;
+    private string? lastGrapheme;
+    private bool repeatable;
+
+    /// <summary>The cursor each screen saved (DECSC), each screen its own.</summary>
+    private Saved savedMain = Saved.Unsaved;
+    private Saved savedAlternate = Saved.Unsaved;
+
+    /// <summary>The main screen's scroll region while the alternate one is shown.</summary>
+    private (int Top, int Bottom) mainMargins;
 
     /// <summary>The kitty keyboard protocol's flags each screen's programs pushed, kept apart as the protocol asks.</summary>
     private readonly KeyboardStack mainKeyboard = new();
@@ -83,19 +80,8 @@ public sealed class TerminalScreen
         main = NewLines(Rows);
         Lines = main;
         bottom = Rows - 1;
+        mainMargins = (top, bottom);
         tabStops = Stops(Columns);
-    }
-
-    private enum State
-    {
-        Ground,
-        Escape,
-        EscapeIntermediate,
-        Csi,
-        Osc,
-        OscEscape,
-        Text,
-        TextEscape,
     }
 
     /// <summary>An answer for the program, to be written to its input: a cursor position, the terminal's identity.</summary>
@@ -103,6 +89,35 @@ public sealed class TerminalScreen
 
     /// <summary>The program rang the bell.</summary>
     public event Action? Bell;
+
+    /// <summary>A command the shell marked as run ended, with its exit status (OSC 133's D after its C).</summary>
+    public event Action<ShellCommand>? CommandEnded;
+
+    /// <summary>The command at the shell's latest prompt (OSC 133's A), and the one before it; null before any.</summary>
+    public ShellCommand? Command { get; private set; }
+
+    public ShellCommand? CommandBefore { get; private set; }
+
+    /// <summary>Whether the shell marks a command's run (OSC 133's C), so a prompt's command ran only where it says so.</summary>
+    public bool MarksRuns { get; private set; }
+
+    /// <summary>The line the cursor stood on as Enter last went to the program on the main screen, typed, pasted or run;
+    /// null before any, or once a reflow numbered the lines again.</summary>
+    public long? EnteredAt { get; private set; }
+
+    /// <summary>Enter went to the program: on the main screen, its line and its prompt's command are taken as entered.</summary>
+    public void Entered()
+    {
+        if (IsAlternate)
+        {
+            return;
+        }
+        EnteredAt = ScreenTop + CursorRow;
+        if (Command is { } command && command.Prompt <= EnteredAt)
+        {
+            command.Entered = true;
+        }
+    }
 
     public int Columns { get; private set; }
     public int Rows { get; private set; }
@@ -119,6 +134,10 @@ public sealed class TerminalScreen
 
     /// <summary>Whether the arrow keys send their application forms (ESC O A rather than ESC [ A), as vim asks.</summary>
     public bool ApplicationCursorKeys { get; private set; }
+
+    /// <summary>Line feed/new line mode (LNM): a line feed, vertical tab or form feed also returns to the first column, and
+    /// Return sends CR LF.</summary>
+    public bool NewLineMode { get; private set; }
 
     /// <summary>Whether a paste is to be bracketed, so a shell takes it as text rather than typed commands.</summary>
     public bool BracketedPaste { get; private set; }
@@ -217,7 +236,7 @@ public sealed class TerminalScreen
                 at += take;
                 continue;
             }
-            if (state == State.Ground)
+            if (sequences.InText)
             {
                 int run = rest.IndexOfAnyExceptInRange((byte)0x20, (byte)0x7E);
                 if (run != 0)
@@ -288,6 +307,8 @@ public sealed class TerminalScreen
         if (columns != Columns)
         {
             main = Reflow(main, columns, ref mainCursor);
+            // The lines are numbered again, so what was marked by number is forgotten.
+            (Command, CommandBefore, EnteredAt) = (null, null, null);
         }
         int mainRow = mainCursor.Row;
         main = Fit(main, rows, columns, toScrollback: true, ref mainRow);
@@ -302,6 +323,7 @@ public sealed class TerminalScreen
         Rows = rows;
         top = 0;
         bottom = rows - 1;
+        mainMargins = (top, bottom);
         tabStops = Stops(columns);
         if (shown)
         {
@@ -541,187 +563,39 @@ public sealed class TerminalScreen
         }
     }
 
-    private void Process(int rune)
+    /// <summary>A character through the reader of control sequences, which tells the screen what it is or what it ends.</summary>
+    private void Process(int rune) => sequences.Take(rune, new Reading(this));
+
+    /// <summary>What the reader finds, acted on by the screen. Anything but a character written leaves REP nothing to
+    /// repeat, as what precedes it is then no character written.</summary>
+    private readonly struct Reading(TerminalScreen screen) : ISequenceActions
     {
-        switch (state)
+        public void Print(int rune) => screen.Print(rune);
+
+        public void Control(int rune)
         {
-            case State.Ground:
-                if (rune == 0x1b)
-                {
-                    Begin(State.Escape);
-                }
-                else if (rune < 0x20 || rune == 0x7f)
-                {
-                    Control(rune);
-                }
-                else
-                {
-                    Print(rune);
-                }
-                break;
-            case State.Escape:
-                if (Interrupts(rune))
-                {
-                    break;
-                }
-                switch (rune)
-                {
-                    case '[':
-                        state = State.Csi;
-                        break;
-                    case ']':
-                        oscLength = 0;
-                        state = State.Osc;
-                        break;
-                    case 'P' or 'X' or '^' or '_':
-                        state = State.Text;
-                        break;
-                    case >= 0x20 and <= 0x2f:
-                        Intermediate(rune);
-                        state = State.EscapeIntermediate;
-                        break;
-                    default:
-                        Escape((char)rune);
-                        state = State.Ground;
-                        break;
-                }
-                break;
-            case State.EscapeIntermediate:
-                if (Interrupts(rune))
-                {
-                    break;
-                }
-                if (rune is >= 0x20 and <= 0x2f)
-                {
-                    Intermediate(rune);
-                }
-                else
-                {
-                    Escape((char)rune);
-                    state = State.Ground;
-                }
-                break;
-            case State.Csi:
-                if (Interrupts(rune))
-                {
-                    break;
-                }
-                if (rune is '<' or '=' or '>' or '?' && parameters.IsEmpty && privateMarker == '\0')
-                {
-                    privateMarker = (char)rune;
-                }
-                else if (rune is >= 0x30 and <= 0x3f)
-                {
-                    parameters.Take(rune);
-                }
-                else if (rune is >= 0x20 and <= 0x2f)
-                {
-                    Intermediate(rune);
-                }
-                else if (rune is >= 0x40 and <= 0x7e)
-                {
-                    parameters.End();
-                    Csi((char)rune);
-                    state = State.Ground;
-                }
-                break;
-            case State.Osc:
-                if (rune == 0x07)
-                {
-                    Osc();
-                    state = State.Ground;
-                }
-                else if (rune == 0x1b)
-                {
-                    state = State.OscEscape;
-                }
-                else if (oscLength < MostOsc)
-                {
-                    if (osc.Length < oscLength + 2)
-                    {
-                        Array.Resize(ref osc, Math.Min(osc.Length * 2, MostOsc + 1));
-                    }
-                    oscLength += new Rune(rune).EncodeToUtf16(osc.AsSpan(oscLength));
-                }
-                break;
-            case State.OscEscape:
-                Osc();
-                if (rune == '\\')
-                {
-                    state = State.Ground;
-                }
-                else
-                {
-                    Begin(State.Escape);
-                    Process(rune);
-                }
-                break;
-            case State.Text:
-                // DCS, SOS, PM and APC: nothing here needs their contents, so they are passed over to their end.
-                if (rune == 0x1b)
-                {
-                    state = State.TextEscape;
-                }
-                else if (rune is 0x07 or 0x18 or 0x1a)
-                {
-                    state = State.Ground;
-                }
-                break;
-            case State.TextEscape:
-                if (rune == '\\')
-                {
-                    state = State.Ground;
-                }
-                else
-                {
-                    Begin(State.Escape);
-                    Process(rune);
-                }
-                break;
+            screen.repeatable = false;
+            screen.Control(rune);
+        }
+
+        public void Escape(SequenceReader sequence, char final)
+        {
+            screen.repeatable = false;
+            screen.Escape(final);
+        }
+
+        public void Csi(SequenceReader sequence, char final)
+        {
+            screen.Csi(final);
+            screen.repeatable = false;
+        }
+
+        public void Osc(ReadOnlySpan<char> text)
+        {
+            screen.repeatable = false;
+            screen.Osc(text);
         }
     }
-
-    /// <summary>A control inside a sequence: CAN and SUB abandon it, ESC starts another, the rest act as they would
-    /// outside it.</summary>
-    private bool Interrupts(int rune)
-    {
-        if (rune is 0x18 or 0x1a)
-        {
-            state = State.Ground;
-            return true;
-        }
-        if (rune == 0x1b)
-        {
-            Begin(State.Escape);
-            return true;
-        }
-        if (rune < 0x20 || rune == 0x7f)
-        {
-            Control(rune);
-            return true;
-        }
-        return false;
-    }
-
-    private void Begin(State next)
-    {
-        parameters.Clear();
-        intermediate = 0;
-        intermediates = 0;
-        privateMarker = '\0';
-        state = next;
-    }
-
-    private void Intermediate(int rune)
-    {
-        if (intermediates++ == 0)
-        {
-            intermediate = rune;
-        }
-    }
-
-    /// <summary>Whether the sequence's intermediates are just this one byte.</summary>
-    private bool Only(char middle) => intermediates == 1 && intermediate == middle;
 
     private void Control(int rune)
     {
@@ -738,6 +612,10 @@ public sealed class TerminalScreen
                 Tab(1);
                 break;
             case 0x0a or 0x0b or 0x0c:
+                if (NewLineMode)
+                {
+                    CursorColumn = 0;
+                }
                 LineFeed();
                 break;
             case 0x0d:
@@ -783,9 +661,13 @@ public sealed class TerminalScreen
         Cell[] cells = Lines[CursorRow].Writing();
         if (insertMode)
         {
-            Array.Copy(cells, CursorColumn, cells, CursorColumn + width, Columns - CursorColumn - width);
+            // The cells the character goes into were pushed on, so nothing of theirs is left to overwrite.
+            PushRight(cells, CursorColumn, width, typed: true);
         }
-        Overwrite(cells, CursorColumn);
+        else
+        {
+            Overwrite(cells, CursorColumn);
+        }
         cells[CursorColumn] = new Cell { Rune = rune, Style = style, Width = (byte)width };
         if (hyperlink is not null)
         {
@@ -793,10 +675,13 @@ public sealed class TerminalScreen
         }
         if (width == 2)
         {
-            Overwrite(cells, CursorColumn + 1);
+            if (!insertMode)
+            {
+                Overwrite(cells, CursorColumn + 1);
+            }
             cells[CursorColumn + 1] = new Cell { Rune = 0, Style = style, Width = 0 };
         }
-        lastRune = rune;
+        (lastRune, lastGrapheme, repeatable) = (rune, null, true);
         if (CursorColumn + width >= Columns)
         {
             CursorColumn = Columns - 1;
@@ -853,7 +738,7 @@ public sealed class TerminalScreen
                     Lines[CursorRow].SetLink(column + i, hyperlink);
                 }
             }
-            lastRune = written.Rune;
+            (lastRune, lastGrapheme, repeatable) = (written.Rune, null, true);
             if (column + take >= Columns)
             {
                 CursorColumn = Columns - 1;
@@ -891,6 +776,7 @@ public sealed class TerminalScreen
         int column = Previous();
         if (column < 0)
         {
+            repeatable = false;
             return;
         }
         TerminalLine line = Lines[CursorRow];
@@ -905,6 +791,27 @@ public sealed class TerminalScreen
             line.Writing()[column].Rune = ' ';
         }
         line.SetGrapheme(column, joined);
+        (lastRune, lastGrapheme, repeatable) = (line.Cells[column].Rune, joined, true);
+    }
+
+    /// <summary>REP: the last character written, its whole grapheme, written again as many times, where it is what came
+    /// just before (ECMA-48 leaves REP after anything else undefined, and it repeats nothing then).</summary>
+    private void Repeat(int count)
+    {
+        if (!repeatable)
+        {
+            return;
+        }
+        (int rune, string? grapheme) = (lastRune, lastGrapheme);
+        for (int i = 0; i < count; i++)
+        {
+            Print(rune);
+            if (grapheme is not null && Previous() is int column and >= 0 && Lines[CursorRow].Cells[column].Rune == rune)
+            {
+                Lines[CursorRow].SetGrapheme(column, grapheme);
+            }
+        }
+        lastGrapheme = grapheme;
     }
 
     /// <summary>The cell the last character went into: before the cursor, or under it while a wrap is pending, the
@@ -942,6 +849,40 @@ public sealed class TerminalScreen
         {
             cells[column + 1] = Cell.Blank(style);
         }
+    }
+
+    /// <summary>Room made at a column for <paramref name="count"/> cells, the row's rest pushed right and off its end, the
+    /// cells at the column left as they were for the caller to write. A wide character is never split: one the column
+    /// would split is blanked first, its second half, pushed on, erased where text is <paramref name="typed"/> in insert
+    /// mode and a blank in its own colours where ICH makes the room; one with half pushed off the end is erased.</summary>
+    private void PushRight(Cell[] cells, int column, int count, bool typed)
+    {
+        if (column > 0 && cells[column].Width == 0)
+        {
+            cells[column - 1] = Cell.Blank(Erasing);
+            cells[column] = Cell.Blank(typed ? Erasing : cells[column].Style);
+        }
+        Array.Copy(cells, column, cells, column + count, Columns - column - count);
+        if (cells[Columns - 1].Width == 2)
+        {
+            cells[Columns - 1] = Cell.Blank(Erasing);
+        }
+    }
+
+    /// <summary>Cells erased from a column up to another, the range taken out to the whole of a wide character either end
+    /// would split.</summary>
+    private void Erase(TerminalLine line, int from, int to)
+    {
+        Cell[] cells = line.Cells;
+        if (from > 0 && from < Columns && cells[from].Width == 0)
+        {
+            from--;
+        }
+        if (to > 0 && to < Columns && cells[to].Width == 0)
+        {
+            to++;
+        }
+        line.Clear(from, to, Erasing);
     }
 
     private void LineFeed()
@@ -1010,25 +951,28 @@ public sealed class TerminalScreen
 
     private void Escape(char final)
     {
-        if (Only('('))
+        if (sequences.Only('('))
         {
             lineDrawing = final == '0';
             return;
         }
-        if (Only('#') && final == '8')
+        if (sequences.Only('#') && final == '8')
         {
-            // DECALN: the screen filled with Es, for aligning a display.
+            // DECALN: the screen filled with Es, for aligning a display; the margins go to the screen's edges, the cursor home.
             foreach (TerminalLine line in Lines)
             {
                 Cell[] cells = line.Writing();
                 for (int i = 0; i < Columns; i++)
                 {
-                    cells[i] = new Cell { Rune = 'E', Style = CellStyle.Plain, Width = 1 };
+                    cells[i] = new Cell { Rune = 'E', Style = style, Width = 1 };
                 }
+                line.Wrapped = false;
             }
+            (top, bottom) = (0, Rows - 1);
+            MoveTo(0, 0);
             return;
         }
-        if (intermediates > 0)
+        if (sequences.Intermediates > 0)
         {
             return;
         }
@@ -1061,7 +1005,9 @@ public sealed class TerminalScreen
 
     private void Csi(char final)
     {
-        Parameters groups = parameters;
+        SequenceParameters groups = sequences.Parameters;
+        char privateMarker = sequences.PrivateMarker;
+        int intermediates = sequences.Intermediates;
         int Get(int index, int fallback) => index < groups.Count && groups[index, 0] > 0 ? groups[index, 0] : fallback;
         int Raw(int index) => index < groups.Count ? Math.Max(0, groups[index, 0]) : 0;
 
@@ -1117,7 +1063,7 @@ public sealed class TerminalScreen
         {
             return;
         }
-        if (Only(' ') && final == 'q')
+        if (sequences.Only(' ') && final == 'q')
         {
             int requested = Raw(0);
             if (requested is < 0 or > 6)
@@ -1134,7 +1080,7 @@ public sealed class TerminalScreen
             RequestedCursorBlinking = requested == 0 ? null : requested % 2 == 1;
             return;
         }
-        if (Only('!') && final == 'p')
+        if (sequences.Only('!') && final == 'p')
         {
             SoftReset();
             return;
@@ -1153,8 +1099,12 @@ public sealed class TerminalScreen
             case 'A':
                 MoveTo(row - Get(0, 1), column, clampToRegion: true);
                 break;
-            case 'B' or 'e':
+            case 'B':
                 MoveTo(row + Get(0, 1), column, clampToRegion: true);
+                break;
+            case 'e':
+                // VPR moves as VPA does, past the scroll region's bottom where it is not origin mode's.
+                MoveTo(row + Get(0, 1), column);
                 break;
             case 'C' or 'a':
                 MoveTo(row, column + Get(0, 1));
@@ -1202,14 +1152,11 @@ public sealed class TerminalScreen
                 ScrollDown(Get(0, 1));
                 break;
             case 'X':
-                Lines[row].Clear(column, column + Get(0, 1), Erasing);
+                Erase(Lines[row], column, column + Get(0, 1));
                 wrapPending = false;
                 break;
             case 'b':
-                for (int i = 0, n = Math.Min(Get(0, 1), Columns * Rows); i < n; i++)
-                {
-                    Print(lastRune);
-                }
+                Repeat(Math.Min(Get(0, 1), Columns * Rows));
                 break;
             case 'c':
                 Reply?.Invoke("\x1b[?62;22c");
@@ -1234,10 +1181,14 @@ public sealed class TerminalScreen
                     {
                         insertMode = final == 'h';
                     }
+                    else if (groups[group, 0] == 20)
+                    {
+                        NewLineMode = final == 'h';
+                    }
                 }
                 break;
             case 'm':
-                Sgr(groups);
+                style = GraphicRendition.Apply(style, groups);
                 break;
             case 'n':
                 if (Raw(0) == 5)
@@ -1250,9 +1201,10 @@ public sealed class TerminalScreen
                 }
                 break;
             case 'r':
+                // A bottom past the screen's last row is its last row: the region is at most the screen.
                 int first = Get(0, 1) - 1;
-                int last = Get(1, Rows) - 1;
-                if (last > first && last < Rows)
+                int last = Math.Min(Get(1, Rows), Rows) - 1;
+                if (last > first)
                 {
                     top = first;
                     bottom = last;
@@ -1291,19 +1243,46 @@ public sealed class TerminalScreen
             case 25:
                 CursorVisible = on;
                 break;
-            case 47 or 1047:
-                Alternate(on, clear: mode == 1047 && on);
+            case 47:
+                ShowAlternate(on);
                 break;
-            case 1049:
+            case 1047:
+                // The alternate screen is cleared as it goes.
+                if (!on && IsAlternate)
+                {
+                    ClearAlternate();
+                }
+                ShowAlternate(on);
+                break;
+            case 1048:
                 if (on)
                 {
-                    savedMain = Capture();
-                    Alternate(true, clear: true);
+                    SaveCursor();
                 }
                 else
                 {
-                    Alternate(false, clear: false);
-                    Restore(savedMain);
+                    RestoreCursor();
+                }
+                break;
+            case 1049:
+                // 1047's switch with 1048's save before it and restore after, the alternate screen cleared as it comes too.
+                if (on)
+                {
+                    SaveCursor();
+                    if (!IsAlternate)
+                    {
+                        ShowAlternate(true);
+                        ClearAlternate();
+                    }
+                }
+                else
+                {
+                    if (IsAlternate)
+                    {
+                        ClearAlternate();
+                        ShowAlternate(false);
+                    }
+                    RestoreCursor();
                 }
                 break;
             case 1000:
@@ -1324,173 +1303,43 @@ public sealed class TerminalScreen
         }
     }
 
-    private void Alternate(bool on, bool clear)
+    /// <summary>The alternate screen shown, or the main one again; a switch to the screen shown changes nothing. The
+    /// alternate comes up with the whole screen its scroll region, and the main one comes back with its own.</summary>
+    private void ShowAlternate(bool on)
     {
+        if (on == IsAlternate)
+        {
+            return;
+        }
         if (on)
         {
-            if (!IsAlternate)
-            {
-                // A program coming to the alternate screen asks for its keys afresh, whatever one left there asked.
-                alternateKeyboard.Clear();
-            }
+            // A program coming to the alternate screen asks for its keys afresh, whatever one left there asked.
+            alternateKeyboard.Clear();
             alternate ??= NewLines(Rows);
-            if (clear)
-            {
-                alternate = NewLines(Rows);
-            }
+            mainMargins = (top, bottom);
             Lines = alternate;
+            (top, bottom) = (0, Rows - 1);
         }
         else
         {
             Lines = main;
+            (top, bottom) = mainMargins;
         }
-        top = 0;
-        bottom = Rows - 1;
         wrapPending = false;
     }
 
-    private void Sgr(Parameters groups)
+    /// <summary>The alternate screen erased, as the erase of a whole screen does: its rows blank in the background set.</summary>
+    private void ClearAlternate()
     {
-        if (groups.Count == 0)
+        foreach (TerminalLine line in alternate!)
         {
-            style = CellStyle.Plain;
-            return;
+            line.Reuse(Columns, Erasing);
         }
-        for (int i = 0; i < groups.Count; i++)
-        {
-            int code = groups[i, 0] >= 0 ? groups[i, 0] : 0;
-            CellFlags flags = style.Flags;
-            switch (code)
-            {
-                case 0:
-                    style = CellStyle.Plain;
-                    continue;
-                case 1:
-                    flags |= CellFlags.Bold;
-                    break;
-                case 2:
-                    flags |= CellFlags.Dim;
-                    break;
-                case 3:
-                    flags |= CellFlags.Italic;
-                    break;
-                case 4:
-                    flags = groups.Parts(i) > 1 && groups[i, 1] == 0 ? flags & ~CellFlags.Underline : flags | CellFlags.Underline;
-                    break;
-                case 7:
-                    flags |= CellFlags.Inverse;
-                    break;
-                case 8:
-                    flags |= CellFlags.Hidden;
-                    break;
-                case 9:
-                    flags |= CellFlags.Strike;
-                    break;
-                case 21:
-                    flags |= CellFlags.Underline;
-                    break;
-                case 22:
-                    flags &= ~(CellFlags.Bold | CellFlags.Dim);
-                    break;
-                case 23:
-                    flags &= ~CellFlags.Italic;
-                    break;
-                case 24:
-                    flags &= ~CellFlags.Underline;
-                    break;
-                case 27:
-                    flags &= ~CellFlags.Inverse;
-                    break;
-                case 28:
-                    flags &= ~CellFlags.Hidden;
-                    break;
-                case 29:
-                    flags &= ~CellFlags.Strike;
-                    break;
-                case >= 30 and <= 37:
-                    style = style with { Fore = code - 30 };
-                    continue;
-                case 38:
-                    if (Extended(groups, ref i) is int fore)
-                    {
-                        style = style with { Fore = fore };
-                    }
-                    continue;
-                case 39:
-                    style = style with { Fore = CellStyle.Default };
-                    continue;
-                case >= 40 and <= 47:
-                    style = style with { Back = code - 40 };
-                    continue;
-                case 48:
-                    if (Extended(groups, ref i) is int back)
-                    {
-                        style = style with { Back = back };
-                    }
-                    continue;
-                case 49:
-                    style = style with { Back = CellStyle.Default };
-                    continue;
-                case 58:
-                    // The underline's own colour: read past it, since it is not drawn.
-                    _ = Extended(groups, ref i);
-                    continue;
-                case >= 90 and <= 97:
-                    style = style with { Fore = code - 90 + 8 };
-                    continue;
-                case >= 100 and <= 107:
-                    style = style with { Back = code - 100 + 8 };
-                    continue;
-            }
-            style = style with { Flags = flags };
-        }
-    }
-
-    /// <summary>A colour after 38 or 48: 5;N from the palette or 2;R;G;B, in its own group's parts (38:2::R:G:B) or in
-    /// the groups after it (38;2;R;G;B), which it then consumes.</summary>
-    private static int? Extended(Parameters groups, ref int i)
-    {
-        int parts = groups.Parts(i);
-        if (parts > 1)
-        {
-            if (groups[i, 1] == 5 && parts > 2)
-            {
-                return Math.Clamp(groups[i, 2], 0, 255);
-            }
-            if (groups[i, 1] == 2 && parts >= 5)
-            {
-                // 38:2:R:G:B, or 38:2:SPACE:R:G:B with a colour space first.
-                int first = parts >= 6 ? 3 : 2;
-                return CellStyle.FromRgb(Byte(groups[i, first]), Byte(groups[i, first + 1]), Byte(groups[i, first + 2]));
-            }
-            return null;
-        }
-        int at = i;
-        switch (Next(groups, at + 1))
-        {
-            case 5:
-                int index = Next(groups, at + 2);
-                i += 2;
-                return index >= 0 ? Math.Min(index, 255) : null;
-            case 2:
-                int r = Next(groups, at + 2);
-                int g = Next(groups, at + 3);
-                int b = Next(groups, at + 4);
-                i += 4;
-                return CellStyle.FromRgb(Byte(r), Byte(g), Byte(b));
-            default:
-                return null;
-        }
-
-        static int Next(Parameters groups, int index) => index < groups.Count ? groups[index, 0] : -1;
-
-        static int Byte(int value) => Math.Clamp(value, 0, 255);
     }
 
     /// <summary>An OSC's text read where it was kept: a string is made only for a title or a folder that is new.</summary>
-    private void Osc()
+    private void Osc(ReadOnlySpan<char> text)
     {
-        ReadOnlySpan<char> text = osc.AsSpan(0, oscLength);
         int semicolon = text.IndexOf(';');
         ReadOnlySpan<char> code = semicolon < 0 ? text : text[..semicolon];
         ReadOnlySpan<char> value = semicolon < 0 ? [] : text[(semicolon + 1)..];
@@ -1508,6 +1357,10 @@ public sealed class TerminalScreen
             ReadOnlySpan<char> address = split < 0 ? [] : value[(split + 1)..];
             hyperlink = address.IsEmpty ? null : address.SequenceEqual(hyperlink) ? hyperlink : address.ToString();
         }
+        else if (code is "133" && !value.IsEmpty && !IsAlternate)
+        {
+            Mark(value[0], value[1..]);
+        }
         else if (code is "7" && !value.SequenceEqual(place))
         {
             place = value.ToString();
@@ -1518,10 +1371,42 @@ public sealed class TerminalScreen
         }
     }
 
+    /// <summary>A shell's mark (OSC 133): A a prompt begins at the cursor's line, C its command runs, D it ended with the
+    /// status after it (0 where none is given). A second A on a prompt's line before its command ran is the same prompt, and
+    /// a second D for one command, or one for a command never marked as run, is passed over.</summary>
+    private void Mark(char kind, ReadOnlySpan<char> rest)
+    {
+        long line = ScreenTop + CursorRow;
+        switch (kind)
+        {
+            case 'A':
+                if (Command is not { Ran: false, Status: null } same || same.Prompt != line)
+                {
+                    CommandBefore = Command;
+                    Command = new ShellCommand(line);
+                }
+                break;
+            case 'C':
+                Command ??= new ShellCommand(line);
+                Command.Ran = true;
+                MarksRuns = true;
+                break;
+            case 'D' when Command is { Ran: true, Status: null } ended:
+                ReadOnlySpan<char> status = rest.StartsWith(";") ? rest[1..] : [];
+                int end = status.IndexOf(';');
+                ended.Status = int.TryParse(end < 0 ? status : status[..end], System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out int code) ? code : 0;
+                CommandEnded?.Invoke(ended);
+                break;
+        }
+    }
+
+    /// <summary>The cursor put at a row and column, within the scroll region in origin mode. A move <paramref
+    /// name="clampToRegion"/> (CUU, CUD, CNL, CPL) up stops at the region's top unless it starts above it, and one down
+    /// at its bottom unless it starts below it.</summary>
     private void MoveTo(int row, int column, bool clampToRegion = false)
     {
-        int low = originMode || (clampToRegion && CursorRow >= top && CursorRow <= bottom) ? top : 0;
-        int high = originMode || (clampToRegion && CursorRow >= top && CursorRow <= bottom) ? bottom : Rows - 1;
+        int low = originMode || (clampToRegion && CursorRow >= top) ? top : 0;
+        int high = originMode || (clampToRegion && CursorRow <= bottom) ? bottom : Rows - 1;
         CursorRow = Math.Clamp(row, low, high);
         CursorColumn = Math.Clamp(column, 0, Columns - 1);
         wrapPending = false;
@@ -1549,7 +1434,7 @@ public sealed class TerminalScreen
         switch (how)
         {
             case 0:
-                Lines[CursorRow].Clear(column, Columns, Erasing);
+                Erase(Lines[CursorRow], column, Columns);
                 for (int r = CursorRow + 1; r < Rows; r++)
                 {
                     Lines[r] = new TerminalLine(Columns, Erasing);
@@ -1560,7 +1445,7 @@ public sealed class TerminalScreen
                 {
                     Lines[r] = new TerminalLine(Columns, Erasing);
                 }
-                Lines[CursorRow].Clear(0, column + 1, Erasing);
+                Erase(Lines[CursorRow], 0, column + 1);
                 break;
             case 2:
                 for (int r = 0; r < Rows; r++)
@@ -1582,11 +1467,11 @@ public sealed class TerminalScreen
         switch (how)
         {
             case 0:
-                line.Clear(column, Columns, Erasing);
+                Erase(line, column, Columns);
                 line.Wrapped = false;
                 break;
             case 1:
-                line.Clear(0, column + 1, Erasing);
+                Erase(line, 0, column + 1);
                 break;
             case 2:
                 line.Clear(0, Columns, Erasing);
@@ -1634,7 +1519,7 @@ public sealed class TerminalScreen
         int column = Math.Min(CursorColumn, Columns - 1);
         Cell[] cells = Lines[CursorRow].Writing();
         count = Math.Min(count, Columns - column);
-        Array.Copy(cells, column, cells, column + count, Columns - column - count);
+        PushRight(cells, column, count, typed: false);
         Lines[CursorRow].Clear(column, column + count, Erasing);
         wrapPending = false;
     }
@@ -1644,14 +1529,35 @@ public sealed class TerminalScreen
         int column = Math.Min(CursorColumn, Columns - 1);
         Cell[] cells = Lines[CursorRow].Writing();
         count = Math.Min(count, Columns - column);
+        // A wide character the deletion splits goes whole: a first half left before it, or a second half after it.
+        if (column > 0 && cells[column].Width == 0)
+        {
+            cells[column - 1] = Cell.Blank(Erasing);
+        }
+        if (column + count < Columns && cells[column + count].Width == 0)
+        {
+            cells[column + count] = Cell.Blank(Erasing);
+        }
         Array.Copy(cells, column + count, cells, column, Columns - column - count);
         Lines[CursorRow].Clear(Columns - count, Columns, Erasing);
         wrapPending = false;
     }
 
-    private void SaveCursor() => saved = Capture();
+    /// <summary>DECSC: the cursor saved for the screen shown.</summary>
+    private void SaveCursor()
+    {
+        if (IsAlternate)
+        {
+            savedAlternate = Capture();
+        }
+        else
+        {
+            savedMain = Capture();
+        }
+    }
 
-    private void RestoreCursor() => Restore(saved);
+    /// <summary>DECRC: the cursor the screen shown saved, or, with none saved, home in the default colours.</summary>
+    private void RestoreCursor() => Restore(IsAlternate ? savedAlternate : savedMain);
 
     private Saved Capture() => new(CursorRow, CursorColumn, style, originMode, wrapPending, lineDrawing);
 
@@ -1678,7 +1584,14 @@ public sealed class TerminalScreen
         bottom = Rows - 1;
         style = CellStyle.Plain;
         lineDrawing = false;
-        saved = default;
+        if (IsAlternate)
+        {
+            savedAlternate = Saved.Unsaved;
+        }
+        else
+        {
+            savedMain = Saved.Unsaved;
+        }
     }
 
     private void Reset()
@@ -1688,6 +1601,9 @@ public sealed class TerminalScreen
         main = NewLines(Rows);
         alternate = null;
         Lines = main;
+        (savedMain, savedAlternate, mainMargins) = (Saved.Unsaved, Saved.Unsaved, (top, bottom));
+        NewLineMode = false;
+        repeatable = false;
         CursorRow = 0;
         CursorColumn = 0;
         wrapPending = false;
@@ -1729,7 +1645,11 @@ public sealed class TerminalScreen
         0x03C0, 0x2260, 0x00A3, 0x00B7,
     ];
 
-    private readonly record struct Saved(int Row, int Column, CellStyle Style, bool Origin, bool WrapPending, bool LineDrawing);
+    private readonly record struct Saved(int Row, int Column, CellStyle Style, bool Origin, bool WrapPending, bool LineDrawing)
+    {
+        /// <summary>What a restore with nothing saved takes: home, the default colours, origin mode off, ASCII.</summary>
+        public static readonly Saved Unsaved = new(0, 0, CellStyle.Plain, false, false, false);
+    }
 
     /// <summary>A screen's kitty keyboard flags: those set with nothing pushed, under at most <see cref="Most"/> pushed
     /// over them, a push past which drops the oldest; a pop that empties the stack resets every flag.</summary>
@@ -1786,105 +1706,18 @@ public sealed class TerminalScreen
             entries[0] = 0;
         }
     }
+}
 
-    /// <summary>A CSI's parameters, read as their bytes arrive: groups apart at semicolons, each group's parts apart at
-    /// colons (SGR's 38:2:R:G:B), each part a number up to 65535, or -1 when it is empty, holds a byte other than a digit
-    /// or is past an int's range. A sequence keeps its first <see cref="Most"/> parts and drops the rest, so millions of
-    /// separators (a binary file written out) take no more memory or work than those.</summary>
-    private sealed class Parameters
-    {
-        /// <summary>The most parts a sequence keeps, its groups' together.</summary>
-        private const int Most = 32;
+/// <summary>A command as the shell marks it (OSC 133): the line its prompt began on, whether the shell said it ran, whether
+/// Enter went to the shell at it, and how it ended once it did.</summary>
+public sealed class ShellCommand(long prompt)
+{
+    public long Prompt { get; } = prompt;
 
-        private readonly int[] values = new int[Most];
+    public bool Ran { get; internal set; }
 
-        /// <summary>Where each group's parts start among <see cref="values"/>.</summary>
-        private readonly int[] starts = new int[Most];
+    public bool Entered { get; internal set; }
 
-        private int count;
-        private long number;
-        private bool digits;
-        private bool bad;
-
-        /// <summary>Whether the sequence has <see cref="Most"/> parts, so what comes after them is dropped.</summary>
-        private bool full;
-
-        /// <summary>How many groups the sequence has: none until a parameter byte comes.</summary>
-        public int Count { get; private set; }
-
-        /// <summary>Whether no parameter byte has come yet.</summary>
-        public bool IsEmpty => Count == 0;
-
-        /// <summary>A group's part; every group has its first.</summary>
-        public int this[int group, int part] => values[starts[group] + part];
-
-        public int Parts(int group) => (group + 1 < Count ? starts[group + 1] : count) - starts[group];
-
-        public void Clear()
-        {
-            Count = 0;
-            count = 0;
-            number = 0;
-            digits = false;
-            bad = false;
-            full = false;
-        }
-
-        /// <summary>Takes a parameter byte, 0x30 to 0x3F.</summary>
-        public void Take(int c)
-        {
-            if (Count == 0)
-            {
-                Open();
-            }
-            if (full)
-            {
-                return;
-            }
-            switch (c)
-            {
-                case >= '0' and <= '9':
-                    digits = true;
-                    if (!bad)
-                    {
-                        number = (number * 10) + (c - '0');
-                        bad = number > int.MaxValue;
-                    }
-                    break;
-                case ';':
-                    EndPart();
-                    if (!full)
-                    {
-                        Open();
-                    }
-                    break;
-                case ':':
-                    EndPart();
-                    break;
-                default:
-                    bad = true;
-                    break;
-            }
-        }
-
-        /// <summary>The sequence's final byte has come: its last part ends, unless it was dropped.</summary>
-        public void End()
-        {
-            if (Count > 0 && !full)
-            {
-                EndPart();
-            }
-        }
-
-        private void Open() => starts[Count++] = count;
-
-        private void EndPart()
-        {
-            values[count++] = digits && !bad ? (int)Math.Min(number, 65535) : -1;
-            number = 0;
-            digits = false;
-            bad = false;
-            full = count == Most;
-        }
-    }
+    /// <summary>Its exit status, once the shell said it ended; null before.</summary>
+    public int? Status { get; internal set; }
 }

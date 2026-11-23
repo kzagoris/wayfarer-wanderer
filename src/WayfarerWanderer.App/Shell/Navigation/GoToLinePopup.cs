@@ -30,7 +30,7 @@ public sealed class GoToLinePopup : UserControl, IAnswers<TextPosition?>
             Child = new StackPanel
             {
                 Spacing = 8,
-                Children = { new TextBlock { Classes = { StyleClasses.PopupTitle }, Text = "Go to Line:Column" }, query, problem },
+                Children = { new TextBlock { Classes = { ShellClasses.PopupTitle }, Text = "Go to Line:Column" }, query, problem },
             },
         };
         query.AddHandler(KeyDownEvent, OnQueryKeyDown, RoutingStrategies.Tunnel);

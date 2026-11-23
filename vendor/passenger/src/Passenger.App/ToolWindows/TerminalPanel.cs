@@ -43,11 +43,12 @@ public sealed class TerminalTab(TerminalSession session, string name, Run.Termin
 
 /// <summary>The Terminal window: a shell per tab in the open folder, the first started when the window is first
 /// shown, + for another; a tab whose shell ends closes, and the window hides with its last. A run configuration that uses
-/// the terminal runs its program in a tab of its own (<see cref="RunAsync"/>), which stays once it ends.</summary>
+/// the terminal runs its program in a tab of its own (<see cref="RunAsync"/>), which stays once it ends. Shown, it takes
+/// the keys only as asked (<see cref="FocusView"/>, a tab started or chosen), never because a layout shows it.</summary>
 public sealed class TerminalPanel : DockPanel
 {
     private readonly ObservableCollection<TerminalTab> tabs = [];
-    private readonly TerminalView view = new();
+    private readonly TerminalView view = new() { NothingSelected = Refusals.NothingSelected };
     private readonly Func<string> folder;
     private int opened;
     private bool firstComing;
@@ -62,7 +63,7 @@ public sealed class TerminalPanel : DockPanel
             ItemsSource = tabs,
             VerticalAlignment = VerticalAlignment.Center,
             // In a narrow window the last tabs give way first, each name ending in an ellipsis, as the Debug window's do.
-            ItemsPanel = new FuncTemplate<Panel?>(() => new ShrinkingRow { Spacing = 2 }),
+            ItemsPanel = new FuncTemplate<Panel?>(() => new ShrinkingRow { Spacing = Gaps.Hair }),
         };
         ReusedRows.Use(strip, Tab);
         Children.Add(view);
@@ -78,14 +79,13 @@ public sealed class TerminalPanel : DockPanel
                     firstComing = false;
                     if (tabs.Count == 0)
                     {
-                        IdeErrors.Observe(NewSessionAsync());
+                        IdeErrors.Observe(NewSessionAsync(null, focus: false));
                     }
                 });
             }
-            FocusView();
         };
         Button add = ToolButtons.Of(AppActions.NewTerminalSession, IconKeys.Add, "New Session", action => ActionRequested?.Invoke(this, action));
-        HeaderTools = new ShrinkingRow { Spacing = 4, Children = { strip, add } };
+        HeaderTools = new ShrinkingRow { Spacing = Gaps.Tight, Children = { strip, add } };
     }
 
     /// <summary>Raised when the last shell has ended, so the window can hide.</summary>
@@ -93,6 +93,9 @@ public sealed class TerminalPanel : DockPanel
 
     /// <summary>One of the window's actions asked for by its button.</summary>
     public event EventHandler<string>? ActionRequested;
+
+    /// <summary>A command the shell of a person's tab ran failed, with its exit status (<see cref="TerminalSession.CommandEnded"/>).</summary>
+    public event EventHandler<int>? CommandFailed;
 
     /// <summary>The window header's own tools: New Session.</summary>
     public Control HeaderTools { get; }
@@ -172,15 +175,26 @@ public sealed class TerminalPanel : DockPanel
         return variables;
     }
 
-    /// <summary>Starts a shell in a tab of its own and shows it: in the open folder, or in another (Open In, Terminal).</summary>
-    public async Task<TerminalSession> NewSessionAsync(string? at = null)
+    /// <summary>Starts a shell in a tab of its own and shows it with the keys: in the open folder, or in another (Open In,
+    /// Terminal).</summary>
+    public Task<TerminalSession> NewSessionAsync(string? at = null) => NewSessionAsync(at, focus: true);
+
+    /// <summary>Starts a shell in a tab of its own and shows it, with the keys only where <paramref name="focus"/> says.</summary>
+    private async Task<TerminalSession> NewSessionAsync(string? at, bool focus)
     {
         TerminalSession session = new(view.Session?.Screen.Columns ?? 120, view.Session?.Screen.Rows ?? 30);
         string name = ++opened == 1 ? "Local" : $"Local ({opened})";
         TerminalTab tab = new(session, name);
         tabs.Add(tab);
-        Show(tab);
+        Show(tab, focus);
         session.Exited += (_, _) => Close(tab);
+        session.CommandEnded += (_, status) =>
+        {
+            if (status != 0)
+            {
+                CommandFailed?.Invoke(this, status);
+            }
+        };
         try
         {
             await StartShellAsync(session, at ?? folder(), Shell);
@@ -203,11 +217,12 @@ public sealed class TerminalPanel : DockPanel
         {
             throw new InvalidOperationException($"the Shell path in {SettingsDialog.PlaceOfPage(SettingsDialog.TerminalPage)} names no program to start");
         }
-        FirstOnPath? first = await BackgroundWork.Run(() => Dotnet.Apart(at) is { } root
-            ? new FirstOnPath(Dotnet.PathFolder(root, State.StateStore.DefaultRoot), RuntimeVariables.Root, root,
-                FirstOnPath.ZshFolder(Path.Combine(State.StateStore.DefaultRoot, "cache", "terminal")))
-            : null);
-        await session.StartAsync(at, shell?.App, shell?.Arguments, first: first);
+        (FirstOnPath? first, string zsh) = await BackgroundWork.Run(() =>
+        {
+            string zsh = FirstOnPath.ZshFolder(Path.Combine(State.StateStore.DefaultRoot, "cache", "terminal"));
+            return (Dotnet.Apart(at) is { } root ? new FirstOnPath(Dotnet.PathFolder(root, State.StateStore.DefaultRoot), RuntimeVariables.Root, root, zsh) : null, zsh);
+        });
+        await session.StartAsync(at, shell?.App, shell?.Arguments, first: first, marks: zsh);
     }
 
     /// <summary>The name of the tab agents' commands run in.</summary>
@@ -356,7 +371,7 @@ public sealed class TerminalPanel : DockPanel
     {
         TextBlock name = new() { VerticalAlignment = VerticalAlignment.Center };
         ToggleButton button = null!;
-        button = ToolTabs.Tab(name, false, () =>
+        button = ToolTabs.Tab(name, () =>
         {
             if (button.DataContext is not TerminalTab tab)
             {
@@ -365,13 +380,11 @@ public sealed class TerminalPanel : DockPanel
             tab.Run?.Stop();
             Close(tab);
         }, "Close Session");
-        // A press on the open tab leaves it open, where the toggle would let it go.
         button.Click += (_, _) =>
         {
             if (button.DataContext is TerminalTab tab)
             {
                 Show(tab);
-                button.IsChecked = tab.IsActive;
             }
         };
         return button.Showing<TerminalTab>(tab =>

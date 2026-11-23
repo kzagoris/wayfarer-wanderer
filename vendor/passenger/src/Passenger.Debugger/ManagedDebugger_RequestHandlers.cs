@@ -124,11 +124,12 @@ public partial class ManagedDebugger
         _launch = launch;
         _initialThreadId = launch.InitialThreadId;
         _launchOutput = Task.WhenAll(Forward(launch.Output, isError: false), Forward(launch.Error, isError: true));
-        // Not held: it waits for the program to end.
-        Task<int?> launchExit = Core.BackgroundWork.Unheld(launch.WaitForExit);
+        // On a thread of its own: it waits for the program to end.
+        Task<int?> launchExit = Core.BackgroundWork.UnheldThread(launch.WaitForExit);
         _launchExit = launchExit;
         // Told as the program goes, not when the runtime's word of it is handled, which mscordbi may lose tearing down.
-        Core.UnawaitedWork.Observe(EndedLaunchAsync(launchExit));
+        _launchFiles = Core.RuntimeFiles.Of(launch.ProcessId, launchInfo.Env?.GetValueOrDefault("TMPDIR"));
+        Core.UnawaitedWork.Observe(EndedLaunchAsync(launchExit, _launchFiles));
         int processId = launch.ProcessId;
 
         _logger?.Invoke($"Process created suspended with PID: {processId}");
@@ -504,10 +505,8 @@ public partial class ManagedDebugger
         }
         ForgetReturnedValues();
         _stepBegan = null;
-        if (EvalStatus.Abandoned.ContainsKey(threadId))
+        if (StepsAfterEvaluation(threadId, type))
         {
-            // A stepper made now would be the given-up evaluation's, ended with it: the step waits for it to return.
-            _stepAfterEvaluation = (threadId, type);
             Continue(clearVariables: true);
             return;
         }
@@ -526,7 +525,8 @@ public partial class ManagedDebugger
         if (_asyncStepper is not null)
         {
             (bool handledByAsyncStepper, bool? useSimpleStepper) = await _asyncStepper.TrySetupAsyncStep(thread, type);
-            if (handledByAsyncStepper && useSimpleStepper is false)
+            // A step out whose ask of its builder is held unfinished goes on as a plain one once that evaluation returns.
+            if ((handledByAsyncStepper && useSimpleStepper is false) || StepsAfterEvaluation(threadId, type))
             {
                 Continue(clearVariables: true);
                 return;
@@ -559,7 +559,7 @@ public partial class ManagedDebugger
         {
             if (matched[i].Kept is { } same)
             {
-                _logger?.Invoke($"Breakpoint {same.Id} at {filePath}:{breakpoints[i].Line} kept as it was, {same.HitCount} hits in");
+                _logger?.Invoke($"Breakpoint {same.Id} at {filePath}:{breakpoints[i].Line} kept as it was, {Numbers.Said(same.HitCount)} hits in");
                 result.Add(same);
                 continue;
             }
@@ -602,7 +602,7 @@ public partial class ManagedDebugger
         {
             if (matched[i].Kept is { } same)
             {
-                _logger?.Invoke($"Function breakpoint {same.Id} on {same.FunctionName} kept as it was, {same.HitCount} hits in");
+                _logger?.Invoke($"Function breakpoint {same.Id} on {same.FunctionName} kept as it was, {Numbers.Said(same.HitCount)} hits in");
                 result.Add(same);
                 continue;
             }
@@ -1174,6 +1174,10 @@ public partial class ManagedDebugger
         {
             return new VariableInfo { Name = named, Value = SymbolDisplay.FormatLiteral(text, quote: true), Type = "string", VariablesReference = 0 };
         }
+        if (result.Void)
+        {
+            return new VariableInfo { Name = named, Value = DapRows.RanWithNoValue, Type = "void", VariablesReference = 0 };
+        }
         VariableInfo row = await ValueRow(named, named, result.Value!, threadId, frameStackDepth, result.Declared);
         if (row.VariablesReference != 0)
         {
@@ -1231,6 +1235,8 @@ public partial class ManagedDebugger
                     _logger?.Invoke($"Error stopping process before terminating it: {stopResult}");
                 }
             }
+            // Taken while it runs: one attached to leaves them as one launched does, ended as it is.
+            Core.RuntimeFiles? left = _launchFiles ?? (_attachedId > 0 && !_throughRelay ? Core.RuntimeFiles.Of(_attachedId) : null);
             int terminated = _process.TryTerminate(0);
             if (terminated < 0)
             {
@@ -1240,6 +1246,11 @@ public partial class ManagedDebugger
             else if (!_exited.Wait(TimeSpan.FromSeconds(5)))
             {
                 _logger?.Invoke("The process had not exited 5 s after Terminate");
+            }
+            // Before the adapter goes, which may be at once: its runtime left its socket, ended as it was.
+            if (left is not null)
+            {
+                await Core.RuntimeFiles.RemoveOnceGoneAsync([left], TimeSpan.FromSeconds(5)).ConfigureAwait(false);
             }
         }
         await EndAsync().ConfigureAwait(false);
@@ -1264,6 +1275,10 @@ public partial class ManagedDebugger
     /// <summary>Lets go of a program attached to, which runs on (stopped first, so no thread is let go amid an event).</summary>
     private async Task LetGoAsync(TimeSpan? within)
     {
+        if (HoldsLetGo)
+        {
+            await HoldUntilEvaluationsEndAsync().ConfigureAwait(false);
+        }
         if (_process is not null && _isAttached && !_exited.IsSet && _process?.TryIsRunning(out bool isRunning) is Cor.S_OK && isRunning)
         {
             int hResult = _process.TryStop(0);
@@ -1305,7 +1320,7 @@ public partial class ManagedDebugger
         List<ThrownException> chain = StoredChain(currentException, thread);
         try
         {
-            // No code runs to read it once an evaluation has timed out, until the program runs on.
+            // No code runs to read it once an evaluation past its time was stopped or is held unfinished, until the program runs on.
             string? why = EvalStatus.ImplicitOff;
             // Every Message first, as what the person reads; the stack trace, the costliest to make, last.
             foreach (ThrownException each in chain)

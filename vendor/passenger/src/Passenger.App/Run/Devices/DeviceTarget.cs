@@ -2,18 +2,23 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Passenger.App.Workspace;
 using Passenger.Core;
+using Passenger.Workspace;
 
 namespace Passenger.App.Run.Devices;
 
 /// <summary>The platforms an app of one project runs on, each by the platform its target frameworks name
 /// (<c>net11.0-android</c>): those whose app runs on a device, an emulator or a simulator, or on this machine as an app of
-/// its platform (Mac Catalyst, Windows).</summary>
+/// its platform (Mac Catalyst, Windows), or as a desktop app of a framework of no platform (<see cref="Desktop"/>).</summary>
 public enum TargetPlatform
 {
     Android,
     Ios,
     MacCatalyst,
     Windows,
+
+    /// <summary>A head of no platform (<c>net11.0</c>) that runs as a desktop app wherever .NET does, Linux too: a MAUI app's
+    /// Avalonia head (<see cref="DeviceTargets.DesktopHead"/>).</summary>
+    Desktop,
 }
 
 /// <summary>What a target is: a device plugged in or on the network, an emulator or a simulator, or this machine.</summary>
@@ -74,9 +79,26 @@ public static partial class DeviceTargets
         _ => null,
     };
 
-    /// <summary>The project's framework for a platform, the first of them in its order; null where it targets none.</summary>
+    /// <summary>The project's framework for a platform its frameworks name, the first of them in its order; null where it
+    /// targets none.</summary>
     public static string? FrameworkFor(IEnumerable<string> frameworks, TargetPlatform platform) =>
         frameworks.FirstOrDefault(f => PlatformOf(f) == platform);
+
+    /// <summary>The framework a project builds for a target's platform: its desktop head's for
+    /// <see cref="TargetPlatform.Desktop"/> (<see cref="DesktopHead"/>), else its first naming the platform; null where it
+    /// has none.</summary>
+    public static string? FrameworkFor(ProjectModel project, TargetPlatform platform) =>
+        platform == TargetPlatform.Desktop ? DesktopHead(project) : FrameworkFor(project.TargetFrameworks, platform);
+
+    /// <summary>The framework of a project's desktop head beside its device heads: its first .NET framework of no platform
+    /// whose own packages bring Avalonia's desktop platforms (<see cref="Run.DesktopPrograms.TakesAvaloniaDesktop"/>), as a
+    /// MAUI app's Avalonia head's do; null for none, as for one kept for tests or a library, or a project of no device
+    /// head.</summary>
+    public static string? DesktopHead(ProjectModel project) =>
+        PlatformsOf(project.TargetFrameworks).Count == 0 ? null
+            : project.TargetFrameworks.FirstOrDefault(framework => FrameworkNames.PlatformOf(framework) is null && FrameworkNames.VersionOf(framework) is not null
+                && project.Evaluated?.Dependencies.FirstOrDefault(d => string.Equals(d.Framework, framework, StringComparison.OrdinalIgnoreCase)) is { } dependencies
+                && Run.DesktopPrograms.TakesAvaloniaDesktop(dependencies));
 
     /// <summary>The platforms a project's frameworks run on elsewhere, in its order, each once.</summary>
     public static IReadOnlyList<TargetPlatform> PlatformsOf(IEnumerable<string> frameworks) =>
@@ -122,6 +144,10 @@ public static partial class DeviceTargets
     /// Catalyst one on a Mac), which the chooser lists beside the devices.</summary>
     public static DeviceTarget Here(TargetPlatform platform) =>
         new(platform, platform.ToString().ToLowerInvariant(), $"{Named(platform)} (this machine)", TargetKind.ThisMachine, Running: true);
+
+    /// <summary>Where a project runs with no target chosen and none of this machine's platform: its desktop head
+    /// (<see cref="DesktopHead"/>) on this machine, as a MAUI app's Avalonia head on Linux; null where it has none.</summary>
+    public static KeptTarget? UnchosenDesktop(ProjectModel project) => DesktopHead(project) is not null ? KeptTarget.Of(Here(TargetPlatform.Desktop)) : null;
 
     /// <summary>A platform as people name it.</summary>
     public static string Named(TargetPlatform platform) => platform switch
@@ -189,6 +215,31 @@ public static partial class DeviceTargets
     /// <summary>A kept choice in a listing, by its platform and key.</summary>
     public static DeviceTarget? Find(KeptTarget? choice, IReadOnlyList<DeviceTarget> targets) =>
         choice is null ? null : targets.FirstOrDefault(t => t.Platform == choice.Platform && t.Key == choice.Key);
+
+    /// <summary>A listing with one platform's targets listed again (<paramref name="found"/>, as a run on one of them found
+    /// them): the platform's targets in place of those it had, where its first stood, and every other platform's kept.</summary>
+    public static IReadOnlyList<DeviceTarget> Relisted(IReadOnlyList<DeviceTarget> listed, TargetPlatform platform, IReadOnlyList<DeviceTarget> found)
+    {
+        List<DeviceTarget> relisted = [];
+        bool placed = false;
+        foreach (DeviceTarget target in listed)
+        {
+            if (target.Platform != platform)
+            {
+                relisted.Add(target);
+            }
+            else if (!placed)
+            {
+                relisted.AddRange(found);
+                placed = true;
+            }
+        }
+        if (!placed)
+        {
+            relisted.AddRange(found);
+        }
+        return relisted;
+    }
 
     /// <summary>What a listing says of a project's chosen target that it no longer has; null where it has it, or none was chosen.</summary>
     public static string? Gone(KeptTarget? choice, IReadOnlyList<DeviceTarget> targets, string project) =>

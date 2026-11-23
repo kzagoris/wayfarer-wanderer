@@ -199,7 +199,7 @@ public static class MSBuildNavigation
             : null;
         if (made is not null)
         {
-            card.AppendLine($"{type} {string.Join(";", made.Includes.Take(3))}{(made.Count > 3 ? $" (and {made.Count - 3} more)" : string.Empty)}");
+            card.AppendLine($"{type} {string.Join(";", made.Includes.Take(3))}{(made.Count > 3 ? $" (and {Numbers.Said(made.Count - 3)} more)" : string.Empty)}");
             foreach ((string name, string value) in made.Metadata.Take(8))
             {
                 card.AppendLine($"{name} = {Shown(value)}");
@@ -216,8 +216,8 @@ public static class MSBuildNavigation
         if (MSBuildSyntax.PackageItems.Contains(type) && symbol.Element is { } package && insight is not null
             && MSBuildSyntax.ValueOf(package, "Include", context.Tree.Text) is { Length: > 0 } id)
         {
-            string? version = made?.Metadata.GetValueOrDefault("VersionOverride") is { Length: > 0 } overridden ? overridden : made?.Metadata.GetValueOrDefault("Version");
-            if (string.IsNullOrEmpty(version) && type == "PackageReference" && insight.CentralVersions().TryGetValue(id, out (string Version, MSBuildPlace Place) central))
+            string? version = made?.Metadata.GetValueOrDefault(MSBuildNames.VersionOverride) is { Length: > 0 } overridden ? overridden : made?.Metadata.GetValueOrDefault(MSBuildNames.Version);
+            if (string.IsNullOrEmpty(version) && type == MSBuildNames.PackageReference && insight.CentralVersions().TryGetValue(id, out (string Version, MSBuildPlace Place) central))
             {
                 card.AppendLine($"Version = {central.Version}, central, set in {Where(central.Place)}");
                 version = central.Version;
@@ -343,7 +343,7 @@ public static class MSBuildNavigation
         return MSBuildSyntax.RoleOf(element) switch
         {
             MSBuildRole.Item => context.Schema.Items.GetValueOrDefault(element.LocalName)?.Attribute(symbol.Name)?.Documentation
-                ?? context.Schema.Items["Compile"].Attribute(symbol.Name)?.Documentation,
+                ?? context.Schema.Items[MSBuildNames.Compile].Attribute(symbol.Name)?.Documentation,
             MSBuildRole.Task => context.Schema.Tasks.GetValueOrDefault(element.LocalName)?.Attribute(symbol.Name)?.Documentation,
             _ => context.Schema.Structure.GetValueOrDefault(element.LocalName)?.Attribute(symbol.Name)?.Documentation,
         };

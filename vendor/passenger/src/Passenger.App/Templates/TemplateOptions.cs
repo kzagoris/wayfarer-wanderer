@@ -1,6 +1,7 @@
 using System.Globalization;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Passenger.Core;
 
 namespace Passenger.App.Templates;
 
@@ -21,12 +22,12 @@ public sealed class TemplateOptions
     private bool setting;
 
     /// <summary>Where the options are shown, one row each, but those under More options.</summary>
-    public StackPanel Panel { get; } = new() { Spacing = 10 };
+    public StackPanel Panel { get; } = new() { Spacing = FormRows.Between };
 
     /// <summary>More options and the rows it opens, shown where a template has some; its dialog places it last.</summary>
     public StackPanel Folded { get; }
 
-    public TemplateOptions() => Folded = new StackPanel { Spacing = 10, IsVisible = false, Children = { more.Opener, more.Rows } };
+    public TemplateOptions() => Folded = new StackPanel { Spacing = FormRows.Between, IsVisible = false, Children = { more.Opener, more.Rows } };
 
     /// <summary>A value changed, or what is enabled with it: what the options come to has changed.</summary>
     public event Action? Changed;
@@ -50,8 +51,8 @@ public sealed class TemplateOptions
                 ? kept : option.Default;
             values[option.Name] = value;
             // One of the rest says what it is under its field, where its switch or name alone may not.
-            TextBlock? said = !option.Picked && option.Description is { Length: > 0 } description ? MutedText.Wrapped(description) : null;
-            string label = option.NamedBySwitch ? option.Label : $"{option.Label}:";
+            TextBlock[] said = !option.Picked && option.Description is { Length: > 0 } description ? [FormRows.Note(description)] : [];
+            string label = option.Label;
             Control editor;
             Control row;
             switch (option.Kind)
@@ -60,10 +61,10 @@ public sealed class TemplateOptions
                     CheckBox box = new() { Content = option.Label, IsChecked = IsTrue(value) != option.Inverted };
                     box.IsCheckedChanged += (_, _) => Set(option, (box.IsChecked == true) != option.Inverted ? "true" : "false");
                     editor = box;
-                    row = Row(null, Described(box, said), top: said is not null);
+                    row = Row(null, box, said);
                     break;
                 case TemplateOptionKind.Choice:
-                    ComboBox choices = new() { Classes = { StyleClasses.Form }, ItemsSource = option.Choices.Select(c => c.Label).ToList() };
+                    FormDropDown choices = new() { ItemsSource = option.Choices.Select(c => c.Label).ToList() };
                     choices.SelectedIndex = Math.Max(0, option.Choices.ToList().FindIndex(c => c.Value.Equals(value, StringComparison.OrdinalIgnoreCase)));
                     choices.SelectionChanged += (_, _) =>
                     {
@@ -73,16 +74,16 @@ public sealed class TemplateOptions
                         }
                     };
                     editor = choices;
-                    row = Row(label, Described(choices, said), top: said is not null);
+                    row = Row(label, choices, said);
                     break;
                 default:
-                    TextBox text = new() { Classes = { StyleClasses.Search }, Text = value, MaxWidth = 360, HorizontalAlignment = HorizontalAlignment.Left, MinWidth = 240 };
+                    TextBox text = new() { Text = value, MaxWidth = 360, HorizontalAlignment = HorizontalAlignment.Left, MinWidth = 240 };
                     text.TextChanged += (_, _) => Set(option, text.Text ?? string.Empty);
                     editor = text;
-                    row = Row(label, Described(text, said), top: said is not null);
+                    row = Row(label, text, said);
                     break;
             }
-            if (said is null && option.Description is { Length: > 0 } tip)
+            if (said.Length == 0 && option.Description is { Length: > 0 } tip)
             {
                 ToolTip.SetTip(row, tip);
             }
@@ -90,7 +91,7 @@ public sealed class TemplateOptions
             shown.Add((option, row, editor));
         }
         Folded.IsVisible = more.Rows.Children.Count > 0;
-        more.Title = $"More options ({more.Rows.Children.Count})";
+        more.Title = $"More options ({Numbers.Said(more.Rows.Children.Count)})";
         // A value the person set among them stays in sight, as it goes to the command line.
         more.IsOpen |= shown.Any(s => s.Option.More && !string.Equals(values[s.Option.Name], s.Option.Default, StringComparison.OrdinalIgnoreCase));
         Enable();
@@ -98,17 +99,6 @@ public sealed class TemplateOptions
 
     /// <summary>The link that opens the options waiting under More options, while a template has some.</summary>
     public Button MoreOptions => more.Opener;
-
-    /// <summary>A field with what it is said under it, where it is said.</summary>
-    private static Control Described(Control editor, TextBlock? said)
-    {
-        if (said is null)
-        {
-            return editor;
-        }
-        editor.HorizontalAlignment = HorizontalAlignment.Left;
-        return new StackPanel { Spacing = 4, Children = { editor, said } };
-    }
 
     /// <summary>No options, as for a template that has none to show.</summary>
     public void Clear()
@@ -166,13 +156,13 @@ public sealed class TemplateOptions
 
     /// <summary>A row of a dialog's form: its label (none for a checkbox, which carries its own) and what sets it, the label
     /// at the top of a field with words under it.</summary>
-    public static Control Row(string? label, Control editor, bool top = false)
+    public static Control Row(string? label, Control editor, IReadOnlyList<TextBlock>? notes = null, bool top = false)
     {
         if (editor is ComboBox)
         {
             editor.HorizontalAlignment = HorizontalAlignment.Left;
         }
-        return FormRows.Of(label, editor, top);
+        return FormRows.Of(label, editor, notes ?? [], top);
     }
 
     /// <summary>What a project has of an option its template turns off, where that is not the option's value: VSTest for a
@@ -195,7 +185,7 @@ public sealed class TemplateOptions
         foreach ((TemplateOption option, Control row, Control editor) in shown)
         {
             editor.IsEnabled = TemplateConditions.IsEnabled(option.EnabledWhen, values);
-            row.Opacity = editor.IsEnabled ? 1 : 0.55;
+            ListRow.Dim(row, !editor.IsEnabled);
             if (editor is ComboBox choices)
             {
                 string value = (editor.IsEnabled ? null : WhenOff(option)) ?? values.GetValueOrDefault(option.Name, option.Default);

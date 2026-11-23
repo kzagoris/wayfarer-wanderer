@@ -26,16 +26,27 @@
     <!-- Passenger.Core's paths, a project's own folders and the names it reads them by, its reader of JSON lines, its
          pooled buffer and MSBuild's names, compiled in since its net11.0 is past the host's. -->
     <Compile Include="../Passenger.Core/PathNames.cs" Link="PathNames.cs" />
-    <!-- The Windows calls PathNames makes, declared once. -->
+    <!-- The Windows calls PathNames and SessionProcesses make, declared once. -->
     <Compile Include="../Passenger.Core/Kernel32.cs" Link="Kernel32.cs" />
+    <!-- How long a session's end waits for the processes it started to be gone. -->
+    <Compile Include="../Passenger.Core/Deadline.cs" Link="Deadline.cs" />
     <Compile Include="../Passenger.Core/PathComparer.cs" Link="PathComparer.cs" />
     <Compile Include="../Passenger.Core/ProjectFolders.cs" Link="ProjectFolders.cs" />
     <Compile Include="../Passenger.Core/FolderNames.cs" Link="FolderNames.cs" />
     <Compile Include="../Passenger.Core/JsonLines.cs" Link="JsonLines.cs" />
     <Compile Include="../Passenger.Core/PooledBytes.cs" Link="PooledBytes.cs" />
     <Compile Include="../Passenger.Core/MSBuildNames.cs" Link="MSBuildNames.cs" />
+    <!-- .NET's frameworks' names, by which the host reads an evaluation's framework. -->
+    <Compile Include="../Passenger.Core/FrameworkNames.cs" Link="FrameworkNames.cs" />
     <!-- A C# name's characters, as a program's first member is read by them (ProgramFiles). -->
     <Compile Include="../Passenger.Core/CSharpNames.cs" Link="CSharpNames.cs" />
+    <!-- Where a .NET keeps its workloads, the user's own folder too, whose imports are no project's own. -->
+    <Compile Include="../Passenger.Core/WorkloadFolders.cs" Link="WorkloadFolders.cs" />
+    <!-- NuGet's layout of a package folder, by which a package's own build file tells its files from a project's. -->
+    <Compile Include="../Passenger.Core/PackageLayout.cs" Link="PackageLayout.cs" />
+    <!-- A parallel loop's threads of its own, so the host's other requests never wait for an evaluation's loop to end. -->
+    <Compile Include="../Passenger.Core/ApartScheduler.cs" Link="ApartScheduler.cs" />
+    <Compile Include="../Passenger.Core/ApartThreads.cs" Link="ApartThreads.cs" />
   </ItemGroup>
 
   <!-- MSBuild's own dependencies come from the SDK with it: copied here, an older one would be loaded in their place. -->

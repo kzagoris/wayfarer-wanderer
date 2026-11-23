@@ -95,10 +95,10 @@ public sealed class ProfilerView : DockPanel
     private readonly DockPanel keptPage;
     private string? keptFolder;
     private readonly TextBlock status;
-    private readonly TextBlock placeholder;
+    private readonly EmptyState placeholder;
     private readonly Button stop;
     private readonly Button kill;
-    private readonly ToggleButton[] pages;
+    private readonly ToolTabs.Strip<ProfilerPage> pages = new() { Margin = new Thickness(Gaps.Small, 0) };
     private readonly DispatcherTimer ticking;
     private readonly Timeline timeline;
     private readonly Border timelineBand;
@@ -135,7 +135,7 @@ public sealed class ProfilerView : DockPanel
         ReusedRows.Use(backTraces, Row);
         TreeKeys.Attach<CallRow>(backTraces, Toggle, row => Open(row.Node.Name, row.Node.Code));
         allocations = new PaneSplit(types, backTraces, "2*,1,3*");
-        collectionsSummary = new TextBlock { Margin = new Thickness(12, 8), TextWrapping = TextWrapping.Wrap };
+        collectionsSummary = new TextBlock { Margin = new Thickness(Gaps.Wide, Gaps.Normal), TextWrapping = TextWrapping.Wrap };
         collections = new ListBox
         {
             Classes = { StyleClasses.Tree },
@@ -158,11 +158,11 @@ public sealed class ProfilerView : DockPanel
         };
         ReusedRows.Use(kept, KeptRow);
         ListKeys.Act(kept, new ListActs { Open = OpenKept });
-        keptSummary = new TextBlock { Margin = new Thickness(12, 8), TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+        keptSummary = new TextBlock { Margin = new Thickness(Gaps.Wide, Gaps.Normal), TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
         Button reveal = new()
         {
             Content = FileManager.Showing,
-            Margin = new Thickness(0, 0, 12, 0),
+            Margin = new Thickness(0, 0, Gaps.Wide, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
         reveal.Click += (_, _) => RevealSnapshotsRequested?.Invoke(this, EventArgs.Empty);
@@ -173,57 +173,50 @@ public sealed class ProfilerView : DockPanel
         keptPage = new DockPanel();
         keptPage.Children.Add(keptHead);
         keptPage.Children.Add(kept);
-        placeholder = new TextBlock
-        {
-            Text = "Profile runs the chosen configuration under the profiler; Get Snapshot shows where its time went",
-            Classes = { StyleClasses.EmptyText },
-        };
+        placeholder = new EmptyState("The chosen configuration runs under the profiler; Get Snapshot shows where its time went");
+        placeholder.Offer(AppActions.Profile, "Profile");
+        placeholder.ActionRequested += (_, action) => ActionRequested?.Invoke(this, action);
 
         // Cut where it is longer than its line, its whole text on hover.
-        status = new TextBlock { Name = "ProfilerSummary", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0), TextTrimming = TextTrimming.CharacterEllipsis };
+        status = new TextBlock { Name = "ProfilerSummary", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(Gaps.Wide, 0), TextTrimming = TextTrimming.CharacterEllipsis };
         status.Bind(ToolTip.TipProperty, status.GetObservable(TextBlock.TextProperty));
         stop = new Button { Name = "ProfilerGetSnapshot", Content = "Get Snapshot", Classes = { StyleClasses.Primary }, IsVisible = false };
         stop.Click += (_, _) => StopRequested?.Invoke(this, EventArgs.Empty);
         kill = new Button { Content = "Kill", IsVisible = false };
         kill.Click += (_, _) => KillRequested?.Invoke(this, EventArgs.Empty);
-        pages = [PageButton("Call Tree"), PageButton("Hot Spots"), PageButton("Flame Graph"), PageButton("Frames"), PageButton("Allocations"), PageButton("GC"),
-            PageButton("Memory"), PageButton("Snapshots")];
-        // Named for a screenshot's --click-name: ProfilerHotSpots, ProfilerMemory and the rest.
+        string[] titles = ["Call Tree", "Hot Spots", "Flame Graph", "Frames", "Allocations", "GC", "Memory", "Snapshots"];
         foreach (ProfilerPage page in Enum.GetValues<ProfilerPage>())
         {
-            pages[(int)page].Name = $"Profiler{page}";
+            // Named for a screenshot's --click-name: ProfilerHotSpots, ProfilerMemory and the rest.
+            pages.Add(page, titles[(int)page], name: $"Profiler{page}");
         }
-        // The pages and the run's summary wrap to another line where the pane has no room for them on one, as at 640 wide.
-        WrapPanel left = new() { ItemSpacing = 2, Margin = new Thickness(6, 0), VerticalAlignment = VerticalAlignment.Center };
-        foreach (ToggleButton page in pages)
-        {
-            left.Children.Add(page);
-        }
+        pages.Chosen += (_, page) => ShowPage(page);
         Button open = ToolButtons.Of(IconKeys.FolderOpen, "Open Snapshot", () => OpenSnapshotRequested?.Invoke(this, EventArgs.Empty));
         open.Name = "ProfilerOpenSnapshot";
         heap = new Button { Name = "ProfilerGetMemorySnapshot", Content = "Get Memory Snapshot", IsVisible = false };
         heap.Click += (_, _) => MemoryRequested?.Invoke(this, EventArgs.Empty);
         ActionButtons.Mark(heap, AppActions.MemorySnapshot);
-        StackPanel right = new() { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(6, 0), VerticalAlignment = VerticalAlignment.Center, Children = { heap, stop, kill, open } };
+        StackPanel right = new() { Orientation = Orientation.Horizontal, Spacing = Gaps.Small, Margin = new Thickness(Gaps.Small, 0), VerticalAlignment = VerticalAlignment.Center, Children = { heap, stop, kill, open } };
         DockPanel bar = new();
         DockPanel.SetDock(right, Dock.Right);
-        left.Children.Add(status);
+        // The run's summary follows the pages, wrapping with them where the pane has no room for both on one line, as at 640 wide.
+        pages.Children.Add(status);
         bar.Children.Add(right);
-        bar.Children.Add(left);
+        bar.Children.Add(pages);
         Border top = ToolBars.Top(bar);
         Children.Add(top);
         offerLink = offer.Link(null, () => offering?.TakeOffer());
         Children.Add(offer);
         timeline = new Timeline();
         timeline.Chosen += (_, stretch) => IdeErrors.Observe(ChooseAsync(stretch));
-        timelineBand = new Border { [DockProperty] = Dock.Top, BorderThickness = new Thickness(0, 0, 0, 1), Child = timeline, IsVisible = false, Padding = new Thickness(0, 4) };
+        timelineBand = new Border { [DockProperty] = Dock.Top, BorderThickness = Hairlines.Below, Child = timeline, IsVisible = false, Padding = new Thickness(0, Gaps.Tight) };
         timelineBand.Bind(Border.BorderBrushProperty, timelineBand.GetResourceObservable(TokenKeys.Divider));
         Children.Add(timelineBand);
         Children.Add(new Panel { Children = { tree, spots, flameScroll, framesPage, allocations, garbage, memory, keptPage, placeholder } });
         ticking = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
         ticking.Tick += (_, _) => status.Text = $"Profiling {running}: {Durations.Said(elapsed?.Invoke() ?? TimeSpan.Zero)}";
         ShowPage(ProfilerPage.CallTree);
-        foreach (ToggleButton page in pages)
+        foreach (ToggleButton page in pages.Toggles)
         {
             page.IsEnabled = false;
         }
@@ -234,6 +227,9 @@ public sealed class ProfilerView : DockPanel
 
     /// <summary>The Frames page of a Godot game's run: its frames as Godot measured them, joined with the C# samples.</summary>
     public GameFramesView GamePage => game;
+
+    /// <summary>The action the empty window offers (Profile), asked for by its link.</summary>
+    public event EventHandler<string>? ActionRequested;
 
     /// <summary>Get Snapshot pressed: end the run and show what it found.</summary>
     public event EventHandler? StopRequested;
@@ -257,7 +253,7 @@ public sealed class ProfilerView : DockPanel
     {
         Memory = snapshot;
         memory.Add(snapshot);
-        pages[(int)ProfilerPage.Memory].IsEnabled = true;
+        pages[ProfilerPage.Memory].IsEnabled = true;
         ShowPage(ProfilerPage.Memory);
     }
 
@@ -266,7 +262,7 @@ public sealed class ProfilerView : DockPanel
     {
         Memory = null;
         memory.Clear();
-        if (pages[(int)ProfilerPage.Memory].IsChecked == true)
+        if (pages.Choice == ProfilerPage.Memory)
         {
             ShowPage(ProfilerPage.Memory);
         }
@@ -291,11 +287,10 @@ public sealed class ProfilerView : DockPanel
         keptFolder = folder;
         kept.ItemsSource = files;
         keptSummary.Text = files.Count == 0
-            ? $"No snapshots yet. Each run's is kept in {folder}, the newest {Snapshots.Kept}."
-            : $"{Plural.Of(files.Count, "snapshot")}, the newest first, kept in {folder}. Past {Snapshots.Kept}, the oldest go.";
-        pages[(int)ProfilerPage.Snapshots].IsEnabled = true;
-        int current = Array.FindIndex(pages, p => p.IsChecked == true);
-        ShowPage(Snapshot is null && Memory is null && !ticking.IsEnabled && files.Count > 0 ? ProfilerPage.Snapshots : (ProfilerPage)Math.Max(0, current));
+            ? $"No snapshots yet. Each run's is kept in {folder}, the newest {Numbers.Said(Snapshots.Kept)}."
+            : $"{Plural.Of(files.Count, "snapshot")}, the newest first, kept in {folder}. Past {Numbers.Said(Snapshots.Kept)}, the oldest go.";
+        pages[ProfilerPage.Snapshots].IsEnabled = true;
+        ShowPage(Snapshot is null && Memory is null && !ticking.IsEnabled && files.Count > 0 ? ProfilerPage.Snapshots : pages.Choice);
     }
 
     private void OpenSpot()
@@ -319,8 +314,8 @@ public sealed class ProfilerView : DockPanel
     {
         TextBlock when = Mono(Muted(string.Empty, 160));
         TextBlock size = Mono(Muted(string.Empty, 100));
-        TextBlock program = new() { VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.SemiBold };
-        ShrinkingRow row = new() { Height = ListRow.Height, Margin = new Thickness(6, 0), Children = { when, size, program } };
+        TextBlock program = new() { Classes = { StyleClasses.Strong }, VerticalAlignment = VerticalAlignment.Center };
+        ShrinkingRow row = new() { Height = ListRow.Height, Margin = new Thickness(Gaps.Small, 0), Children = { when, size, program } };
         return row.Showing<SnapshotFile>(file =>
         {
             when.Text = file.Written.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.CurrentCulture);
@@ -400,6 +395,7 @@ public sealed class ProfilerView : DockPanel
         kill.IsVisible = killable;
         heap.IsVisible = true;
         placeholder.Text = $"Profiling {name}. Get Snapshot when it has done what is to be measured.";
+        placeholder.Offer(null, null);
         ticking.Start();
         if (Snapshot is null)
         {
@@ -415,6 +411,7 @@ public sealed class ProfilerView : DockPanel
         stop.IsVisible = false;
         kill.IsVisible = false;
         heap.IsVisible = false;
+        placeholder.Offer(AppActions.Profile, "Profile");
         if (why is not null)
         {
             status.Text = why;
@@ -446,10 +443,9 @@ public sealed class ProfilerView : DockPanel
         timeline.Snapshot = snapshot;
         timelineBand.IsVisible = true;
         // A snapshot opened from the list is shown, not the list again.
-        if (pages[(int)ProfilerPage.Snapshots].IsChecked == true)
+        if (pages.Choice == ProfilerPage.Snapshots)
         {
-            pages[(int)ProfilerPage.Snapshots].IsChecked = false;
-            pages[(int)ProfilerPage.CallTree].IsChecked = true;
+            pages.Choice = ProfilerPage.CallTree;
         }
         Fill(snapshot);
     }
@@ -474,7 +470,7 @@ public sealed class ProfilerView : DockPanel
             Fill(whole);
             return;
         }
-        status.Text = $"{snapshotName}: reading {span.From - whole.StartMs:N0} to {span.To - whole.StartMs:N0} ms…";
+        status.Text = $"{snapshotName}: reading {Numbers.Fixed(span.From - whole.StartMs, 0)} to {Numbers.Fixed(span.To - whole.StartMs, 0)} ms…";
         // Shown on a later turn of the window's loop even when worked out already, so a choice never fills the views itself.
         Snapshot within = await BackgroundWork.Run(() => whole.Within(span.From, span.To)).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext | ConfigureAwaitOptions.ForceYielding);
         if (chosen == choosing)
@@ -486,15 +482,15 @@ public sealed class ProfilerView : DockPanel
     /// <summary>Shows a snapshot, the whole run's or a stretch of it, in every view but the timeline.</summary>
     private void Fill(Snapshot snapshot)
     {
-        ProfilerPage current = (ProfilerPage)Math.Max(0, Array.FindIndex(pages, p => p.IsChecked == true));
+        ProfilerPage current = pages.Choice;
         Snapshot = snapshot;
         Snapshot whole = snapshot.Whole;
         status.Text = snapshot.FramesAlone
             ? $"{snapshotName}: {Durations.Said(snapshot.Duration)}, {Plural.Of(snapshot.GameFrames.Count, "frame")} as Godot's profiler measured them; no samples, as a game of GDScript alone runs no .NET code"
             : ReferenceEquals(whole, snapshot)
-            ? $"{snapshotName}: {Durations.Said(snapshot.Duration)}, {Plural.Of(snapshot.Threads.Count, "thread")}, {snapshot.Samples:N0} samples{(snapshot.CutShort is null ? string.Empty : ", its trace cut short")}"
-            : $"{snapshotName}: {snapshot.StartMs - whole.StartMs:N0} to {snapshot.EndMs - whole.StartMs:N0} ms of {whole.Duration.TotalMilliseconds:N0}, {snapshot.Samples:N0} samples";
-        foreach (ToggleButton page in pages)
+            ? $"{snapshotName}: {Durations.Said(snapshot.Duration)}, {Plural.Of(snapshot.Threads.Count, "thread")}, {Numbers.Said(snapshot.Samples)} samples{(snapshot.CutShort is null ? string.Empty : ", its trace cut short")}"
+            : $"{snapshotName}: {Numbers.Fixed(snapshot.StartMs - whole.StartMs, 0)} to {Numbers.Fixed(snapshot.EndMs - whole.StartMs, 0)} ms of {Numbers.Fixed(whole.Duration.TotalMilliseconds, 0)}, {Numbers.Said(snapshot.Samples)} samples";
+        foreach (ToggleButton page in pages.Toggles)
         {
             page.IsEnabled = true;
         }
@@ -548,8 +544,8 @@ public sealed class ProfilerView : DockPanel
         collections.ItemsSource = gcs;
         collectionsSummary.Text = gcs.Count == 0
             ? "No garbage collections ran"
-            : $"{gcs.Count} collections ({string.Join(", ", gcs.GroupBy(c => c.Generation).OrderBy(g => g.Key).Select(g => $"{g.Count()} of generation {g.Key}"))}), "
-              + $"the program paused {gcs.Sum(c => c.PauseMs):0.0} ms in all, {gcs.Max(c => c.PauseMs):0.0} ms at the longest";
+            : $"{Numbers.Said(gcs.Count)} collections ({string.Join(", ", gcs.GroupBy(c => c.Generation).OrderBy(g => g.Key).Select(g => $"{Numbers.Said(g.Count())} of generation {g.Key}"))}), "
+              + $"the program paused {Numbers.Fixed(gcs.Sum(c => c.PauseMs), 1)} ms in all, {Numbers.Fixed(gcs.Max(c => c.PauseMs), 1)} ms at the longest";
         ShowPage(shownPage);
     }
 
@@ -592,8 +588,8 @@ public sealed class ProfilerView : DockPanel
     private Control Allocated()
     {
         TextBlock size = Mono(Muted(string.Empty, 170));
-        TextBlock name = new() { VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.SemiBold };
-        ShrinkingRow row = new() { Height = ListRow.Height, Margin = new Thickness(6, 0), Children = { size, name } };
+        TextBlock name = new() { Classes = { StyleClasses.Strong }, VerticalAlignment = VerticalAlignment.Center };
+        ShrinkingRow row = new() { Height = ListRow.Height, Margin = new Thickness(Gaps.Small, 0), Children = { size, name } };
         return row.Showing<AllocatedType>(type =>
         {
             long whole = Snapshot?.Allocations.Sum(a => a.Bytes) ?? 0;
@@ -609,12 +605,12 @@ public sealed class ProfilerView : DockPanel
         TextBlock when = Muted(string.Empty, 110);
         TextBlock pause = Muted(string.Empty, 140);
         TextBlock why = Muted(string.Empty, double.NaN);
-        ShrinkingRow row = new() { Height = ListRow.Height, Margin = new Thickness(6, 0), Children = { what, when, pause, why } };
+        ShrinkingRow row = new() { Height = ListRow.Height, Margin = new Thickness(Gaps.Small, 0), Children = { what, when, pause, why } };
         return row.Showing<Collection>(gc =>
         {
             what.Text = $"#{gc.Number}  generation {gc.Generation}";
-            when.Text = $"at {gc.AtMs:N0} ms";
-            pause.Text = $"paused {gc.PauseMs:0.00} ms";
+            when.Text = $"at {Numbers.Fixed(gc.AtMs, 0)} ms";
+            pause.Text = $"paused {Numbers.Fixed(gc.PauseMs, 2)} ms";
             why.Text = gc.Reason;
         });
     }
@@ -733,17 +729,11 @@ public sealed class ProfilerView : DockPanel
         return true;
     }
 
-    private ToggleButton PageButton(string label)
-    {
-        ToggleButton button = new() { Content = label, Classes = { StyleClasses.PanelTab } };
-        button.Click += (_, _) => ShowPage((ProfilerPage)Array.IndexOf(pages, button));
-        return button;
-    }
-
     /// <summary>Shows a page; the placeholder's words when it has nothing to show.</summary>
     public void ShowPage(ProfilerPage page)
     {
         Page = page;
+        pages.Choice = page;
         Control[] views = [tree, spots, flameScroll, framesPage, allocations, garbage, memory, keptPage];
         bool shown = false;
         for (int i = 0; i < views.Length; i++)
@@ -756,38 +746,28 @@ public sealed class ProfilerView : DockPanel
             });
             views[i].IsVisible = showing;
             shown |= showing;
-            pages[i].IsChecked = i == (int)page;
         }
         placeholder.IsVisible = !shown;
         // The run's timeline goes with its views, not with the list of runs; the Frames page has its frames' own.
         timelineBand.IsVisible = timeline.Snapshot is not null && page is not (ProfilerPage.Snapshots or ProfilerPage.Frames);
     }
 
-    private string Share(int samples) => Snapshot is { Samples: > 0 } shot ? $"{100.0 * samples / shot.Samples,5:0.0}%" : "";
+    private string Share(int samples) => Snapshot is { Samples: > 0 } shot ? $"{Numbers.Fixed(100.0 * samples / shot.Samples, 1),5}%" : "";
 
     /// <summary>A row for whichever call the list hands its container: its chevron, its share and weight, and its method.</summary>
     private Control Row()
     {
-        RowIcon chevron = RowIcon.Chevron();
-        Border toggle = new() { Width = 18, Height = ListRow.Height, Background = Brushes.Transparent, Child = chevron };
+        RowExpander chevron = RowExpander.Of<CallRow>(Toggle);
         TextBlock share = Mono(Muted(string.Empty, 170));
         MethodName method = new();
-        ShrinkingRow line = new() { Height = ListRow.Height, Children = { toggle, share, method.Row } };
-        toggle.PointerPressed += (_, e) =>
-        {
-            if (line.DataContext is CallRow row)
-            {
-                Toggle(row);
-                e.Handled = true;
-            }
-        };
+        ShrinkingRow line = new() { Height = ListRow.Height, Children = { chevron, share, method.Row } };
         return line.Showing<CallRow>(row =>
         {
-            line.Margin = new Thickness(row.Depth * 14, 0, 0, 0);
-            chevron.IsVisible = row.Node.Children.Count > 0;
-            chevron.Turned = row.IsExpanded;
-            string percent = row.Whole > 0 ? $"{100.0 * row.Node.Total / row.Whole,5:0.0}%" : string.Empty;
-            share.Text = $"{percent}  {row.Node.Total * row.Scale,7:N0} {row.Unit}";
+            line.Margin = new Thickness(row.Depth * Gaps.Indent, 0, 0, 0);
+            chevron.Expands = row.Node.Children.Count > 0;
+            chevron.IsOpen = row.IsExpanded;
+            string percent = row.Whole > 0 ? $"{Numbers.Fixed(100.0 * row.Node.Total / row.Whole, 1),5}%" : string.Empty;
+            share.Text = $"{percent}  {Numbers.Fixed(row.Node.Total * row.Scale, 0),7} {row.Unit}";
             method.Show(row.Node.Name, row.Depth == 0);
         });
     }
@@ -797,14 +777,14 @@ public sealed class ProfilerView : DockPanel
     {
         TextBlock own = Mono(Muted(string.Empty, 170));
         TextBlock total = Muted(string.Empty, 110);
-        total.FontSize = 12;
+        total.Classes.Add(StyleClasses.Caption);
         MethodName method = new();
-        ShrinkingRow row = new() { Height = ListRow.Height, Margin = new Thickness(6, 0), Children = { own, total, method.Row } };
+        ShrinkingRow row = new() { Height = ListRow.Height, Margin = new Thickness(Gaps.Small, 0), Children = { own, total, method.Row } };
         return row.Showing<HotSpot>(spot =>
         {
             double sampleMs = Snapshot?.SampleMs ?? 1;
-            own.Text = $"{Share(spot.Self)}  {spot.Self * sampleMs,7:N0} ms";
-            total.Text = $"{spot.Total * sampleMs,7:N0} ms in all";
+            own.Text = $"{Share(spot.Self)}  {Numbers.Fixed(spot.Self * sampleMs, 0),7} ms";
+            total.Text = $"{Numbers.Fixed(spot.Total * sampleMs, 0),7} ms in all";
             method.Show(spot.Name, false);
         });
     }
@@ -825,7 +805,7 @@ public sealed class ProfilerView : DockPanel
             {
                 before.IsVisible = false;
                 own.Text = name;
-                own.FontWeight = thread ? FontWeight.SemiBold : FontWeight.Normal;
+                own.Classes.Set(StyleClasses.Strong, thread);
                 return;
             }
             string bare = name.Split('(')[0];
@@ -834,15 +814,14 @@ public sealed class ProfilerView : DockPanel
             before.IsVisible = true;
             before.Text = owner;
             own.Text = name[owner.Length..];
-            own.FontWeight = FontWeight.SemiBold;
+            own.Classes.Set(StyleClasses.Strong, true);
         }
     }
 
     /// <summary>Words in the code font, at the size of a row's numbers.</summary>
     private static TextBlock Mono(TextBlock block)
     {
-        block.InCodeFont();
-        block.FontSize = 12;
+        block.Classes.Add(StyleClasses.Code);
         return block;
     }
 

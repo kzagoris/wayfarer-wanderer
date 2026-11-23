@@ -56,6 +56,11 @@ internal sealed class AssistContext(EditorArea editors, Func<CSharpService?> ser
 
     public event EventHandler<Uri>? Browsed;
 
+    public event EventHandler<object>? Followed;
+
+    /// <summary>The keys that follow a link, as a tip shows them; null with none.</summary>
+    public Func<string?> FollowKeys { get; set; } = () => null;
+
     public event EventHandler<string>? Played;
 
     public CodeEditor Editor => editors.CodeEditor;
@@ -92,23 +97,19 @@ internal sealed class AssistContext(EditorArea editors, Func<CSharpService?> ser
     /// a command (<paramref name="what"/>), while the server cannot take it.</summary>
     public LspDocument? Ask(string? what = null)
     {
-        if (Current is not { } current)
+        if (what is not null && Unready(what) is { } unready)
         {
-            return null;
+            Say(unready);
         }
-        if (current.Lsp is null && what is not null)
-        {
-            if (current is WebDocument && Web?.Invoke() is { } web && editors.Active is { } shown)
-            {
-                Say(web.Unready(what, shown));
-            }
-            else if (service() is { } csharp)
-            {
-                Say(csharp.Unready(what));
-            }
-        }
-        return current.Lsp;
+        return Current?.Lsp;
     }
+
+    /// <summary>Why a command (<paramref name="what"/>) gets no server's document for the file shown, a server's file it
+    /// cannot take yet, in the status bar's words; null where it has one, or no server reads the file.</summary>
+    public string? Unready(string what) => Current is not { Lsp: null } current ? null
+        : current is WebDocument && Web?.Invoke() is { } web && editors.Active is { } shown ? web.Unready(what, shown)
+        : service() is { } csharp ? csharp.Unready(what, editors.Active)
+        : null;
 
     /// <summary>An open file's server document as it is now, for what the person chose from an answer (a fix, a new
     /// name): the server that answered may have been started again while they chose.</summary>
@@ -138,6 +139,15 @@ internal sealed class AssistContext(EditorArea editors, Func<CSharpService?> ser
         (IReadOnlyList<(string Path, string Project)> left, bool waited) = await csharp.ReachedAsync(edit, Patience.Limit, SayWaiting, CancellationToken.None);
         return (NotTakenIn(left), waited);
     }
+
+    /// <summary>Waits, for a question of another language's file that its project's C# answers (a MAUI page's expression),
+    /// until the server holds in their projects the C# files come under the projects the file sees (<see
+    /// cref="CSharpService.SeenFrom"/>), for up to <see cref="Patience.Limit"/>, the status bar saying which meanwhile. Why
+    /// not when the time is up, else null.</summary>
+    public async Task<string?> TakenInAsync(string path) =>
+        CSharp is { IsReady: true, Arriving: true } csharp
+            ? NotTakenIn(await csharp.UnplacedAsync(Patience.Limit, looking: false, csharp.SeenFrom(path), SayWaiting, CancellationToken.None))
+            : null;
 
     /// <summary>For a question about an offset of a C# file (Find Usages): waits until the server holds the file itself in
     /// its project, if it just came, for up to <see cref="Patience.Limit"/>; then the C# files come under the projects that
@@ -226,6 +236,9 @@ internal sealed class AssistContext(EditorArea editors, Func<CSharpService?> ser
 
     /// <summary>A page to open in the browser: an ESLint rule's, an image's registry page.</summary>
     public void Browse(Uri page) => Browsed?.Invoke(this, page);
+
+    /// <summary>A link to follow: an address written in a file's comment or string, by what it opens.</summary>
+    public void Follow(object target) => Followed?.Invoke(this, target);
 
     /// <summary>A sound file to play: one a path in the code names, its card's Play pressed.</summary>
     public void Play(string file) => Played?.Invoke(this, file);

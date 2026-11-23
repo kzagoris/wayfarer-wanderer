@@ -60,7 +60,8 @@ public sealed record LaunchArguments
     public bool? StopAtEntry { get; init; }
     public bool? JustMyCode { get; init; }
 
-    /// <summary>internalConsole (the output comes as events), integratedTerminal or externalTerminal.</summary>
+    /// <summary>Where the program reads and writes (<see cref="ConsoleKinds"/>), the debug console where none is given.</summary>
+    [IdentifierOf(typeof(ConsoleKinds))]
     public string? Console { get; init; }
 
     /// <summary>Passenger's own: the program's code may be changed as it runs (Hot Reload, applyChanges). The runtime is
@@ -69,6 +70,15 @@ public sealed record LaunchArguments
 
     /// <summary>Passenger's own: how the values of types that carry no debugger attributes of their own are shown.</summary>
     public IReadOnlyList<DapTypePresentation>? Presentations { get; init; }
+
+    /// <summary>Passenger's own: the assemblies, by name, that Passenger carries into the program (its inspectors, its Hot
+    /// Reload and test hooks), which the debugger never takes for the user's code, however they were built.</summary>
+    public IReadOnlyList<string>? Carried { get; init; }
+
+    /// <summary>Passenger's own: the folders whose source the user writes (the open folder and the projects lent beside it): a
+    /// module whose symbols name a file under one of them is the user's code however it was built, a Release build's
+    /// compiled unoptimized as it loads where the runtime still lets it be, so steps stop in it as in a Debug build.</summary>
+    public IReadOnlyList<string>? Own { get; init; }
 
     /// <summary>Passenger's own: no one is to see the program's windows (an agent's Godot game, drawn for its frames, or a
     /// desktop app a Passenger nobody sees runs): on Windows it runs on a desktop of its own, which nobody switches to.</summary>
@@ -86,6 +96,15 @@ public sealed record AttachArguments
 
     /// <summary>Passenger's own: how the values of types that carry no debugger attributes of their own are shown.</summary>
     public IReadOnlyList<DapTypePresentation>? Presentations { get; init; }
+
+    /// <summary>Passenger's own: the assemblies, by name, that Passenger carries into the program (its inspectors, its Hot
+    /// Reload and test hooks), which the debugger never takes for the user's code, however they were built.</summary>
+    public IReadOnlyList<string>? Carried { get; init; }
+
+    /// <summary>Passenger's own: the folders whose source the user writes (the open folder and the projects lent beside it): a
+    /// module whose symbols name a file under one of them is the user's code however it was built, a Release build's
+    /// compiled unoptimized as it loads where the runtime still lets it be, so steps stop in it as in a Debug build.</summary>
+    public IReadOnlyList<string>? Own { get; init; }
 
     /// <summary>Passenger's own: an app on a device or simulator, reached through Passenger's relay inside it at this
     /// host:port, in place of <see cref="ProcessId"/>.</summary>
@@ -311,7 +330,8 @@ public sealed record DapStackFrame
     public int? EndLine { get; init; }
     public int? EndColumn { get; init; }
 
-    /// <summary>"subtle" for a frame outside the user's code.</summary>
+    /// <summary><see cref="FrameHints.Subtle"/> for a frame outside the user's code.</summary>
+    [IdentifierOf(typeof(FrameHints))]
     public string? PresentationHint { get; init; }
 
     /// <summary>This debugger's own: false for a frame with no source yet, which resolveStackFrame
@@ -355,9 +375,16 @@ public sealed record DapVariable
     public string? Unsettable { get; init; }
 }
 
-/// <summary>How a variable shows: its kind ("virtual" for a row the adapter adds), its attributes, and whether it is lazy, its
-/// value read only as it is opened (its reference then names one variable, the value in its place).</summary>
-public sealed record DapPresentationHint(string? Kind = null, IReadOnlyList<string>? Attributes = null, string? Visibility = null, bool? Lazy = null);
+/// <summary>How a variable shows: its kind (<see cref="PresentationHintKinds"/>), its attributes (<see cref="DapAttributes"/>),
+/// and whether it is lazy, its value read only as it is opened (its reference then names one variable, the value in its
+/// place).</summary>
+public sealed record DapPresentationHint(
+    [IdentifierOf(typeof(PresentationHintKinds))][property: IdentifierOf(typeof(PresentationHintKinds))] string? Kind = null,
+    IReadOnlyList<string>? Attributes = null, string? Visibility = null, bool? Lazy = null)
+{
+    /// <summary>Whether it carries an attribute.</summary>
+    public bool Has([IdentifierOf(typeof(DapAttributes))] string attribute) => Attributes?.Contains(attribute) == true;
+}
 
 /// <summary>An evaluation; Passenger's own <paramref name="LetThreadsRun"/> runs it with every thread of the program let go,
 /// which the person asks for where one with the others held did not end (<see cref="DapAttributes.NeedsThreads"/>).</summary>
@@ -467,7 +494,7 @@ public sealed record DapExceptionDetails
 }
 
 /// <summary>The adapter's request to the client, to start the program in a terminal.</summary>
-public sealed record RunInTerminalArguments(string Kind, string Title, string? Cwd, IReadOnlyList<string> Args, IReadOnlyDictionary<string, string>? Env);
+public sealed record RunInTerminalArguments([IdentifierOf(typeof(RunInTerminalKinds))][property: IdentifierOf(typeof(RunInTerminalKinds))] string Kind, string Title, string? Cwd, IReadOnlyList<string> Args, IReadOnlyDictionary<string, string>? Env);
 
 public sealed record RunInTerminalResponse(int? ProcessId = null, int? ShellProcessId = null);
 
@@ -486,7 +513,8 @@ public sealed record StoppedEvent
     public string Reason { get; init; } = StopReasons.Unknown;
     public string? Description { get; init; }
 
-    /// <summary>More on the stop: at a data breakpoint, the value it watches before and after the write.</summary>
+    /// <summary>More on the stop: at a data breakpoint, the value it watches before and after the write; at a stop made of
+    /// an event the debugger failed to handle, why.</summary>
     public string? Text { get; init; }
     public int? ThreadId { get; init; }
     public bool? AllThreadsStopped { get; init; }

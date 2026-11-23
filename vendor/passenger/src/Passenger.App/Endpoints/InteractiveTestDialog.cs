@@ -1,8 +1,10 @@
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Passenger.Core;
 using Passenger.Editor;
 
 namespace Passenger.App.Endpoints;
@@ -16,7 +18,7 @@ public sealed class InteractiveTestDialog : IdeWindow
     private readonly EndpointsView endpoints;
     private readonly TextBlock problem = new() { TextWrapping = TextWrapping.Wrap, MaxWidth = 520 };
     private static readonly string[] TabNames = ["Params", "Headers", "Body", "Expected"];
-    private readonly ToggleButton[] tabs;
+    private readonly ToolWindows.ToolTabs.Strip<int> tabs = new();
     private readonly Control[] pages;
 
     /// <summary>The request opened, sent through the Endpoints window in the variables of the environment chosen
@@ -27,7 +29,7 @@ public sealed class InteractiveTestDialog : IdeWindow
         this.endpoints = endpoints;
         string? environment = endpoints.Environment;
         Title = $"Interactive Test: {request.Title}";
-        Width = 1040;
+        Width = DialogWidths.Workspace;
         Height = 640;
         MinWidth = 640;
         MinHeight = 420;
@@ -58,7 +60,7 @@ public sealed class InteractiveTestDialog : IdeWindow
 
         DockPanel urlRow = new() { Children = { Method, Url } };
         DockPanel.SetDock(Method, Dock.Left);
-        Method.Margin = new Thickness(0, 0, 8, 0);
+        Method.Margin = new Thickness(0, 0, Gaps.Normal, 0);
 
         pages =
         [
@@ -67,32 +69,31 @@ public sealed class InteractiveTestDialog : IdeWindow
             Page(Body, null),
             Page(Criteria, "One criterion a line; with none, an answer below 400 passes"),
         ];
-        tabs = [.. TabNames.Select((name, i) => ToolWindows.ToolTabs.Tab(name, i == 0))];
-        for (int i = 0; i < tabs.Length; i++)
+        for (int i = 0; i < TabNames.Length; i++)
         {
-            int page = i;
-            tabs[i].Click += (_, _) => ShowPage(page);
+            tabs.Add(i, TabNames[i]);
         }
-        StackPanel tabRow = new() { Orientation = Orientation.Horizontal, Spacing = 4 };
-        tabRow.Children.AddRange(tabs);
+        tabs.Chosen += (_, page) => ShowPage(page);
         Panel pageArea = new();
         pageArea.Children.AddRange(pages);
 
-        Grid fields = new() { RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*,Auto"), RowSpacing = 6 };
+        Grid fields = new() { RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*,Auto"), RowSpacing = Gaps.Small };
         Add(fields, urlRow, 0);
         Add(fields, Caption(environment is null ? "No environment: {{variables}} take the file's values" : $"Variables from the {environment} environment and the file"), 1);
-        Add(fields, tabRow, 2);
+        Add(fields, tabs, 2);
         Add(fields, pageArea, 3);
+        TextBlock timeoutLabel = new() { Text = "Timeout (s)", VerticalAlignment = VerticalAlignment.Center };
+        AutomationProperties.SetLabeledBy(Timeout, timeoutLabel);
         // Wrapped, so a narrow request pane puts the check boxes under the timeout rather than past the divider.
         WrapPanel options = new()
         {
             Orientation = Orientation.Horizontal,
-            ItemSpacing = 16,
-            LineSpacing = 6,
-            Margin = new Thickness(0, 4, 0, 0),
+            ItemSpacing = Gaps.Group,
+            LineSpacing = Gaps.Small,
+            Margin = new Thickness(0, Gaps.Tight, 0, 0),
             Children =
             {
-                new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { new TextBlock { Text = "Timeout (s)", VerticalAlignment = VerticalAlignment.Center }, Timeout } },
+                new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gaps.Normal, Children = { timeoutLabel, Timeout } },
                 FollowRedirects,
                 AcceptAnyCertificate,
             },
@@ -104,11 +105,11 @@ public sealed class InteractiveTestDialog : IdeWindow
 
         Response = new ResponseView("Send to see the response");
         Grid panes = new() { ColumnDefinitions = new ColumnDefinitions("*,1,*"), Margin = new Thickness(0) };
-        fields.Margin = new Thickness(16, 16, 12, 12);
+        fields.Margin = new Thickness(Gaps.Group, Gaps.Group, Gaps.Wide, Gaps.Wide);
         panes.Children.Add(fields);
         panes.Children.Add(new HairlineDivider(GridResizeDirection.Columns) { [Grid.ColumnProperty] = 1 });
         Response[Grid.ColumnProperty] = 2;
-        Response.Margin = new Thickness(4, 8, 8, 8);
+        Response.Margin = new Thickness(Gaps.Tight, Gaps.Normal, Gaps.Normal, Gaps.Normal);
         panes.Children.Add(Response);
 
         Send = new Button { Content = "Send", IsDefault = true, Classes = { StyleClasses.Primary } };
@@ -198,9 +199,9 @@ public sealed class InteractiveTestDialog : IdeWindow
     /// <summary>Shows a tab's page: 0 Params, 1 Headers, 2 Body, 3 Expected.</summary>
     public void ShowPage(int page)
     {
-        for (int i = 0; i < tabs.Length; i++)
+        tabs.Choice = page;
+        for (int i = 0; i < pages.Length; i++)
         {
-            tabs[i].IsChecked = i == page;
             pages[i].IsVisible = i == page;
         }
     }
@@ -209,17 +210,14 @@ public sealed class InteractiveTestDialog : IdeWindow
     public int PageShown => Array.FindIndex(pages, p => p.IsVisible);
 
     /// <summary>The tabs' names as shown, each with how many rows or criteria it holds: Params (2).</summary>
-    public IReadOnlyList<string> TabTitles => [.. tabs.Select(t => (t.Content as TextBlock)?.Text ?? string.Empty)];
+    public IReadOnlyList<string> TabTitles => [.. tabs.Toggles.Select(t => t.Content as string ?? string.Empty)];
 
     private void Count()
     {
         int[] counts = [Params.Enabled.Count, Headers.Enabled.Count, 0, Lines(Criteria.Text).Count()];
-        for (int i = 0; i < tabs.Length; i++)
+        for (int i = 0; i < TabNames.Length; i++)
         {
-            if (tabs[i].Content is TextBlock title)
-            {
-                title.Text = counts[i] > 0 ? $"{TabNames[i]} ({counts[i]})" : TabNames[i];
-            }
+            tabs[i].Content = counts[i] > 0 ? $"{TabNames[i]} ({Numbers.Said(counts[i])})" : TabNames[i];
         }
     }
 
@@ -281,7 +279,7 @@ public sealed class InteractiveTestDialog : IdeWindow
             return content;
         }
         TextBlock note = Caption(caption);
-        note.Margin = new Thickness(0, 6, 0, 0);
+        note.Margin = new Thickness(0, Gaps.Small, 0, 0);
         DockPanel.SetDock(note, Dock.Bottom);
         return new DockPanel { Children = { note, content } };
     }
@@ -291,10 +289,9 @@ public sealed class InteractiveTestDialog : IdeWindow
 
     private static TextBox Mono(string text, bool multiline)
     {
-        TextBox box = new TextBox { Text = text, FontSize = 12, AcceptsReturn = multiline, TextWrapping = TextWrapping.NoWrap }.InCodeFont();
+        TextBox box = new TextBox { Classes = { StyleClasses.Code }, Text = text, AcceptsReturn = multiline, TextWrapping = TextWrapping.NoWrap };
         if (multiline)
         {
-            box.VerticalContentAlignment = VerticalAlignment.Top;
             ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Auto);
             ScrollViewer.SetHorizontalScrollBarVisibility(box, ScrollBarVisibility.Auto);
         }
@@ -303,7 +300,7 @@ public sealed class InteractiveTestDialog : IdeWindow
 
     private static TextBlock Caption(string text)
     {
-        TextBlock caption = new() { Text = text, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis };
+        TextBlock caption = new() { Classes = { StyleClasses.Caption }, Text = text, TextTrimming = TextTrimming.CharacterEllipsis };
         Paint(caption, TokenKeys.TextMuted);
         return caption;
     }

@@ -67,7 +67,11 @@ public sealed partial class LiveTreeController
     public LiveTreeController(LiveTreeParts parts)
     {
         this.parts = parts;
-        window = new ToolWindow(ToolWindowIds.LiveTree, "Live Visual Tree", IconKeys.LiveTree, Make, ToolAnchor.RightTop) { Action = AppActions.ShowLiveTree };
+        window = new ToolWindow(ToolWindowIds.LiveTree, "Live Visual Tree", IconKeys.LiveTree, Make, ToolAnchor.RightTop)
+        {
+            Serves = ToolWindowServes.InspectedApps,
+            Action = AppActions.ShowLiveTree,
+        };
         parts.Dock.Add(window);
         window.PropertyChanged += OnWindowChanged;
         parts.Actions.Add(new IdeAction(AppActions.SelectElement, "Select Element", "Debug", context => IdeErrors.Observe(PickAsync(!picking)))
@@ -159,7 +163,7 @@ public sealed partial class LiveTreeController
         }
         made.ShowStatus(status.Message, status.Line);
         made.ShowBanner(banner);
-        made.ShowMonitors(monitorsShown);
+        made.ShowMonitors(monitorsShown, MonitorsComing);
         made.ShowCharts(charting && app is Godot.GodotGame ? monitorCharts : null);
         made.ChartsRequested += (_, _) =>
         {
@@ -200,8 +204,11 @@ public sealed partial class LiveTreeController
     private void ShowMonitors(string? text)
     {
         monitorsShown = text;
-        view?.ShowMonitors(text);
+        view?.ShowMonitors(text, MonitorsComing);
     }
+
+    /// <summary>Whether a game followed is still to send its first monitors, which come a second after it connects.</summary>
+    private bool MonitorsComing => monitorsShown is null && app is Godot.GodotGame { State: LiveAppState.Waiting or LiveAppState.Connected };
 
     private void ShowBanner(string? text)
     {
@@ -602,6 +609,7 @@ public sealed partial class LiveTreeController
                 ShowStatus($"Waiting for {app.Name} to show its windows…", null);
                 break;
             case { State: LiveAppState.Refused }:
+                ShowMonitors(null);
                 ShowStatus(app.Problem, null);
                 break;
             case { State: LiveAppState.Ended }:
@@ -1169,7 +1177,7 @@ public sealed partial class LiveTreeController
         }
         if (on)
         {
-            parts.Say($"Select Element: point at a control in {live.Name} and click it, or press Escape there");
+            parts.Say($"Select Element: point at a control in {live.Name} and click it, or press {KeyWords.Of(Avalonia.Input.Key.Escape)} there");
         }
     }
 

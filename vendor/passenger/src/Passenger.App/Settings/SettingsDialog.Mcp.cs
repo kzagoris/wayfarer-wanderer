@@ -1,9 +1,9 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Passenger.App.Mcp;
+using Passenger.App.ToolWindows;
 
 namespace Passenger.App.Settings;
 
@@ -22,15 +22,18 @@ public sealed partial class SettingsDialog
     public Button RemoveAgentFolderButton { get; } = new() { Content = "Remove", IsEnabled = false };
 
     /// <summary>Each setup's Copy button, by its heading.</summary>
-    public IReadOnlyDictionary<string, Button> CopyButtons => copyButtons;
+    public IReadOnlyDictionary<string, CopyButton> CopyButtons => copyButtons;
 
-    private readonly Dictionary<string, Button> copyButtons = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, CopyButton> copyButtons = new(StringComparer.Ordinal);
+
+    /// <summary>The setups' Copy buttons together, only the last to copy saying Copied.</summary>
+    private readonly List<CopyButton> setupCopies = [];
 
     private void AddAgents(AgentSetup setup)
     {
         Add(Declared.McpServer);
 
-        TextBlock none = new() { Classes = { StyleClasses.EmptyText }, Text = "None: a window asks before it lets an agent in" };
+        EmptyState none = new("None: a window asks before it lets an agent in");
         void List()
         {
             AgentFolderList.ItemsSource = Working.AgentFolders.ToArray();
@@ -49,7 +52,7 @@ public sealed partial class SettingsDialog
         List();
         StackPanel folders = new()
         {
-            Spacing = 6,
+            Spacing = Gaps.Small,
             MaxWidth = OptionRow.EditorWidth,
             Children =
             {
@@ -64,11 +67,11 @@ public sealed partial class SettingsDialog
 
         Control heading = Column(new StackPanel
         {
-            Spacing = 4,
-            Margin = new Thickness(0, 12, 0, 0),
+            Spacing = Gaps.Tight,
+            Margin = new Thickness(0, Gaps.Wide, 0, 0),
             Children =
             {
-                new TextBlock { Text = "Set up an agent", FontWeight = FontWeight.SemiBold },
+                new TextBlock { Classes = { StyleClasses.PaneTitle }, Text = "Set up an agent" },
                 MutedText.Wrapped("Each runs this copy of Passenger, by its own path, with --mcp-attach. An agent has Passenger's tools from its "
                     + "start; its first call joins the window open on the folder it works in, or opens that folder in Passenger, "
                     + "starting it if need be, in a window you see. That window asks you before it lets the agent in and before "
@@ -110,34 +113,20 @@ public sealed partial class SettingsDialog
         void AddBlock(Control row, string title, string words) => options.Add(new Option(McpPage, title, row, $"{McpPage} {title} {words}"));
     }
 
-    /// <summary>A setup's text to the clipboard, its Copy then saying Copied and every other setup's Copy again.</summary>
-    private async Task CopySetupAsync(Button copy, string text)
-    {
-        if (Clipboard is { } clipboard)
-        {
-            await clipboard.SetTextAsync(text);
-        }
-        foreach (Button other in copyButtons.Values)
-        {
-            other.Content = other == copy ? "Copied" : "Copy";
-        }
-    }
-
     /// <summary>One agent's setup: its heading with Copy at the right, what to do with it, and the text to copy as code.</summary>
     private Control SetupBlock(string title, string text, string note)
     {
-        Button copy = new() { Content = "Copy" };
+        CopyButton copy = new("Copy", setupCopies) { Text = text };
         copyButtons[title] = copy;
-        copy.Click += (_, _) => IdeErrors.Observe(CopySetupAsync(copy, text));
         DockPanel head = new();
         DockPanel.SetDock(copy, Dock.Right);
         head.Children.Add(copy);
-        head.Children.Add(new TextBlock { Text = title, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+        head.Children.Add(new TextBlock { Classes = { StyleClasses.PaneTitle }, Text = title, VerticalAlignment = VerticalAlignment.Center });
         return Column(new StackPanel
         {
-            Spacing = 6,
-            Margin = new Thickness(0, 8, 0, 0),
-            Children = { head, MutedText.Wrapped(note), CodeBlock.Of(text) },
+            Spacing = Gaps.Small,
+            Margin = new Thickness(0, Gaps.Normal, 0, 0),
+            Children = { head, MutedText.Wrapped(note), ColouredCode.Plain(text) },
         });
     }
 

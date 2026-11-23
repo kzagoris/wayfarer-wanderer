@@ -5,6 +5,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Passenger.App.ToolWindows;
+using Passenger.Core;
 using Passenger.Editor;
 using Passenger.Languages.CSharp;
 
@@ -20,12 +21,12 @@ public sealed class UsagesPopup : SearchPopup<Usage>
     private readonly string? note;
 
     public UsagesPopup(string title, IReadOnlyList<Usage> usages, string? note)
-        : base($"{title}  {Core.Plural.Of(usages.Count, "usage")}{(usages.Count(u => u.Generated) is > 0 and int made ? $", {made} in generated code" : string.Empty)}",
+        : base($"{title}  {Core.Plural.Of(usages.Count, "usage")}{(usages.Count(u => u.Generated) is > 0 and int made ? $", {Numbers.Said(made)} in generated code" : string.Empty)}",
             "A file's name or code", PopupFrame.Wide)
     {
         all = [.. usages.OrderBy(u => u.Generated).ThenBy(u => u.Kind == UsageKind.Declaration ? 0 : 1).ThenBy(u => u.Path, StringComparer.Ordinal).ThenBy(u => u.Line).ThenBy(u => u.Column)];
         this.note = note;
-        FindWindow = new Button { Classes = { StyleClasses.Link }, Content = "Open in Find Window", Focusable = false, VerticalAlignment = VerticalAlignment.Center };
+        FindWindow = new Button { Classes = { StyleClasses.Link, StyleClasses.Caption }, Content = "Open in Find Window", VerticalAlignment = VerticalAlignment.Center };
         FindWindow.Click += (_, _) => FindWindowRequested?.Invoke(this, EventArgs.Empty);
         AddToHeading(FindWindow);
         QueryChanged();
@@ -62,15 +63,13 @@ public sealed class UsagesPopup : SearchPopup<Usage>
     /// there at the right, muted.</summary>
     protected override Control Row()
     {
-        RowIcon icon = new() { Width = 14, Height = 14, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
-        TextBlock place = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
-        TextBlock code = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis }.InCodeFont();
-        TextBlock kind = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 4, 0) };
-        kind.Classes.Add(StyleClasses.Muted);
-        DockPanel row = new() { Height = ListRow.Height, Margin = new Thickness(4, 0) };
+        RowIcon icon = new() { Margin = new Thickness(0, 0, Gaps.Small, 0), VerticalAlignment = VerticalAlignment.Center };
+        TextBlock place = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, Gaps.Wide, 0) };
+        TextBlock code = new() { Classes = { StyleClasses.Code }, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+        TextBlock kind = ListRow.DetailText();
+        DockPanel row = new() { Height = ListRow.Height, Margin = ListRow.Inset };
         DockPanel.SetDock(icon, Dock.Left);
         DockPanel.SetDock(place, Dock.Left);
-        DockPanel.SetDock(kind, Dock.Right);
         row.Children.Add(icon);
         row.Children.Add(place);
         row.Children.Add(kind);

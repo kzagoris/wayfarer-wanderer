@@ -64,7 +64,7 @@ public sealed record FilesFound(IReadOnlyList<SearchMatch> Matches, IReadOnlyLis
 
     /// <summary>Where the search stopped, each file named as <paramref name="name"/> gives it; null when it stopped nowhere.</summary>
     public string? StoppedIn(Func<string, string> name) =>
-        Stopped.Count == 0 ? null : $"the regex took too long and stopped in {string.Join(", ", Stopped.Select(name))}";
+        Stopped.Count == 0 ? null : Refusals.RegexStoppedIn(string.Join(", ", Stopped.Select(name)));
 }
 
 /// <summary>What Replace in Files did beyond the matches: the files written as UTF-8 since their encoding could not hold
@@ -83,7 +83,7 @@ public sealed record FilesReplaced(IReadOnlyList<string> Converted, IReadOnlyLis
     public IReadOnlyList<SearchMatch> Replaced(IEnumerable<SearchMatch> matches) => [.. matches.Where(m => !Refused.Any(r => r.Path == m.Path))];
 
     /// <summary>How many matches in how many files, as the window and an agent are told.</summary>
-    public static string Count(IReadOnlyCollection<SearchMatch> matches)
+    public static string Said(IReadOnlyCollection<SearchMatch> matches)
     {
         int files = matches.Select(m => m.Path).Distinct().Count();
         return $"{Plural.Of(matches.Count, "match", "matches")} in {Plural.Of(files, "file")}";
@@ -335,11 +335,12 @@ public static class FileSearch
     /// <summary>Why a file written since it was searched is left as it was.</summary>
     public const string ChangedWhy = "edited while it was searched";
 
-    /// <summary>Why a read-only file is left as it was: one marked so on disk, or one the editor shows read-only.</summary>
+    /// <summary>Why a read-only file is left as it was: one marked so on disk, or one the editor shows read-only, by where it
+    /// lies or in its tab (a package's names its package, <see cref="ReadOnlyFiles.Why"/>).</summary>
     public const string ReadOnlyWhy = "read-only";
 
     /// <summary>Why a file a regex ran too long in is left as it was.</summary>
-    public const string StoppedWhy = "the regex took too long there";
+    public const string StoppedWhy = Refusals.RegexStopped;
 
     /// <summary>Why a file outside the folder searched, which a link inside it leads to, is left as it was.</summary>
     public const string OutsideWhy = "outside the folder, where a link in it leads";

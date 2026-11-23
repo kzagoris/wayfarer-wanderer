@@ -3,6 +3,8 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Passenger.App.ToolWindows;
+using Passenger.Core;
 using Passenger.Roslyn.Extension;
 using Passenger.Workspace;
 
@@ -37,8 +39,8 @@ public sealed class RunConfigurationsDialog : IdeWindow
     private readonly Action<IReadOnlyList<RunConfiguration>, IReadOnlyList<RunConfiguration>, string?> apply;
     private readonly IReadOnlyList<string> singleFileAppHosts;
     private readonly ListBox list = new() { Classes = { StyleClasses.Tree } };
-    private readonly StackPanel variables = new() { Spacing = 4 };
-    private readonly StackPanel linkedAppHosts = new() { Spacing = 4 };
+    private readonly StackPanel variables = new() { Spacing = Gaps.Tight };
+    private readonly StackPanel linkedAppHosts = new() { Spacing = Gaps.Tight };
     private readonly Control linkedRow;
     private readonly Control aspireRow;
     private readonly Control godotRow;
@@ -62,14 +64,14 @@ public sealed class RunConfigurationsDialog : IdeWindow
     private readonly TextBlock note = new() { TextWrapping = TextWrapping.Wrap, Classes = { StyleClasses.Muted } };
     private readonly TextBlock problem = new() { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
     private readonly Control form;
-    private readonly TextBlock nothing = new() { Text = "No configuration is chosen", Classes = { StyleClasses.Muted }, Margin = new Thickness(0, 8) };
+    private readonly EmptyState nothing = new("No configuration is chosen");
 
     /// <summary>Each row's label (or a box's own words) with the fields it shows, by the store's names, marked when the
     /// generated configuration chosen has one changed from its source.</summary>
     private readonly List<(TextBlock Label, string Title, string[] Fields)> marks = [];
 
     /// <summary>What the chosen generated configuration has changed from its source, with Write to Launch Profile and Reset.</summary>
-    private readonly StackPanel changes = new() { Spacing = 6 };
+    private readonly StackPanel changes = new() { Spacing = Gaps.Small };
     private readonly TextBlock changesText = new() { TextWrapping = TextWrapping.Wrap };
 
     /// <summary>What the last Write to Launch Profile did, said in place of the changes until the configuration changes
@@ -100,7 +102,7 @@ public sealed class RunConfigurationsDialog : IdeWindow
             .Select(c => c.Project).Distinct(StringComparer.Ordinal)];
         this.apply = apply;
         Title = "Run/Debug Configurations";
-        Width = 980;
+        Width = DialogWidths.Workspace;
         Height = 660;
         MinWidth = 700;
         MinHeight = 440;
@@ -123,20 +125,20 @@ public sealed class RunConfigurationsDialog : IdeWindow
         };
 
         NameBox = Field();
-        ProjectBox = new ComboBox { Classes = { StyleClasses.Form } };
-        FrameworkBox = new ComboBox { Classes = { StyleClasses.Form } };
-        BuildConfigurationBox = new ComboBox { Classes = { StyleClasses.Form }, Name = "BuildConfigurationBox" };
+        ProjectBox = new FormDropDown();
+        FrameworkBox = new FormDropDown();
+        BuildConfigurationBox = new FormDropDown { Name = "BuildConfigurationBox" };
         ToolTip.SetTip(BuildConfigurationBox, "What its run builds, evaluates and starts as, in place of the build configuration the folder builds as");
-        ProfileBox = new ComboBox { Classes = { StyleClasses.Form } };
+        ProfileBox = new FormDropDown();
         SaveAsProfileButton = new Button { Name = "SaveAsProfileButton", IsVisible = false };
         SaveAsProfileButton.Click += (_, _) => SaveAsLaunchProfile();
         ReusedRows.Use(ProjectBox, () =>
         {
-            TextBlock name = new();
-            return name.Showing<object>(item => name.Text = item is ProjectModel p ? p.Name : item.ToString());
+            ProjectLabel named = new();
+            return named.Showing<object>(named.Show);
         });
-        GodotBox = new ComboBox { Classes = { StyleClasses.Form }, ItemsSource = godotStartItems, Name = "GodotBox" };
-        SceneBox = new ComboBox { Classes = { StyleClasses.Form }, ItemsSource = SceneStarts, Name = "SceneBox" };
+        GodotBox = new FormDropDown { ItemsSource = godotStartItems, Name = "GodotBox" };
+        SceneBox = new FormDropDown { ItemsSource = SceneStarts, Name = "SceneBox" };
         CopiesBox = new NumericUpDown { Minimum = 1, Maximum = GameCopies.Most, Increment = 1, FormatString = "0", Width = 140, Name = "CopiesBox" };
         ToolTip.SetTip(CopiesBox, "How many copies of the game a launch starts side by side (a server and its clients), each a run of its own with its own console: "
             + "debugged in a Debug tab of its own, or run in a tab of the Terminal window; Stop ends them together");
@@ -158,9 +160,13 @@ public sealed class RunConfigurationsDialog : IdeWindow
         BrowserBox = new CheckBox { Content = "After launch" };
         ToolTip.SetTip(BrowserBox, "Opens the URL in the browser once the program listens there");
         BrowserUrlBox = Field();
+        BrowserLineBox = Field(BrowserPlaceholder(null));
+        BrowserLineBox.Name = "BrowserLineBox";
+        ToolTip.SetTip(BrowserLineBox, $"The browser the URL opens in, a program with any arguments to give it before the address, in place of {PageBrowsers.SettingPlace}; "
+            + "Debug drives it to debug a Blazor app's WebAssembly components, which only a Chromium browser does");
         AddVariableButton = new Button
         {
-            Content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { Glyph(IconKeys.Add), new TextBlock { Text = "Add variable" } } },
+            Content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gaps.Small, Children = { Glyph(IconKeys.Add), new TextBlock { Text = "Add variable" } } },
         };
         NameBox.TextChanged += (_, _) => Edit(c => c with { Name = NameBox.Text?.Trim() ?? string.Empty });
         ProjectBox.SelectionChanged += (_, _) => Edit(c => ProjectBox.SelectedItem switch
@@ -191,6 +197,7 @@ public sealed class RunConfigurationsDialog : IdeWindow
         ConsoleBox.IsCheckedChanged += (_, _) => Edit(c => c with { Console = ConsoleBox.IsChecked == true ? ConsoleKind.Terminal : ConsoleKind.Internal }, reshow: true);
         BrowserBox.IsCheckedChanged += (_, _) => Edit(c => c with { LaunchBrowser = BrowserBox.IsChecked == true });
         BrowserUrlBox.TextChanged += (_, _) => Edit(c => c with { BrowserUrl = BrowserUrlBox.Text?.Trim() ?? string.Empty });
+        BrowserLineBox.TextChanged += (_, _) => Edit(c => c with { Browser = BrowserLineBox.Text?.Trim() ?? string.Empty });
         AddVariableButton.Click += (_, _) => AddVariable(string.Empty, string.Empty, focus: true);
 
         KindText = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
@@ -205,7 +212,7 @@ public sealed class RunConfigurationsDialog : IdeWindow
             Services = [],
         });
         LaunchServiceBox = Field("The first .NET service");
-        ModeBox = new ComboBox { Classes = { StyleClasses.Form }, ItemsSource = (string[])[FastMode, ImagesMode] };
+        ModeBox = new FormDropDown { ItemsSource = (string[])[FastMode, ImagesMode] };
         ToolTip.SetTip(ModeBox, "Fast runs each .NET service in its image's runtime stage with Passenger's build mounted in, so a code change needs no image rebuild; the other builds every image as Compose says");
         TextBlock keepWords = new() { Text = "Keep backing services running after Stop" };
         KeepBackingBox = new CheckBox { Content = keepWords };
@@ -245,12 +252,12 @@ public sealed class RunConfigurationsDialog : IdeWindow
         // A file of launch profiles that does not read lists none of its own, and is never written over.
         problem.Text = string.Join(" ", unread ?? []);
 
-        StackPanel tools = new() { Orientation = Orientation.Horizontal, Spacing = 2, Margin = new Thickness(8, 6), Children = { AddButton, RemoveButton, CopyButton } };
+        StackPanel tools = new() { Orientation = Orientation.Horizontal, Spacing = Gaps.Hair, Margin = new Thickness(Gaps.Normal, Gaps.Small), Children = { AddButton, RemoveButton, CopyButton } };
         DockPanel left = new() { Width = 270 };
         DockPanel.SetDock(tools, Dock.Top);
         left.Children.Add(tools);
         left.Children.Add(list);
-        Border leftPane = new() { BorderThickness = new Thickness(0, 0, 1, 0), Child = left };
+        Border leftPane = new() { BorderThickness = Hairlines.After, Child = left };
         leftPane.Bind(Border.BorderBrushProperty, leftPane.GetResourceObservable(TokenKeys.Divider));
 
         // Each kind's page is the rows it takes; each row names the fields it shows, which a change from the source marks.
@@ -266,7 +273,7 @@ public sealed class RunConfigurationsDialog : IdeWindow
         sceneRow = Row("Scene", SceneBox, fields: ["godotScene"]);
         copyRows[0] = Row("Copies", CopiesBox, fields: ["godotCopies"]);
         copyRows[1] = Row("Each copy's arguments", CopyArgumentsBox, top: true, fields: ["copyArguments"]);
-        browserRows = [Row("Open browser", BrowserBox, fields: ["launchBrowser"]), Row("URL", BrowserUrlBox, fields: ["browserUrl"])];
+        browserRows = [Row("Open browser", BrowserBox, fields: ["launchBrowser"]), Row("URL", BrowserUrlBox, fields: ["browserUrl"]), Row(PageBrowsers.Row, BrowserLineBox, fields: ["browser"])];
         pages =
         [
             (projectRow, [RunKind.Project, RunKind.Dockerfile, RunKind.SdkContainer]),
@@ -279,7 +286,8 @@ public sealed class RunConfigurationsDialog : IdeWindow
             (builtRows[0] = Row("Target framework", FrameworkBox, fields: ["framework"]), [RunKind.Project, RunKind.Dockerfile, RunKind.SdkContainer]),
             (buildConfigurationRow = Row("Build configuration", BuildConfigurationBox, fields: ["buildConfiguration"]),
                 [RunKind.Project, RunKind.Compose, RunKind.Dockerfile, RunKind.SdkContainer]),
-            (builtRows[1] = Row("Launch profile", new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { ProfileBox, SaveAsProfileButton } }), [RunKind.Project]),
+            // Narrower than both, Save as Launch Profile goes under the drop-down rather than past the form's edge.
+            (builtRows[1] = Row("Launch profile", new WrapPanel { ItemSpacing = Gaps.Normal, LineSpacing = Gaps.Small, Children = { ProfileBox, SaveAsProfileButton } }, top: true), [RunKind.Project]),
             (launchRows[0] = Row("Exe path", ProgramBox, fields: ["program"]), [RunKind.Project]),
             (Row("Script", ScriptText, fields: ["script"]), [RunKind.Script]),
             (launchRows[1] = Row("Program arguments", ArgumentsBox, fields: ["arguments"]), [RunKind.Project, RunKind.Script]),
@@ -295,11 +303,12 @@ public sealed class RunConfigurationsDialog : IdeWindow
             (Row("Mode", ModeBox, fields: ["mode"]), [RunKind.Compose, RunKind.Dockerfile, RunKind.SdkContainer]),
             (Row(string.Empty, KeepBackingBox, marked: keepWords, fields: ["keepBackingServices"]), [RunKind.Compose]),
             (telemetryRow = Row(string.Empty, TelemetryBox, marked: telemetryWords, fields: ["telemetry"]), [RunKind.Project, RunKind.Compose, RunKind.Dockerfile, RunKind.SdkContainer]),
-            (launchRows[3] = Row("Environment variables", new StackPanel { Spacing = 6, Children = { VariablesHeader(), variables, AddVariableButton } }, top: true, fields: ["environment"]),
+            (launchRows[3] = Row("Environment variables", new StackPanel { Spacing = Gaps.Small, Children = { VariablesHeader(), variables, AddVariableButton } }, top: true, fields: ["environment"]),
                 [RunKind.Project, RunKind.Dockerfile, RunKind.SdkContainer, RunKind.Script]),
             (launchRows[4] = Row(string.Empty, ConsoleBox, marked: consoleWords, fields: ["console"]), [RunKind.Project, RunKind.Script]),
             (browserRows[0], [RunKind.Project, RunKind.Compose, RunKind.Dockerfile, RunKind.SdkContainer]),
             (browserRows[1], [RunKind.Project, RunKind.Compose, RunKind.Dockerfile, RunKind.SdkContainer]),
+            (browserRows[2], [RunKind.Project, RunKind.Compose, RunKind.Dockerfile, RunKind.SdkContainer]),
             (Row("Launched service", LaunchServiceBox, fields: ["launchService"]), [RunKind.Compose]),
             (builtRows[2] = Row("Before launch", BuildBox, fields: ["buildBeforeLaunch"]), [RunKind.Project]),
             (Row("Projects", StartsTable, top: true), [RunKind.Projects]),
@@ -311,14 +320,14 @@ public sealed class RunConfigurationsDialog : IdeWindow
         WriteButton.Click += (_, _) => IdeErrors.Observe(WriteToLaunchProfileAsync());
         ResetButton.Click += (_, _) => Reset();
         changes.Children.Add(changesText);
-        changes.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { WriteButton, ResetButton } });
-        StackPanel rows = new() { Spacing = 10, Children = { Row("Name", NameBox), Row("Kind", KindText), note, changes } };
+        changes.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gaps.Normal, Children = { WriteButton, ResetButton } });
+        StackPanel rows = new() { Spacing = FormRows.Between, Children = { Row("Name", NameBox), Row("Kind", KindText), note, changes } };
         foreach ((Control row, _) in pages)
         {
             rows.Children.Add(row);
         }
         form = rows;
-        ScrollViewer editorPane = new() { Content = new Panel { Margin = new Thickness(20, 16, 20, 16), Children = { form, nothing } } };
+        ScrollViewer editorPane = new() { Content = new Panel { [DialogFooter.InsetProperty] = true, Children = { form, nothing } } };
         DockPanel.SetDock(leftPane, Dock.Left);
         Content = DialogFooter.Page(new DockPanel { Children = { leftPane, editorPane } }, DialogFooter.OkCancel(OkButton, () => Close(false), problem, applyButton));
         Closed += (_, _) =>
@@ -331,7 +340,8 @@ public sealed class RunConfigurationsDialog : IdeWindow
         List();
         list.SelectedItem = Entries.FirstOrDefault(e => e.Configuration.Name == chosen) ?? Entries.FirstOrDefault();
         ShowChosen();
-        Opened += (_, _) => Dispatcher.UIThread.Post(() => list.Focus(), DispatcherPriority.Loaded);
+        // The keys on the chosen configuration's row, so Tab goes on into its form.
+        Opened += (_, _) => Dispatcher.UIThread.Post(() => ListKeys.Hold(list), DispatcherPriority.Loaded);
     }
 
     public Button AddButton { get; }
@@ -524,6 +534,27 @@ public sealed class RunConfigurationsDialog : IdeWindow
     public CheckBox BrowserBox { get; }
 
     public TextBox BrowserUrlBox { get; }
+
+    /// <summary>The browser the configuration's page opens in, in place of Settings' (<see cref="PageBrowsers"/>).</summary>
+    public TextBox BrowserLineBox { get; }
+
+    private readonly string? browserSetting;
+
+    /// <summary>Settings' command line for the browser, which a configuration naming none opens its page in; null for the
+    /// system's default.</summary>
+    public string? BrowserSetting
+    {
+        get => browserSetting;
+        init
+        {
+            browserSetting = value;
+            BrowserLineBox.PlaceholderText = BrowserPlaceholder(value);
+        }
+    }
+
+    /// <summary>What the browser box says left empty: the browser Settings names, or the system's default.</summary>
+    private static string BrowserPlaceholder(string? setting) =>
+        $"{(string.IsNullOrWhiteSpace(setting) ? PageBrowsers.SystemDefault : setting.Trim())}, from {PageBrowsers.SettingPlace}";
 
     /// <summary>The configuration's kind, which its page follows: a .NET project, Docker Compose, a Dockerfile, an SDK container.</summary>
     public TextBlock KindText { get; }
@@ -929,8 +960,7 @@ public sealed class RunConfigurationsDialog : IdeWindow
             return;
         }
         string? why = actions.WhyNot(AppActions.SaveAsLaunchProfile, actions.Context());
-        SaveAsProfileButton.IsEnabled = why is null;
-        ToolTip.SetTip(SaveAsProfileButton, why ?? SaveAsTip);
+        ToolButtons.Grey(SaveAsProfileButton, why, SaveAsTip);
     }
 
     /// <summary>Reset to Launch Profile (or its other source): every field of the chosen generated configuration as its
@@ -958,7 +988,7 @@ public sealed class RunConfigurationsDialog : IdeWindow
         {
             if (row.Configuration.Name.Length == 0)
             {
-                return (row, "A configuration needs a name");
+                return (row, Refusals.ConfigurationUnnamed);
             }
             if (!names.Add(row.Configuration.Name))
             {
@@ -970,7 +1000,7 @@ public sealed class RunConfigurationsDialog : IdeWindow
             RunConfiguration configuration = row.Configuration;
             if (configuration.Name.Length == 0)
             {
-                return (row, "A configuration needs a name");
+                return (row, Refusals.ConfigurationUnnamed);
             }
             if (!names.Add(configuration.Name))
             {
@@ -999,20 +1029,12 @@ public sealed class RunConfigurationsDialog : IdeWindow
         foreach ((RunKind kind, string title) in (ReadOnlySpan<(RunKind, string)>)[(RunKind.Project, ".NET Project"), (RunKind.Projects, MultipleProjects),
             (RunKind.Compose, "Docker Compose"), (RunKind.Dockerfile, "Dockerfile"), (RunKind.SdkContainer, "SDK Container")])
         {
-            MenuItem item = new() { Header = title };
-            if (kind == RunKind.Projects && solution is null)
-            {
-                // Its projects' launch profile is kept beside a solution, where Visual Studio reads it too.
-                item.IsEnabled = false;
-                ToolTip.SetTip(item, Refusals.NoSolutionForProfiles);
-                ToolTip.SetShowOnDisabled(item, true);
-            }
-            item.Click += (_, _) =>
+            // A projects' launch profile is kept beside a solution, where Visual Studio reads it too.
+            menu.Items.Add(ToolWindows.ListMenus.Item(title, () =>
             {
                 menu.Close();
                 Add(kind);
-            };
-            menu.Items.Add(item);
+            }, kind == RunKind.Projects && solution is null ? Refusals.NoSolutionForProfiles : null));
         }
         menu.Closed += (_, _) =>
         {
@@ -1249,6 +1271,7 @@ public sealed class RunConfigurationsDialog : IdeWindow
             ConsoleBox.IsChecked = shown.Console == ConsoleKind.Terminal;
             BrowserBox.IsChecked = shown.LaunchBrowser;
             BrowserUrlBox.Text = shown.BrowserUrl;
+            BrowserLineBox.Text = shown.Browser;
             KindText.Text = project?.IsScriptGame == true ? "Godot Project (GDScript)" : godot ? "Godot Project" : KindName(shown.Kind);
             ComposeFilesBox.Text = string.Join("; ", shown.ComposeFiles.Select(Shown));
             EnvFilesBox.Text = string.Join("; ", shown.EnvFiles.Select(Shown));
@@ -1414,10 +1437,10 @@ public sealed class RunConfigurationsDialog : IdeWindow
         TextBox valueBox = Field("Value");
         nameBox.Text = name;
         valueBox.Text = value;
-        Button remove = ToolButtons.Of(IconKeys.Close, "Remove Variable");
-        Grid row = new() { ColumnDefinitions = new ColumnDefinitions("240,8,*,4,Auto") };
-        Grid.SetColumn(valueBox, 2);
-        Grid.SetColumn(remove, 4);
+        Button remove = ToolButtons.Glyph(IconKeys.Close, "Remove Variable");
+        Grid row = new() { ColumnDefinitions = VariableColumns(), ColumnSpacing = Gaps.Normal };
+        Grid.SetColumn(valueBox, 1);
+        Grid.SetColumn(remove, 2);
         row.Children.Add(nameBox);
         row.Children.Add(valueBox);
         row.Children.Add(remove);
@@ -1448,12 +1471,17 @@ public sealed class RunConfigurationsDialog : IdeWindow
         }
     }
 
+    /// <summary>A variable's name, its value taking more of what the row leaves, and its Remove: the name no wider than a
+    /// name needs, both narrowing together with the dialog.</summary>
+    private static ColumnDefinitions VariableColumns() =>
+        [new ColumnDefinition(2, GridUnitType.Star) { MaxWidth = 240 }, new ColumnDefinition(3, GridUnitType.Star), new ColumnDefinition(GridLength.Auto)];
+
     private static Control VariablesHeader()
     {
-        Grid header = new() { ColumnDefinitions = new ColumnDefinitions("240,8,*") };
+        Grid header = new() { ColumnDefinitions = VariableColumns(), ColumnSpacing = Gaps.Normal };
         TextBlock name = new() { Text = "Name", Classes = { StyleClasses.Muted } };
         TextBlock value = new() { Text = "Value", Classes = { StyleClasses.Muted } };
-        Grid.SetColumn(value, 2);
+        Grid.SetColumn(value, 1);
         header.Children.Add(name);
         header.Children.Add(value);
         return header;
@@ -1469,7 +1497,7 @@ public sealed class RunConfigurationsDialog : IdeWindow
     private Control RowView()
     {
         TextBlock name = new() { VerticalAlignment = VerticalAlignment.Center };
-        TextBlock from = new() { Classes = { StyleClasses.Muted }, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+        TextBlock from = new() { Classes = { StyleClasses.Muted, StyleClasses.Caption }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(Gaps.Normal, 0, 0, 0) };
         ShrinkingRow line = new() { Children = { name, from } };
         return line.Showing<Entry>(entry =>
         {
@@ -1477,7 +1505,7 @@ public sealed class RunConfigurationsDialog : IdeWindow
             string? whyNot = row.WhyNotHere(projects);
             int running = Math.Max(IsRunning(row.Name) ? 1 : 0, runningAppHosts.Count(path => Core.PathNames.Same(path, row.Project)
                 || row.LinkedAppHosts.Any(linked => Core.PathNames.Same(linked, path))));
-            name.Text = running switch { 0 => row.Name, 1 => $"{row.Name} (running)", _ => $"{row.Name} ({running} apps running)" };
+            name.Text = running switch { 0 => row.Name, 1 => $"{row.Name} (running)", _ => $"{row.Name} ({Numbers.Said(running)} apps running)" };
             bool changed = whyNot is null && entry.IsChanged;
             name.Classes.Set(StyleClasses.Muted, whyNot is not null);
             name.Classes.Set(StyleClasses.Changed, changed);
@@ -1530,7 +1558,7 @@ public sealed class RunConfigurationsDialog : IdeWindow
         { } found => $"Godot{(found.Version is { } version ? $" {version}" : string.Empty)}{(found.Sharp is null ? string.Empty : ", a .NET build")}: {found.Executable}",
     };
 
-    private static TextBox Field(string? placeholder = null) => new() { Classes = { StyleClasses.Search }, PlaceholderText = placeholder };
+    private static TextBox Field(string? placeholder = null) => new() { PlaceholderText = placeholder };
 
     private static PathIcon Glyph(string key)
     {

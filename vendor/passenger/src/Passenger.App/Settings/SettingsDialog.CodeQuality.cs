@@ -50,7 +50,7 @@ public sealed partial class SettingsDialog
     /// <summary>The three radio buttons for how a tool is configured.</summary>
     private static StackPanel Configuration(string tool, ToolConfiguration now, Action<ToolConfiguration> changed)
     {
-        StackPanel choices = new() { Spacing = 4 };
+        StackPanel choices = new() { Spacing = Gaps.Tight };
         string[] names = ConfigurationChoices(tool);
         foreach (ToolConfiguration choice in Enum.GetValues<ToolConfiguration>())
         {
@@ -69,7 +69,7 @@ public sealed partial class SettingsDialog
 
     private static TextBox Text(string text, string placeholder, bool enabled, Action<string> changed)
     {
-        TextBox box = new() { Classes = { StyleClasses.Search }, Text = text, PlaceholderText = placeholder, MaxWidth = OptionRow.EditorWidth, IsEnabled = enabled, VerticalAlignment = VerticalAlignment.Center };
+        TextBox box = new() { Text = text, PlaceholderText = placeholder, MaxWidth = OptionRow.EditorWidth, IsEnabled = enabled, VerticalAlignment = VerticalAlignment.Center };
         box.TextChanged += (_, _) => changed((box.Text ?? string.Empty).Trim());
         return box;
     }

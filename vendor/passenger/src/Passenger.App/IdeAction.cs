@@ -21,6 +21,10 @@ public sealed record IdeAction(string Id, string Title, string Group, Action<Act
 
     public IReadOnlyList<MenuPlace> Menus { get; init; } = [];
 
+    /// <summary>Whether Find Action lists it in the order of its menu's run among the others of that run so marked, in the
+    /// places their titles give them all (Open Solution, Open Folder and Open File, as the File menu lists them).</summary>
+    public bool KeepsMenuOrder { get; init; }
+
     /// <summary>Its title in a menu opened where it would run, when that says more than <see cref="Title"/> (Unpin Tab on
     /// a pinned tab, Close on a tab's own menu); Find Action lists it by its title.</summary>
     public Func<ActionContext, string>? TitleIn { get; init; }
@@ -73,6 +77,10 @@ public sealed class ActionContext(OpenDocument? file, CodeEditor editor, object?
     public CodeEditor Editor => editor;
 
     public TextPosition Caret => editor.CaretPosition;
+
+    /// <summary>Why an action changing the file shown greys while its editor refuses changes, in Refusals' words (<see
+    /// cref="OpenDocument.ReadOnlyWhy"/>); null while it takes them, or none is shown.</summary>
+    public string? ReadOnlyWhy => editor.IsReadOnly ? file?.ReadOnlyWhy : null;
 
     /// <summary>The selection, or the name at the caret with what it is a member of ("order.Total"), as the debugger
     /// evaluates it; null with neither.</summary>

@@ -50,6 +50,7 @@ public static class Handlers
     public const string GodotNameStrings = "Passenger.Roslyn.Extension.GodotNameStrings";
     public const string GodotFix = "Passenger.Roslyn.Extension.GodotFix";
     public const string ToolkitRenames = "Passenger.Roslyn.Extension.ToolkitRenames";
+    public const string GeneratedMembers = "Passenger.Roslyn.Extension.GeneratedMembers";
     public const string MauiExpressionCompletion = "Passenger.Roslyn.Extension.MauiExpressionCompletion";
     public const string MauiExpressionSymbol = "Passenger.Roslyn.Extension.MauiExpressionSymbol";
     public const string MauiXamlChecks = "Passenger.Roslyn.Extension.MauiXamlChecks";
@@ -63,7 +64,7 @@ public static class Handlers
         DescribeSignature, ChangeSignature, DescribeInterface, ExtractInterface, DescribeType, MoveTypeToFile, MoveTypeToNamespace,
         DescribeHierarchy, PullMembersUp, PushMembersDown, DocumentTexts, DocumentsWritten, ReferencesRead, ReferencedFiles, GeneratorsRun, AspireProjectDeclaration, AspireCodeHelp, AspireReferenceFix, AspireRunResources,
         AspireRename, AspireParameters, ConnectionReads, WebRoutes, RouteBody, LocalizedReads, SymbolsNamed, SymbolAt, SymbolContainers, WrittenPlaces,
-        ComponentClass, GeneratedTexts, GeneratedNamed, PartialHalf, GeneratedParts, GeneratedDocuments, JsInteropCalls, GodotCode, GodotNames, GodotPaths, GodotKindStrings, GodotNameStrings, GodotFix, ToolkitRenames,
+        ComponentClass, GeneratedTexts, GeneratedNamed, PartialHalf, GeneratedParts, GeneratedDocuments, JsInteropCalls, GodotCode, GodotNames, GodotPaths, GodotKindStrings, GodotNameStrings, GodotFix, ToolkitRenames, GeneratedMembers,
         MauiExpressionCompletion, MauiExpressionSymbol, MauiXamlChecks, MauiExpressionUses, MauiExpressionHover,
         CompletionCall, StepBindings,
     ];
@@ -72,9 +73,12 @@ public static class Handlers
 /// <summary>Requests of the server that the extension answers itself, as an LSP method of its own.</summary>
 public static class ExtensionMethods
 {
-    /// <summary>A request about a file in no project, its <c>textDocument</c> and, for part of it, its <c>range</c>: its
-    /// colours, as the server's semantic tokens encode them; null for a file a project holds.</summary>
-    public const string LooseColours = "passenger/looseSemanticTokens";
+    /// <summary>textDocument/semanticTokens/full, in the legend the server gave, a name the server could not bind left out;
+    /// a file in no project is coloured from the references it has.</summary>
+    public const string Colours = "passenger/semanticTokens/full";
+
+    /// <summary>textDocument/semanticTokens/range, its <c>textDocument</c> and <c>range</c>, answered as <see cref="Colours"/>.</summary>
+    public const string RangeColours = "passenger/semanticTokens/range";
 
     /// <summary>workspace/diagnostic with a <c>frameworks</c> map from a multi-targeted project's file to the framework
     /// solution-wide analysis takes it in, its reports and previous results each naming their project (<c>_vs_projectContext</c>).</summary>
@@ -87,7 +91,50 @@ public static class ExtensionMethods
     /// <summary>The later part of a completion list asked in parts, by the id its first part gave (<see cref="LaterAsked"/>):
     /// a list of the types and extension members of namespaces not imported, or null where none comes.</summary>
     public const string LaterCompletion = "passenger/laterCompletion";
+
+    /// <summary>textDocument/prepareCallHierarchy, its item made where the symbol is declared, so a use of it in another
+    /// document has one, and at a record's positional parameter the property it declares.</summary>
+    public const string CallHierarchy = "passenger/prepareCallHierarchy";
+
+    /// <summary>textDocument/hover, answered as the server answers it, with its code's parts (<see cref="CodeParts"/>).</summary>
+    public const string Hover = "passenger/hover";
+
+    /// <summary>completionItem/resolve, answered as the server answers it, with its documentation's code's parts
+    /// (<see cref="CodeParts"/>).</summary>
+    public const string CompletionResolve = "passenger/completionResolve";
+
+    /// <summary>textDocument/signatureHelp, answered as the server answers it, with each signature's label in parts
+    /// (<see cref="CodeParts"/>).</summary>
+    public const string SignatureHelp = "passenger/signatureHelp";
 }
+
+/// <summary>The code a C# card shows (a symbol's description, a signature) in the parts Roslyn tags it in, each with the
+/// semantic token type the server's legend gives its classification (none for a name it could not bind, a space or
+/// punctuation), so the client colours it as the editor colours a file's code: an answer's member beside the words it
+/// shows, its texts together the code as shown.</summary>
+public static class CodeParts
+{
+    /// <summary>The answer's member holding the parts: a hover's and a completion item's each block of code, a signature's
+    /// its label.</summary>
+    public const string Member = "passengerCode";
+
+    /// <summary>A signature's member saying whether it still fits the arguments its call has so far; missing where that
+    /// can't be read.</summary>
+    public const string Fits = "passengerFits";
+
+    /// <summary>A resolved completion item's member giving each of the overloads it names as its signature's parts; missing
+    /// for an item of one.</summary>
+    public const string Overloads = "passengerOverloads";
+
+    /// <summary>A resolved completion item's member saying of each overload whether it fits the arguments of a call its name
+    /// already makes, each true where it makes none.</summary>
+    public const string OverloadFits = "passengerOverloadFits";
+}
+
+/// <summary>A stretch of code and its semantic token type, null for none.</summary>
+public sealed record CodePart(
+    [property: JsonPropertyName("text")] string Text,
+    [property: JsonPropertyName("type")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Type);
 
 /// <summary>A C# completion list asked in two parts: what is in scope first, then the types and extension members of
 /// namespaces not imported, which the server lists after every other item and is slowest to find, worked out at once but
@@ -894,6 +941,51 @@ public sealed record ToolkitFound(
 {
     public static readonly ToolkitFound None = new([], null);
 }
+
+/// <summary>The members source generators add to the types the solution's own files declare: every such type of the
+/// projects named by their files (<paramref name="Projects"/>), and each a C# file named declares (<paramref name="Files"/>).</summary>
+public sealed record GeneratedMembersAsked(
+    [property: JsonPropertyName("projects")] IReadOnlyList<string> Projects,
+    [property: JsonPropertyName("files")] IReadOnlyList<string> Files);
+
+/// <summary>Each type asked of that generators add members to.</summary>
+public sealed record GeneratedMembersFound([property: JsonPropertyName("types")] IReadOnlyList<GeneratedType> Types);
+
+/// <summary>A type of the solution's own files by its metadata name (a nested one's after its declaring type's and a '+'),
+/// the files of its own that declare it, and the members only generators declare.</summary>
+public sealed record GeneratedType(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("files")] IReadOnlyList<string> Files,
+    [property: JsonPropertyName("members")] IReadOnlyList<GeneratedMember> Members);
+
+/// <summary>A member a generator declares, its kind as a documentation id names it (P, F, M or E), reachable from the
+/// project's own code; and where a person goes to it in the type's own files (<paramref name="Path"/>, <paramref name="At"/>):
+/// the field or method of the type marked for the generator that the member's code uses, else the type's own declaration.</summary>
+public sealed record GeneratedMember(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("type")] MemberType Type,
+    [property: JsonPropertyName("static")] bool IsStatic,
+    [property: JsonPropertyName("writable")] bool CanWrite,
+    [property: JsonPropertyName("parameters")] IReadOnlyList<MemberType> Parameters,
+    [property: JsonPropertyName("parameterNames")] IReadOnlyList<string> ParameterNames,
+    [property: JsonPropertyName("attributes")] IReadOnlyList<MemberAttribute> Attributes,
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("at")] Place At);
+
+/// <summary>A type as metadata names it (<c>System.Collections.Generic.List`1</c>), with its generic arguments; an array of
+/// it; or a generic parameter by its name.</summary>
+public sealed record MemberType(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("arguments")] IReadOnlyList<MemberType> Arguments,
+    [property: JsonPropertyName("array")] bool IsArray,
+    [property: JsonPropertyName("parameter")] bool IsParameter);
+
+/// <summary>An attribute on a generated member by its class's full name, with its constructor's arguments written as text
+/// (a <c>typeof</c> as the type's full name), null for one that is not a constant.</summary>
+public sealed record MemberAttribute(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("arguments")] IReadOnlyList<string?> Arguments);
 
 /// <summary>Where a use of a member the MVVM Toolkit makes is written, and the name it takes.</summary>
 public sealed record ToolkitUse(

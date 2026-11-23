@@ -6,7 +6,7 @@ namespace Passenger.App.ToolWindows;
 /// <summary>The parts of a tool window's top bar (<see cref="ToolBars.Top"/>): one row of them, and in a window too narrow
 /// for that as many rows as they need, the bar growing with them, so none is drawn over another or cut off. A part given
 /// <see cref="FillsProperty"/> asks the least it can work in and takes what its row leaves, the whole row where it stands
-/// alone.</summary>
+/// alone. A part that grows lays the bar out again (<see cref="RoomGiven"/>).</summary>
 public sealed class ToolFlow : Panel
 {
     /// <summary>How a part fills its row, if it does.</summary>
@@ -14,7 +14,7 @@ public sealed class ToolFlow : Panel
 
     private readonly List<(Control[] Parts, ToolLayout.Piece[] Pieces)> rows = [];
 
-    // Words coming to a part may move it to a row of its own, which its measure, held to its row's width, never tells.
+    // Words coming to a part that fills may move it to a row of its own, which its measure, held to its row, never tells.
     static ToolFlow() => AffectsParentMeasure<ToolFlow>(FillsProperty, TextBlock.TextProperty);
 
     /// <summary>The space between parts, and between rows.</summary>
@@ -53,7 +53,7 @@ public sealed class ToolFlow : Panel
             for (int i = 0; i < widths.Length; i++)
             {
                 Control part = parts[row][i];
-                part.Measure(new Size(widths[i], availableSize.Height));
+                RoomGiven.Measure(part, widths[i], availableSize.Height);
                 tallest = Math.Max(tallest, part.DesiredSize.Height);
             }
             height += tallest;

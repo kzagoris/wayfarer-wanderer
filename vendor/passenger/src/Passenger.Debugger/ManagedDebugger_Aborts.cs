@@ -80,11 +80,28 @@ public partial class ManagedDebugger
             string debug = thread.TryGetDebugState(out CorDebugThreadState held) is Cor.S_OK ? held.ToString() : "debug state unread";
             IEnumerable<string> frames = thread.EnumerateChains()
                 .SelectMany(chain => chain.IsManaged ? chain.EnumerateFrames().Select(FrameTold) : ["[Native code]"]);
-            return $"  {id} ({thread.GetThreadNameOrNull() ?? "no name"}, {user}, {debug}): {string.Join(" < ", frames.Take(FramesTold))}";
+            string name = thread.GetThreadNameOrNull() ?? (_leftRunning.Contains(id) ? "the runtime's tiering worker" : "no name");
+            string start = AtItsFirstInstruction(thread) ? ", at its first instruction" : "";
+            return $"  {id} ({name}, {user}, {debug}{start}): {string.Join(" < ", frames.Take(FramesTold))}";
         }
         catch (Exception error) when (Failures.OfRuntime(error))
         {
             return $"  {id}: not read: {error.Message}";
+        }
+    }
+
+    /// <summary>The method an evaluation on a thread runs, the program held: its frame where the evaluation began, named as
+    /// the call stack names it; null where no code of its own runs there (the runtime making an object) or the frames cannot
+    /// be read.</summary>
+    private string? EvaluationRunning(ICorDebugThread thread)
+    {
+        try
+        {
+            return EvaluationFrames(thread).LastOrDefault() is { } begun ? FrameTold(begun) : null;
+        }
+        catch (Exception error) when (Failures.OfRuntime(error))
+        {
+            return null;
         }
     }
 

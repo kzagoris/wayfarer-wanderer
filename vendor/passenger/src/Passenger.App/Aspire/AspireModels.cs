@@ -27,6 +27,9 @@ public sealed class AspireResource(JsonElement data)
     public string? HealthStatus => AspireJson.String(Data, "healthStatus");
     public string? Source => AspireJson.String(Data, "source");
 
+    /// <summary>Its type in the AppHost's own words for people (a Node.js app's "Node.js"), else its type's name.</summary>
+    public string? TypeShown => AspireJson.String(Data, "resourceTypeDisplayName") ?? AspireJson.String(Data, "resourceType") ?? AspireJson.String(Data, "type");
+
     /// <summary>Whether it is the resource a name means: its own name, its display name, or the name with DCP's suffix after
     /// a dash, never a sibling whose name begins with the name and a dash (api and api-worker).</summary>
     public bool IsNamed(string? name) => name is not null && (Name == name || DisplayName == name || IsNameWithSuffix(Name, name));
@@ -173,7 +176,7 @@ internal static class AspireJson
         ? number : throw new InvalidDataException($"Aspire JSON field '{name}' must be a finite number.");
 
     public static string Duration(JsonElement value) => JsonMembers.Value(Object(value), "durationMs") is not { } duration
-        || duration.ValueKind == JsonValueKind.Null ? "Duration unavailable" : $"{Number(value, "durationMs"):0.###} ms";
+        || duration.ValueKind == JsonValueKind.Null ? "Duration unavailable" : $"{Numbers.Said(Number(value, "durationMs"), 3)} ms";
 
     public static IReadOnlyList<JsonElement> Array(JsonElement value, string? name = null, bool required = false)
     {

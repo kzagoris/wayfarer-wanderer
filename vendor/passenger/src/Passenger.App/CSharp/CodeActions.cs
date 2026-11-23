@@ -279,7 +279,7 @@ internal sealed partial class CodeActions(AssistContext context, PopupPlacement 
         }
         if (made.Left.Count > 0)
         {
-            context.Say($"{what} was not applied to {string.Join(", ", made.Left)}: it was edited meanwhile");
+            context.Say(Refusals.NotAppliedEditedMeanwhile(what, made.Left));
         }
         if (made.Said.Length > 0)
         {
@@ -584,7 +584,7 @@ internal sealed partial class CodeActions(AssistContext context, PopupPlacement 
             string own = text.GetText(TextNavigation.WordAt(text, offset));
             if (Passenger.Xaml.Features.CodeSymbol.NameFor(own, written, name) is not { } renamed)
             {
-                return RefactorOutcome.Refused($"Rename was not applied: the MVVM Toolkit makes {written} of {own}, and no name of {own}'s makes '{name}'");
+                return RefactorOutcome.Refused($"Rename was not applied: a source generator makes {written} of {own}, and no name of {own}'s is known to make '{name}'");
             }
             return renamed == own ? new RefactorOutcome($"{name} is its name already", null, [], [])
                 : await RenameSymbolAsync(code, offset, renamed, renameFiles, patience);
@@ -722,7 +722,7 @@ internal sealed partial class CodeActions(AssistContext context, PopupPlacement 
             edit = TypeRename.With(edit, CSharpAssist.GodotNameEdits(godot, written));
         }
         // A GDScript's member's uses its own language's server never reads: its scenes' connections, the C# strings naming it.
-        IReadOnlyList<PlacedEdits> scripted = Passenger.Workspace.GodotScriptDeclarations.IsScript(document.Path) ? await context.Languages.CSharp.GodotScriptRenameAsync(document, at.Offset, name) : [];
+        IReadOnlyList<PlacedEdits> scripted = Passenger.Workspace.GodotFileKinds.IsScript(document.Path) ? await context.Languages.CSharp.GodotScriptRenameAsync(document, at.Offset, name) : [];
         if (scripted.Count > 0)
         {
             edit = TypeRename.With(edit, scripted);
@@ -772,8 +772,8 @@ internal sealed partial class CodeActions(AssistContext context, PopupPlacement 
         }
         List<RefactoredFile> changed = [.. edited.Where(f => !(context.Editors.Find(f.Path) is { } open && dropped.Contains(open.Name)))];
         string movedSaid = applied.Moved.Count > 0 ? $"; {string.Join(", ", applied.Moved.Select(m => $"{Path.GetFileName(m.From)} to {Path.GetFileName(m.To)}"))}" : string.Empty;
-        string said = dropped.Count > 0 ? $"Renamed, but not in {string.Join(", ", dropped)}: it was edited meanwhile"
-            : (changed.Count > 1 ? $"Renamed in {changed.Count} files" : "Renamed") + movedSaid;
+        string said = dropped.Count > 0 ? Refusals.EditedMeanwhile("Renamed", dropped)
+            : (changed.Count > 1 ? $"Renamed in {Numbers.Said(changed.Count)} files" : "Renamed") + movedSaid;
         if (applied.Unmoved is { } unmoved)
         {
             said += $"{(dropped.Count > 0 ? "; and" : ", but")} {unmoved}";
@@ -875,22 +875,42 @@ internal sealed partial class CodeActions(AssistContext context, PopupPlacement 
         }
     }
 
+    /// <summary>Reformat Code on the file shown, held as the action's work from its first moment until it is done, which it
+    /// tells what it came to: reformatted or not, or why not.</summary>
     private async Task ReformatCore()
     {
         if (context.Editors.Active is not { } document)
         {
             return;
         }
+        const string what = "Reformat Code";
+        using Working? working = context.Work?.Begin(AppActions.Reformat, $"Reformatting {document.Name}…", stoppable: false);
+        string? unready = null;
+        LspDocument? Server()
+        {
+            unready = context.Unready(what);
+            if (unready is not null)
+            {
+                context.Say(unready);
+            }
+            return context.Ask();
+        }
         try
         {
-            if (await ReformatAsync(document, Selected(document), () => context.Ask("Reformat Code")) is { } done)
+            if (await ReformatAsync(document, Selected(document), Server) is { } done)
             {
                 context.Say(done.Said);
+                working?.Tell(done.Applied, done.Said);
+            }
+            else if (unready is not null)
+            {
+                working?.Tell(false, unready);
             }
         }
         catch (LanguageServerFailed failed)
         {
-            context.Failed("Reformat Code", failed);
+            context.Failed(what, failed);
+            working?.Tell(false, $"{what} failed: {failed.Reason}");
         }
     }
 
@@ -948,7 +968,7 @@ internal sealed partial class CodeActions(AssistContext context, PopupPlacement 
         /// <summary>A reformat of a file shown read-only, refused whatever its formatter would make of it; null for a file
         /// that takes one.</summary>
         public static Reformatted? ReadOnly(OpenDocument document, string what) =>
-            document.IsReadOnly ? Refused(what, Refusals.ReadOnly(document.Name)) : null;
+            document.ReadOnlyWhy is { } readOnly ? Refused(what, readOnly) : null;
 
         /// <summary>A reformat's edits, in the offsets of the text as <paramref name="asked"/> began, carried onto the open
         /// file as it is now and applied as one undoable edit; refused where the file is read-only or the code one changes
@@ -1006,7 +1026,7 @@ internal sealed partial class CodeActions(AssistContext context, PopupPlacement 
             if (served is { Lsp: null })
             {
                 unready = context.WebOf(document) is not null && context.Web?.Invoke() is { } web ? web.Unready(what, document)
-                    : context.CSharp?.Unready(what);
+                    : context.CSharp?.Unready(what, document);
             }
             return served?.Lsp;
         }
@@ -1161,7 +1181,7 @@ internal sealed partial class CodeActions(AssistContext context, PopupPlacement 
         }
         if (made.Left.Count > 0)
         {
-            context.Say($"{what} was not applied to {string.Join(", ", made.Left)}: it was edited meanwhile");
+            context.Say(Refusals.NotAppliedEditedMeanwhile(what, made.Left));
         }
         return made.Left.Count == 0;
     }

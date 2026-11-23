@@ -15,7 +15,7 @@ namespace Passenger.App.Aspire;
 /// <summary>A native AppHost prompt. Server updates retain the interaction and editable field values.</summary>
 public sealed class AspireInteractionDialog : IdeWindow
 {
-    private readonly StackPanel fields = new() { Spacing = 8 };
+    private readonly StackPanel fields = new() { Spacing = FormRows.Between };
     private readonly TextBlock message = new() { TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock intent = new();
     private readonly Dictionary<string, InteractionInput> inputs = new(StringComparer.Ordinal);
@@ -36,11 +36,12 @@ public sealed class AspireInteractionDialog : IdeWindow
         Func<InteractionInput, string, Task<string>> upload, CancellationToken cancel)
     {
         UiThread.Check();
+        FormRows.Scope(this);
         this.interaction = interaction;
         this.respond = respond;
         this.upload = upload;
         this.cancel = cancel;
-        Width = 500;
+        Width = DialogWidths.Form;
         MaxWidth = 640;
         MaxHeight = 700;
         MinWidth = 300;
@@ -77,8 +78,8 @@ public sealed class AspireInteractionDialog : IdeWindow
         {
             Content = new StackPanel
             {
-                Margin = new Thickness(16),
-                Spacing = 12,
+                [DialogFooter.InsetProperty] = true,
+                Spacing = Gaps.Wide,
                 Children = { intent, message, fields, Problem },
             },
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
@@ -247,6 +248,7 @@ public sealed class AspireInteractionDialog : IdeWindow
     private void AddInput(InteractionInput input)
     {
         string label = input.Label + (input.Required ? " *" : string.Empty);
+        List<TextBlock> notes = [];
         Control control;
         switch (input.InputType)
         {
@@ -262,11 +264,10 @@ public sealed class AspireInteractionDialog : IdeWindow
                 {
                     input.Value = options[0].Key;
                 }
-                ComboBox choice = new()
+                FormDropDown choice = new()
                 {
                     ItemsSource = options.Select(option => option.Value).ToArray(),
                     SelectedIndex = Array.FindIndex(options, option => option.Key == input.Value),
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
                     PlaceholderText = input.Placeholder,
                 };
                 choice.SelectionChanged += (_, _) => Changed(input, choice.SelectedIndex >= 0 ? options[choice.SelectedIndex].Key : string.Empty);
@@ -287,7 +288,7 @@ public sealed class AspireInteractionDialog : IdeWindow
                 control = text;
                 if (input.InputType == InputType.Choice && input.Options.Count > 0)
                 {
-                    fields.Children.Add(new TextBlock { Text = string.Join(", ", input.Options.Select(option => $"{option.Key}: {option.Value}")), TextWrapping = TextWrapping.Wrap });
+                    notes.Add(FormRows.Note(string.Join(", ", input.Options.Select(option => $"{option.Key}: {option.Value}"))));
                 }
                 break;
             case InputType.File:
@@ -315,19 +316,15 @@ public sealed class AspireInteractionDialog : IdeWindow
         control.IsEnabled = !input.Disabled && !input.Loading;
         AutomationProperties.SetName(control, label);
         controls.Add(input.Name, control);
-        if (input.InputType != InputType.Boolean)
-        {
-            fields.Children.Add(new TextBlock { Text = label, TextWrapping = TextWrapping.Wrap });
-        }
-        fields.Children.Add(control);
         if (input.Description.Length > 0)
         {
-            fields.Children.Add(new TextBlock { Text = input.Description, TextWrapping = TextWrapping.Wrap });
+            notes.Add(FormRows.Note(input.Description));
         }
         if (input.Loading)
         {
-            fields.Children.Add(new TextBlock { Text = "Loading options…" });
+            notes.Add(FormRows.Note("Loading options…"));
         }
+        fields.Children.Add(FormRows.Of(input.InputType == InputType.Boolean ? null : label, control, notes));
     }
 
     private async Task UploadFilesCoreAsync(string inputName, IReadOnlyList<string> files, int version)
@@ -352,7 +349,7 @@ public sealed class AspireInteractionDialog : IdeWindow
         Changed(latest, JsonSerializer.Serialize(references));
         if (controls[latest.Name] is Button currentFile)
         {
-            currentFile.Content = $"{files.Count} file(s) uploaded";
+            currentFile.Content = $"{Numbers.Said(files.Count)} file(s) uploaded";
         }
     }
 

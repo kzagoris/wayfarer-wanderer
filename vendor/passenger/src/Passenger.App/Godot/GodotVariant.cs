@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.Text;
 using System.Runtime.CompilerServices;
+using Passenger.Core;
 using Passenger.Workspace;
 
 namespace Passenger.App.Godot;
@@ -118,12 +119,20 @@ public static class GodotVariant
     private const int ObjectAsId = 1 << 16;
     private const int Deepest = 512;
 
+    /// <summary>A number as read (a float read as a double, an int as a long); null for any other value.</summary>
+    public static double? Number(object? value) => value switch
+    {
+        double real => real,
+        long whole => whole,
+        _ => null,
+    };
+
     /// <summary>The value the bytes hold, all of them.</summary>
     public static object? Read(ReadOnlySpan<byte> bytes)
     {
         int at = 0;
         object? value = Read(bytes, ref at, 0);
-        return at == bytes.Length ? value : throw new GodotVariantException($"{bytes.Length - at} bytes follow the value");
+        return at == bytes.Length ? value : throw new GodotVariantException($"{Numbers.Said(bytes.Length - at)} bytes follow the value");
     }
 
     /// <summary>The value at <paramref name="at"/>, which is moved past it.</summary>
@@ -814,7 +823,7 @@ public static class GodotVariant
         GodotNodePath path => quoted ? "^" + CSharpLiterals.Quoted(path.ToString()) : path.ToString(),
         List<object?> items => $"[{string.Join(", ", items.Select(i => Shown(i, quoted: true)))}]",
         string[] strings => $"[{string.Join(", ", strings.Select(CSharpLiterals.Quoted))}]",
-        byte[] packed => $"[{packed.Length} bytes]",
+        byte[] packed => $"[{Numbers.Said(packed.Length)} bytes]",
         System.Array packed => $"[{string.Join(", ", packed.Cast<object?>().Select(i => Shown(i, quoted: true)))}]",
         GodotMath { Type: GodotType.Transform2D or GodotType.Basis or GodotType.Transform3D or GodotType.Aabb or GodotType.Plane or GodotType.Projection } math => Parts(math),
         _ => value.ToString() ?? string.Empty,
@@ -909,7 +918,7 @@ public static class GodotVariant
         {
             if (!double.TryParse(part, NumberStyles.Float, CultureInfo.InvariantCulture, out double number) || (integers && number != Math.Floor(number)))
             {
-                return (null, $"{count} {(integers ? "whole numbers" : "numbers")} separated by commas");
+                return (null, $"{Numbers.Said(count)} {(integers ? "whole numbers" : "numbers")} separated by commas");
             }
             numbers.Add(number);
         }
@@ -918,7 +927,7 @@ public static class GodotVariant
         {
             numbers.Add(1);
         }
-        return numbers.Count == count ? (new GodotMath(type, numbers), null) : (null, $"{count} {(integers ? "whole numbers" : "numbers")} separated by commas");
+        return numbers.Count == count ? (new GodotMath(type, numbers), null) : (null, $"{Numbers.Said(count)} {(integers ? "whole numbers" : "numbers")} separated by commas");
     }
 
     /// <summary>The value of a type as a scene or Godot's variant text writes it (<c>Vector2(10, 20)</c>, <c>"text"</c>,

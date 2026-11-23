@@ -52,7 +52,7 @@ public sealed partial class SettingsDialog
     public ShortcutPanel FindShortcut => filterKeys;
 
     /// <summary>The x on the shortcut the page is narrowed to (Clear Filtering).</summary>
-    public Button ClearFiltering { get; } = new() { Classes = { StyleClasses.TabPin }, Margin = new Thickness(6, 0, 0, 0) };
+    public Button ClearFiltering { get; } = new() { Classes = { ShellClasses.TabPin }, Margin = new Thickness(6, 0, 0, 0) };
 
     /// <summary>The shortcut the Keymap page is narrowed to, or null while it lists every action.</summary>
     public Shortcut? ShortcutFilter => shortcutFilter;

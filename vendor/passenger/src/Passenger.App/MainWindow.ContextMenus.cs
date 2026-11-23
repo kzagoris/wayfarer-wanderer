@@ -66,9 +66,9 @@ public partial class MainWindow
         {
             string name = test.Method ?? TypeNames.Short(test.Type);
             items.Add(new Separator());
-            items.Add(Command($"Run '{name}'", () => RunTestsAt(test, active.Path, debug: false)));
-            items.Add(Command($"Debug '{name}'", () => RunTestsAt(test, active.Path, debug: true)));
-            items.Add(Command($"Run '{name}' Until Failure", () => RunTestsAt(test, active.Path, debug: false, untilFailure: true)));
+            items.Add(ToolWindows.ListMenus.Item($"Run '{name}'", () => RunTestsAt(test, active.Path, debug: false)));
+            items.Add(ToolWindows.ListMenus.Item($"Debug '{name}'", () => RunTestsAt(test, active.Path, debug: true)));
+            items.Add(ToolWindows.ListMenus.Item($"Run '{name}' Until Failure", () => RunTestsAt(test, active.Path, debug: false, untilFailure: true)));
         }
         Add(separator);
         if (session.Debug.Session is { State: DebugState.Paused })
@@ -121,12 +121,13 @@ public partial class MainWindow
 
     /// <summary>Opens a context menu, remembering it while it is open, the keys kept in it (<see cref="KeepKeys"/>). A
     /// widget's (the project's, the branch's, the run configuration's) drops from under it, where one at the pointer
-    /// covered the widget.</summary>
+    /// covered the widget; a status bar widget's (the file's encoding, the branch's) rises from over it, its right edge
+    /// with the widget's.</summary>
     private void Open(ContextMenu menu, Control target)
     {
         if (target is Button && !menu.IsSet(ContextMenu.PlacementProperty))
         {
-            menu.Placement = PlacementMode.BottomEdgeAlignedLeft;
+            menu.Placement = StatusBarFrame.IsVisualAncestorOf(target) ? PlacementMode.TopEdgeAlignedRight : PlacementMode.BottomEdgeAlignedLeft;
         }
         OpenContextMenu?.Close();
         OpenContextMenu = menu;
@@ -169,11 +170,4 @@ public partial class MainWindow
         return () => window.Activated -= Back;
     }
 
-    /// <summary>A menu item that runs something other than one of the window's actions (a test by name).</summary>
-    private static MenuItem Command(string header, Action run)
-    {
-        MenuItem item = new() { Header = header };
-        item.Click += (_, _) => run();
-        return item;
-    }
 }

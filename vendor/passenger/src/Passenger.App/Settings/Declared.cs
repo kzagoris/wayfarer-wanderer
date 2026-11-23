@@ -21,7 +21,15 @@ public static class Declared
     public static AppSettings InForce(AppSettings settings) => All.Aggregate(settings, (filled, setting) => setting.FilledIn(filled));
 
     public static readonly ThemeSetting Look = new(code: false, s => s.Look, (s, v) => s with { Look = v },
-        new(D.Appearance, "Theme", "colour color theme look palette source repository passenger-themes " + string.Join(" ", ThemeSource.FormerlyCarried.Select(n => n.ToLowerInvariant()))));
+        new(D.Appearance, "Theme", "colour color theme look palette source repository passenger-themes " + string.Join(" ", ThemeSource.FormerlyCarried.Select(n => n.ToLowerInvariant())))
+        {
+            When = new(s => !(s.FollowSystemContrast && SystemContrast.InForce.High), $"The system asks for high contrast, so {ThemeSource.HighContrast} shows in its place"),
+        });
+
+    public static readonly ToggleSetting FollowSystemContrast = new(s => s.FollowSystemContrast, (s, v) => s with { FollowSystemContrast = v },
+        new(D.AccessibilityPage, "Use High Contrast while the system asks for it", "high contrast accessibility increase contrast contrast themes low vision aaa colour color blind windows macos gnome",
+            $"While the system asks for high contrast (a Windows contrast theme, macOS's Increase contrast, GNOME's High Contrast), {ThemeSource.HighContrast} "
+            + "shows in the chosen theme's and colour scheme's place, dark or light as the system is, and they come back once it no longer asks."));
 
     public static readonly ChoiceSetting<ThemeChoice> Theme = new(s => s.Theme, (s, v) => s with { Theme = v },
         [(ThemeChoice.System, "System"), (ThemeChoice.Dark, "Dark"), (ThemeChoice.Light, "Light")],
@@ -67,10 +75,66 @@ public static class Declared
             + "a tab of their own to go back to; kept there, the places Go to Declaration, Go to Implementation and the like find "
             + "to choose from are listed there too. Open in Find Window in the popup puts the matches there either way."));
 
+    public static readonly ChoiceSetting<StatePalette> StatePalette = new(s => s.StatePalette, (s, v) => s with { StatePalette = v },
+        [(Passenger.App.StatePalette.Theme, "The theme's own"), (Passenger.App.StatePalette.ColourBlindSafe, "Colour-blind safe")],
+        new(D.AccessibilityPage, "Colours of states", "colour color blind blindness deuteranopia protanopia tritanopia red green palette diff test passed failed added changed conflict git accessibility",
+            "The colours tests' results, changes (in a diff, the gutter and the lists of changed files) and signatures take. Colour-blind safe: passed "
+            + "and added in blue, changed and running in orange, failed and conflicts in vermilion, new files in purple, told apart without red and green, "
+            + "each as clear on its ground as the theme's own. Each state has a shape, sign or letter of its own as well."));
+
+    public static readonly ChoiceSetting<SoundCuesPlayed> SoundCues = new(s => s.SoundCues, (s, v) => s with { SoundCues = v },
+        [(SoundCuesPlayed.WithScreenReader, "While a screen reader runs"), (SoundCuesPlayed.Always, "Always"), (SoundCuesPlayed.Never, "Never")],
+        new(D.AccessibilityPage, "Play sound cues", "sound cue audio signal beep tone screen reader voiceover narrator nvda jaws orca accessibility blind",
+            "Short sounds for what the caret comes to and for what ends, each turned on below. While a screen reader runs, they play only while the "
+            + "system says one does (VoiceOver, Narrator, NVDA, JAWS or Orca), so a person who sees the screen hears none."));
+
+    public static readonly ToggleSetting SoundOnErrorLine = Cue(s => s.SoundOnErrorLine, (s, v) => s with { SoundOnErrorLine = v },
+        "An error on the caret's line", "error problem line caret");
+
+    public static readonly ToggleSetting SoundOnWarningLine = Cue(s => s.SoundOnWarningLine, (s, v) => s with { SoundOnWarningLine = v },
+        "A warning on the caret's line", "warning problem line caret");
+
+    public static readonly ToggleSetting SoundOnBreakpointLine = Cue(s => s.SoundOnBreakpointLine, (s, v) => s with { SoundOnBreakpointLine = v },
+        "A breakpoint on the caret's line", "breakpoint debugger line caret");
+
+    public static readonly ToggleSetting SoundOnFoldedLine = Cue(s => s.SoundOnFoldedLine, (s, v) => s with { SoundOnFoldedLine = v },
+        "A folded region at the caret's line", "fold folded folding collapsed region line caret");
+
+    public static readonly ToggleSetting SoundOnChangedLine = Cue(s => s.SoundOnChangedLine, (s, v) => s with { SoundOnChangedLine = v },
+        "A line changed since the last commit", "change changed modified added git diff line caret");
+
+    public static readonly ToggleSetting SoundOnBuildEnd = Cue(s => s.SoundOnBuildEnd, (s, v) => s with { SoundOnBuildEnd = v },
+        "A build passing or failing", "build passed failed succeeded end finished");
+
+    public static readonly ToggleSetting SoundOnTestsEnd = Cue(s => s.SoundOnTestsEnd, (s, v) => s with { SoundOnTestsEnd = v },
+        "A test run passing or failing", "tests test run passed failed end finished");
+
+    public static readonly ToggleSetting SoundOnDebuggerStop = Cue(s => s.SoundOnDebuggerStop, (s, v) => s with { SoundOnDebuggerStop = v },
+        "The debugger stopping", "debugger stop stopped breakpoint hit exception step paused");
+
+    public static readonly ToggleSetting SoundOnTerminalFailure = Cue(s => s.SoundOnTerminalFailure, (s, v) => s with { SoundOnTerminalFailure = v },
+        "A command in the terminal failing", "terminal shell command failed exit status code error");
+
+    public static readonly ToggleSetting SoundOnSaveRefused = Cue(s => s.SoundOnSaveRefused, (s, v) => s with { SoundOnSaveRefused = v },
+        "A save refused", "save saving refused read-only held locked write failed");
+
+    /// <summary>A sound cue's row on the Accessibility page, voided while the cues play never.</summary>
+    private static ToggleSetting Cue(Func<AppSettings, bool> get, Func<AppSettings, bool, AppSettings> set, string label, string words) =>
+        new(get, set, new(D.AccessibilityPage, label, $"sound cue audio signal {words}")
+        {
+            When = new(s => s.SoundCues != SoundCuesPlayed.Never, "Play sound cues is Never"),
+        });
+
     public static readonly ToggleSetting ReopenProjectsOnStartup = new(s => s.ReopenProjectsOnStartup, (s, v) => s with { ReopenProjectsOnStartup = v },
         new(D.SystemPage, "Reopen projects on startup", "reopen last solution project folder startup start launch welcome screen recent"));
 
     public static readonly ChoiceSetting<OpenProjectIn> OpenProjectIn = new(s => s.OpenProjectIn, (s, v) => s with { OpenProjectIn = v }, D.OpenProjectChoices);
+
+    public static readonly ChoiceSetting<ConfirmClosing> ConfirmBeforeClosing = new(s => s.ConfirmBeforeClosing, (s, v) => s with { ConfirmBeforeClosing = v },
+        [(ConfirmClosing.Never, "Never"), (ConfirmClosing.WhenQuitting, "When quitting"), (ConfirmClosing.EveryWindow, "Every window")],
+        new(D.SystemPage, "Confirm before closing", "confirm ask prompt question before closing close quit exit window are you sure accidental",
+            $"Whether Passenger asks you before it quits ({(OperatingSystem.IsMacOS() ? "Quit Passenger" : "File | Exit")} or closing its last "
+            + "window) or before any of its windows closes. The question's Don't ask again sets this back to Never."));
 
     public static readonly ToggleSetting SaveOnDeactivation = new(s => s.SaveOnDeactivation, (s, v) => s with { SaveOnDeactivation = v },
         new(D.SystemPage, "Save when leaving the IDE", "autosave files switching to a different application or the built-in terminal focus frame deactivation"));
@@ -96,7 +160,7 @@ public static class Declared
 
     public static readonly ToggleSetting OpenFilesWithSingleClick = new(s => s.OpenFilesWithSingleClick, (s, v) => s with { OpenFilesWithSingleClick = v },
         new(D.ExplorerPage, "Open files with single click", "explorer solution view tree one click preview",
-            "A plain click on a file's row opens it, the keys staying in the Explorer. Off, a double-click or Enter opens it. "
+            $"A plain click on a file's row opens it, the keys staying in the Explorer. Off, a double-click or {KeyWords.Of(ListKeys.OpenKey)} opens it. "
             + "Its options menu turns this on and off too."));
 
     public static readonly ToggleSetting NestFiles = new(s => s.NestFiles, (s, v) => s with { NestFiles = v },
@@ -129,6 +193,10 @@ public static class Declared
     public static readonly ToggleSetting ShowLineNumbers = new(s => s.ShowLineNumbers, (s, v) => s with { ShowLineNumbers = v },
         new(D.EditorPage, "Show line numbers", "gutter appearance"));
 
+    public static readonly ToggleSetting ShowNavigationBar = new(s => s.ShowNavigationBar, (s, v) => s with { ShowNavigationBar = v },
+        new(D.EditorPage, "Show navigation bar", "breadcrumbs path namespace type member outline structure jump appearance",
+            "Over each editor, where its caret is: a C# file's namespace, type and member, each listing what stands beside it."));
+
     public static readonly ToggleSetting RainbowBraces = new(s => s.RainbowBraces, (s, v) => s with { RainbowBraces = v },
         new(D.EditorPage, "Rainbow braces", "brackets parentheses colour color nesting"));
 
@@ -144,8 +212,14 @@ public static class Declared
 
     public static readonly ToggleSetting CompletionParentheses = new(s => s.CompletionParentheses, (s, v) => s with { CompletionParentheses = v },
         new(D.EditorPage, "Add parentheses to a method chosen from completion", "completion parentheses brackets call method invocation arguments autocomplete",
-            "A C# method chosen by Enter, Tab or a click is written as a call, the caret between its parentheses where it takes "
-            + "arguments. Where the code asks for the method itself, as an event's handler or a delegate, it stays a name."));
+            $"A C# method chosen by {KeyWords.Of(Avalonia.Input.Key.Enter)}, {KeyWords.Of(Avalonia.Input.Key.Tab)} or a click is written as a call, "
+            + "the caret between its parentheses where it takes arguments. Where the code asks for the method itself, as an event's handler or a delegate, it stays a name."));
+
+    public static readonly ToggleSetting FormatOnType = new(s => s.FormatOnType, (s, v) => s with { FormatOnType = v },
+        new(D.EditorPage, "Format a statement on ';' and a block on '}'", "format on type as you type typing semicolon brace statement block reformat layout auto c#",
+            $"In C#, the ';' that ends a statement lays the statement out, the '}}' that closes a block lays out the block, and {KeyWords.Of(Avalonia.Input.Key.Enter)} "
+            + "between a '{' and its '}' puts the '{' where the block's layout has it, as Reformat Code does; one Undo takes the key "
+            + "and its layout back together. A ';' in a for loop's header, a string or a comment stays as typed."));
 
     public static readonly ToggleSetting XamlWorkspace = new(s => s.XamlWorkspace, (s, v) => s with { XamlWorkspace = v },
         new(D.EditorPage, "Open XAML files in the XAML workspace",
@@ -169,7 +243,7 @@ public static class Declared
         new(D.EditorPage, "Show whitespaces", "whitespace spaces tabs dots arrows invisible characters appearance"));
 
     public static readonly ToggleSetting WheelZoom = new(s => s.WheelZoom, (s, v) => s with { WheelZoom = v },
-        new(D.EditorPage, OperatingSystem.IsMacOS() ? "Change font size with Command+Mouse Wheel" : "Change font size with Ctrl+Mouse Wheel",
+        new(D.EditorPage, $"Change font size with {KeyWords.Held(Editor.Keystroke.Command, "Mouse Wheel")}",
             "zoom font size mouse wheel scroll ctrl control command cmd"));
 
     public static readonly ToggleSetting ReformatOnSave = new(s => s.ReformatOnSave, (s, v) => s with { ReformatOnSave = v },
@@ -377,6 +451,20 @@ public static class Declared
     public static readonly ToggleSetting RestartOnRudeEdit = new(s => s.RestartOnRudeEdit, (s, v) => s with { RestartOnRudeEdit = v },
         new(D.HotReloadPage, "Always restart for a change it cannot apply", "hot reload rude edit restart ask always never dotnet watch"));
 
+    public static readonly ChoiceSetting<DebuggerStop> WhenDebuggerStops = new(s => s.WhenDebuggerStops, (s, v) => s with { WhenDebuggerStops = v },
+        [(DebuggerStop.ComeForward, "Bring Passenger to the front"), (DebuggerStop.AskForAttention, "Ask for attention"), (DebuggerStop.Nothing, "Nothing")],
+        new(D.RunPage, "When the debugger stops", "debugger debug stop stopped breakpoint hit exception step paused front foreground activate focus raise bring window attention bounce dock taskbar flash",
+            "What a breakpoint, an exception or a step's end does while you are in another program, such as the app you debug: Passenger's window "
+            + $"comes to the front, or, where the system keeps that program in front, asks for your attention ({(OperatingSystem.IsMacOS() ? "its Dock icon bounces" : "its taskbar button flashes")}), "
+            + "as Ask for attention always does. An agent's debugging never brings the window forward."));
+
+    public static readonly ToggleSetting AskBeforeRerun = new(s => s.AskBeforeRerun, (s, v) => s with { AskBeforeRerun = v },
+        new(D.RunPage, "Ask before stopping a running configuration to start it again",
+            "run debug profile again rerun restart running already stop confirm ask prompt question one copy instance accidental",
+            "Run, Debug or Profile of a configuration that runs stops what runs of it, then starts it again. On, you are asked first: "
+            + "Stop and Rerun, Stop alone, or Cancel, which leaves it running. The question's Don't ask again turns this off; off, it "
+            + "starts again at once. An agent's start never asks."));
+
     public static readonly NumberSetting ConsoleBufferKb = new(s => s.ConsoleBufferKb, (s, v) => s with { ConsoleBufferKb = (int)v }, 16, 102_400, 64,
         new(D.RunPage, "Console buffer size", "console cycle buffer size output limit lines run debug build kb"), "KB");
 
@@ -432,11 +520,13 @@ public static class Declared
     public static readonly ProgramSetting TerminalShell = new(s => s.TerminalShell, (s, v) => s with { TerminalShell = v },
         () => Passenger.Terminal.TerminalSession.DefaultShell().App, new(D.TerminalPage, "Shell path", "shell zsh bash powershell program"));
 
-    public static readonly ProgramSetting DebugBrowser = new(s => s.DebugBrowser, (s, v) => s with { DebugBrowser = v },
-        () => Core.ChromiumBrowsers.Find(null) is { } found ? found.Program : "Not found",
-        new(D.RunPage, Debugging.BrowserDebugging.BrowserRow, "browser chrome edge chromium brave blazor webassembly wasm debug debugger page",
-            "The Chromium browser Debug opens a Blazor app's page in, to debug its WebAssembly components, on a profile of Passenger's own, with any arguments "
-            + "to give each start after it. Empty, it is the first of Chrome, Edge, Chromium and Brave found where they install, else on the PATH."));
+    public static readonly ProgramSetting Browser = new(s => s.Browser, (s, v) => s with { Browser = v },
+        () => Run.PageBrowsers.SystemDefault,
+        new(D.RunPage, Run.PageBrowsers.Row, "browser browsers chrome edge firefox safari chromium brave open page url launch web app blazor webassembly wasm debug debugger",
+            "The browser a web app's page opens in once it listens, as its launch profile's launchBrowser asks: a program (on macOS an app bundle too) "
+            + "with any arguments to give it before the page's address; a run configuration may name its own. Debug drives it, on a profile of "
+            + "Passenger's own, to debug a Blazor app's WebAssembly components, which takes a Chromium browser. Empty, pages open in the system's "
+            + "default browser, and Debug drives the first of Chrome, Edge, Chromium and Brave found where they install, else on the PATH."));
 
     public static readonly ProgramSetting GodotExecutable = new(s => s.GodotExecutable, (s, v) => s with { GodotExecutable = v },
         () => Run.GodotLaunch.Found(null) is { Exists: true } found ? found.Executable : "Not found",

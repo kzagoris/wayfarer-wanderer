@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Passenger.Roslyn.Extension;
@@ -23,12 +24,12 @@ public sealed class MembersMoveDialog : RefactoringDialog
             up
                 ? $"Choose the base type of '{hierarchy.Type}' and the members that you want to move to base type"
                 : $"Choose inheritors of '{hierarchy.Type}' and members that you want to push to derived classes",
-            560)
+            DialogWidths.Form)
     {
         this.up = up;
         this.hierarchy = hierarchy;
         this.make = make;
-        BaseBox = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch };
+        BaseBox = new FormDropDown();
         foreach (Member type in hierarchy.Bases)
         {
             BaseBox.Items.Add(type.Text);
@@ -36,14 +37,14 @@ public sealed class MembersMoveDialog : RefactoringDialog
         BaseBox.SelectedIndex = hierarchy.Bases.Count > 0 ? 0 : -1;
         BaseBox.SelectionChanged += (_, _) => Changed();
 
-        StackPanel options = new() { Spacing = 10 };
+        StackPanel options = new() { Spacing = FormRows.Between };
         if (up)
         {
-            options.Children.Add(Row("Base type:", BaseBox));
+            options.Children.Add(Row("Base type", BaseBox));
         }
         else
         {
-            StackPanel list = new() { Spacing = 2 };
+            StackPanel list = new() { Spacing = Gaps.Hair };
             foreach (Member type in hierarchy.Derived)
             {
                 CheckBox box = new() { Content = type.Text, IsChecked = true };
@@ -51,16 +52,16 @@ public sealed class MembersMoveDialog : RefactoringDialog
                 inheritors.Add((type, box));
                 list.Children.Add(box);
             }
-            options.Children.Add(new TextBlock { Text = "Inheritors:" });
-            options.Children.Add(new Border { Padding = new Thickness(8, 0), Child = list });
+            options.Children.Add(Row("Inheritors", list, top: true));
         }
 
         ColumnTitles titles = ColumnTitles.Of(Columns, ["Members", "Make abstract"]);
-        StackPanel rows = new() { Margin = new Thickness(0, 4) };
+        StackPanel rows = new() { Margin = new Thickness(0, Gaps.Tight), Spacing = Gaps.Hair };
         foreach (Member member in hierarchy.Members)
         {
-            CheckBox moved = new() { Content = member.Text, Margin = new Thickness(8, 1, 0, 1) };
-            CheckBox made = new() { Margin = new Thickness(8, 1, 0, 1) };
+            CheckBox moved = new() { Content = member.Text, Margin = new Thickness(Gaps.Normal, 0, 0, 0) };
+            CheckBox made = new() { Margin = new Thickness(Gaps.Normal, 0, 0, 0) };
+            AutomationProperties.SetName(made, $"Make {member.Text} abstract");
             moved.IsCheckedChanged += (_, _) => Changed();
             made.IsCheckedChanged += (_, _) => Changed();
             Grid.SetColumn(made, 1);
@@ -76,8 +77,7 @@ public sealed class MembersMoveDialog : RefactoringDialog
             ClipToBounds = true,
             Child = new DockPanel { Children = { titles, new ScrollViewer { Content = rows, MaxHeight = 260, MinHeight = 100 } } },
         };
-        options.Children.Add(new TextBlock { Text = up ? "Members to pull up:" : "Members to push down:" });
-        options.Children.Add(tableFrame);
+        options.Children.Add(Row(up ? "Members to pull up" : "Members to push down", tableFrame, top: true));
         Options = options;
         Changed();
         FocusOnOpen(up ? BaseBox : members.Count > 0 ? members[0].Moved : NextButton);
