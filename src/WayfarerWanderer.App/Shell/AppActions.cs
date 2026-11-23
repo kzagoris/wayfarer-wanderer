@@ -10,11 +10,14 @@ namespace WayfarerWanderer.App.Shell;
 
 public static class AppActions
 {
-    public const string Open = "app.open";
-
-    /// <summary>A folder to open: the system's panel takes files or folders, not both, so Open takes the solution or
-    /// project files and this the folder. Rider's keymaps have no keys for it.</summary>
+    /// <summary>A folder to open as the workspace, the system's panel taking files or folders, not both: here it takes the
+    /// keys Rider's keymaps give Open Solution (RiderOpenSolution), Ctrl+Shift+O in every keymap but VS Code's on Windows,
+    /// which gives it VS Code's own Open Folder keys, Ctrl+K, Ctrl+O.</summary>
     public const string OpenFolder = "app.openFolder";
+
+    /// <summary>A file to open in the editor, never as the workspace: IntelliJ's Open (OpenFile), which Rider's Visual Studio
+    /// and VS Code keymaps give Ctrl+O (Cmd+O on the Mac) and IntelliJ IDEA's none.</summary>
+    public const string OpenFile = "app.openFile";
 
     /// <summary>Rider's New Solution (RiderNewSolution), which its keymaps give no keys.</summary>
     public const string NewSolution = "app.newSolution";
@@ -43,7 +46,7 @@ public static class AppActions
     public const string ConvertIndentationToTabs = "app.convertIndentation.tabs";
     public const string ConvertIndentationToSpaces = "app.convertIndentation.spaces";
 
-    // Rider's ChangeTargetFramework (Target Framework), the editor's context switcher, which its keymaps give no keys.
+    // Rider's ChangeTargetFramework (Target Framework), the status bar's context widget, which its keymaps give no keys.
     public const string TargetFramework = "app.code.targetFramework";
     public const string Save = "app.save";
     public const string SaveAll = "app.saveAll";
@@ -219,6 +222,7 @@ public static class AppActions
         ["app.aspire.attach"] = ServiceAttach,
         ["app.aspire.runWithoutDebugger"] = ServiceRun,
         ["app.aspire.profile"] = ServiceProfile,
+        ["app.open"] = OpenFile,
     };
 
     /// <summary>An action's id now, for one it had before (<see cref="Formerly"/>), else the id itself.</summary>
@@ -705,7 +709,8 @@ public static class AppActions
         if (OperatingSystem.IsMacOS())
         {
             return keymap
-                .Bind(Open, "meta O")
+                .Bind(OpenFolder, "control shift O")
+                .Bind(OpenFile, "meta O")
                 .Bind(NewProject, "meta shift N")
                 .Bind(ProjectStructure, "meta SEMICOLON")
                 .Bind(NewItem, "meta N", "alt INSERT")
@@ -837,7 +842,8 @@ public static class AppActions
                 .Bind(PreviousProjectWindow, "meta shift alt BACK_QUOTE");
         }
         return keymap
-            .Bind(Open, "control O")
+            .Bind(OpenFolder, "control shift O")
+            .Bind(OpenFile, "control O")
             .Bind(NewProject, "control shift N")
             .Bind(ProjectStructure, "control alt shift S")
             .Bind(NewItem, "control N")
@@ -977,7 +983,8 @@ public static class AppActions
         if (OperatingSystem.IsMacOS())
         {
             return keymap
-                .Bind(Open, "meta O")
+                .Bind(OpenFolder, "control shift O")
+                .Bind(OpenFile, "meta O")
                 // VS Code's Ctrl+W, Switch Window; Cmd+Q is the application menu's Quit, as in the Visual Studio keymap.
                 .Bind(NextProjectWindow, "control W")
                 .Bind(PreviousProjectWindow, "meta alt shift BACK_QUOTE")
@@ -1093,7 +1100,8 @@ public static class AppActions
                 .Bind(RecentChanges, "alt shift C");
         }
         return keymap
-            .Bind(Open, "control O")
+            .Bind(OpenFolder, "control K , control O")
+            .Bind(OpenFile, "control O")
             // VS Code's Ctrl+W closes the editor here, its Switch Window macOS's Ctrl+W; Next Project Window has no key.
             .Bind(Save, "control S")
             .Bind(SaveAll, "control K , S")
@@ -1209,8 +1217,8 @@ public static class AppActions
     }
 
     /// <summary>IntelliJ IDEA's $default and Mac OS X 10.5+ keymaps, with what Rider's descriptors add (its tests' Ctrl+;
-    /// chords, Open Solution's Ctrl+Shift+O); Go to Symbol takes Go to Class's keys too, and Search Everywhere is a double
-    /// Shift. A key IntelliJ gives two actions by place goes to one: Ctrl+Shift+F10 (macOS's Ctrl+Shift+R and D) to the
+    /// chords, Open Solution's Ctrl+Shift+O, here Open Folder's); Go to Symbol takes Go to Class's keys too, and Search
+    /// Everywhere is a double Shift. A key IntelliJ gives two actions by place goes to one: Ctrl+Shift+F10 (macOS's Ctrl+Shift+R and D) to the
     /// tests, not Run and Debug Here; Ctrl+Shift+F8 to View Breakpoints; Alt+Insert (Cmd+N) to Generate, not New Item; the
     /// Mac's Cmd+R to Replace, not Rerun, and Cmd+T to Update Project, not the terminal's New Session.</summary>
     private static Keymap IntelliJ(Keymap keymap)
@@ -1219,7 +1227,7 @@ public static class AppActions
         {
             // Cmd+Q, Exit's here, is the application menu's Quit, as in the other keymaps.
             return keymap
-                .Bind(Open, "control shift O")
+                .Bind(OpenFolder, "control shift O")
                 .Bind(NextProjectWindow, "meta alt BACK_QUOTE")
                 .Bind(PreviousProjectWindow, "meta alt shift BACK_QUOTE")
                 .Bind(SaveAll, "meta S")
@@ -1337,7 +1345,7 @@ public static class AppActions
                 .Bind(RecentChanges, "alt shift C");
         }
         return keymap
-            .Bind(Open, "control shift O")
+            .Bind(OpenFolder, "control shift O")
             .Bind(NextProjectWindow, "control alt CLOSE_BRACKET")
             .Bind(PreviousProjectWindow, "control alt OPEN_BRACKET")
             .Bind(SaveAll, "control S")

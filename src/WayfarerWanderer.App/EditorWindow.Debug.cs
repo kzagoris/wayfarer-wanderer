@@ -77,7 +77,7 @@ public sealed partial class EditorWindow
     {
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "Open Source",
+            Title = "Open File",
             SuggestedStartLocation = Session is null ? null : await StorageProvider.TryGetFolderFromPathAsync(Session.Root),
             FileTypeFilter = [new FilePickerFileType("JVM source") { Patterns = ["*.java", "*.kt", "*.kts"] }, FilePickerFileTypes.All]
         });
@@ -97,9 +97,9 @@ public sealed partial class EditorWindow
         AddStep(EditorActions.StepOut, "Step Out", debug => debug.StepOutAsync());
         AddDebugValueActions();
         Actions.Add(new EditorAction(EditorActions.OpenWorkspace, "Open Folder…", () => true,
-            () => UnawaitedWork.Observe(PickWorkspaceAsync())));
-        Actions.Add(new EditorAction(EditorActions.OpenSource, "Open Source…", () => true,
-            () => UnawaitedWork.Observe(PickSourceAsync())));
+            () => UnawaitedWork.Observe(PickWorkspaceAsync())) { KeepsMenuOrder = true });
+        Actions.Add(new EditorAction(EditorActions.OpenSource, "Open File…", () => true,
+            () => UnawaitedWork.Observe(PickSourceAsync())) { KeepsMenuOrder = true });
         Actions.Add(new EditorAction(EditorActions.SaveSource, "Save Source", () => SourcePath != null, SaveSource));
     }
 

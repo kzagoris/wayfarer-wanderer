@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/IdeAction.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/IdeAction.cs, MIT (notices/Passenger/LICENSE).
 using Passenger.Editor;
 using Passenger.Text;
 
@@ -18,6 +18,10 @@ public sealed record IdeAction(string Id, string Title, string Group, Action<Act
     public Func<ActionContext, string?> WhyNot { get; init; } = _ => null;
 
     public IReadOnlyList<MenuPlace> Menus { get; init; } = [];
+
+    /// <summary>Whether Find Action lists it in the order of its menu's run among the others of that run so marked, in the
+    /// places their titles give them all (Open Folder and Open File, as the File menu lists them).</summary>
+    public bool KeepsMenuOrder { get; init; }
 
     /// <summary>Its title in a menu opened where it would run, when that says more than <see cref="Title"/> (Unpin Tab on
     /// a pinned tab, Close on a tab's own menu); Find Action lists it by its title.</summary>
@@ -75,6 +79,10 @@ public sealed class ActionContext(CodeEditor editor, object? focused, Docking.To
 
     /// <summary>The editor's caret.</summary>
     public TextPosition Caret => editor.CaretPosition;
+
+    /// <summary>Why an action changing the file shown greys while its editor refuses changes, as the editor says it; null
+    /// while it takes them.</summary>
+    public string? ReadOnlyWhy => editor.IsReadOnly ? editor.ReadOnlyWhy : null;
 
     /// <summary>What had the keys as the action was asked for.</summary>
     public object? Focused => focused;
