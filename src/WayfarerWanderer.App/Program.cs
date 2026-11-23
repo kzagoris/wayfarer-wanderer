@@ -66,6 +66,10 @@ public partial class EditorApplication : Application
         // headless run.
         SystemContrast.Seen = ApplicationLifetime is IClassicDesktopStyleApplicationLifetime;
         SystemContrast.LookAgain();
+        if (SystemContrast.Seen)
+        {
+            ScreenReaders.LookAgain();
+        }
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             // Only the person's desktop app reads and writes the state folder; a headless run keeps the defaults.

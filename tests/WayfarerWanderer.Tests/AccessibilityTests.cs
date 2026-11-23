@@ -12,7 +12,7 @@ using WayfarerWanderer.App.Shell.Welcome;
 namespace WayfarerWanderer.Tests;
 
 /// <summary>Wayfarer for the person's eyes and ears: High Contrast while the system asks for it, and every state told by a
-/// shape, sign or letter beside its colour, in the theme's colours or the colour-blind safe palette.</summary>
+/// shape, sign or letter beside its colour, in the theme's colours or the colour-blind safe palette, and sound cues.</summary>
 public class AccessibilityTests
 {
     private static uint Colour(string token, ThemeVariant variant) =>
@@ -124,6 +124,81 @@ public class AccessibilityTests
 
             window.SettingsKept.Update(s => s with { StatePalette = StatePalette.Theme });
             Assert.Equal(own, states.ToDictionary(t => t, t => Colour(t, ThemeVariant.Dark)));
+        }
+        finally
+        {
+            window.SettingsKept.Update(_ => new AppSettings());
+            window.Close();
+        }
+    }
+
+    [Fact]
+    public void SoundCuesPlayAsSettingsSayAndEachIsAWavOfItsOwn()
+    {
+        AppSettings settings = new();
+        Assert.False(SoundCues.Play(settings, screenReaderRuns: false));
+        Assert.True(SoundCues.Play(settings, screenReaderRuns: true));
+        Assert.True(SoundCues.Play(settings with { SoundCues = SoundCuesPlayed.Always }, false));
+        Assert.False(SoundCues.Play(settings with { SoundCues = SoundCuesPlayed.Never }, true));
+        Assert.False(SoundCues.IsOn(settings with { SoundOnBuildEnd = false }, SoundCue.BuildFailed));
+        Assert.True(SoundCues.IsOn(settings, SoundCue.SaveRefused));
+
+        string folder = Directory.CreateTempSubdirectory("wayfarer-cues-").FullName;
+        try
+        {
+            Dictionary<SoundCue, byte[]> made = Enum.GetValues<SoundCue>().ToDictionary(c => c, c => File.ReadAllBytes(SoundCues.FileOf(c, folder)));
+            foreach ((SoundCue cue, byte[] wav) in made)
+            {
+                Assert.Equal("RIFF", System.Text.Encoding.ASCII.GetString(wav, 0, 4));
+                Assert.Equal("WAVE", System.Text.Encoding.ASCII.GetString(wav, 8, 4));
+                // The data's size as the header gives it is what follows the header.
+                Assert.Equal(wav.Length - 44, BitConverter.ToInt32(wav, 40));
+                Assert.True(wav.Length > 44 + 1000, cue.ToString());
+            }
+            Assert.Equal(made.Count, made.Values.Select(Convert.ToBase64String).Distinct().Count());
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [AvaloniaFact]
+    public void TheCaretComingToABreakpointOrAnErrorCuesWhileAScreenReaderRuns()
+    {
+        var window = EditorApplication.CreateWindow(null);
+        window.Show();
+        try
+        {
+            window.OpenSource(Repo.At("tests/fixtures/jvm", "maven/app/src/main/java/example/Main.java"));
+            window.Editor.GoTo(new TextPosition(3, 0));
+            window.Actions.TryExecute(EditorActions.ToggleBreakpoint);
+            TextSnapshot text = window.Editor.Document.Snapshot;
+            window.Editor.SetMarkers([new Passenger.Editor.Marker(new TextRange(text.GetLine(4).Start, 3), Passenger.Editor.MarkerKind.Error, "wrong")]);
+
+            // No screen reader: nothing plays.
+            using (ScreenReaders.StandIn(false))
+            {
+                window.Editor.GoTo(new TextPosition(0, 0));
+                window.Editor.GoTo(new TextPosition(3, 0));
+                Assert.Empty(window.CuesPlayed);
+            }
+            using (ScreenReaders.StandIn(true))
+            {
+                window.Editor.GoTo(new TextPosition(0, 0));
+                window.Editor.GoTo(new TextPosition(3, 0));
+                window.Editor.GoTo(new TextPosition(3, 4));
+                window.Editor.GoTo(new TextPosition(4, 0));
+                Assert.Equal([SoundCue.BreakpointLine, SoundCue.ErrorLine], window.CuesPlayed);
+
+                window.SettingsKept.Update(s => s with { SoundOnErrorLine = false });
+                window.Editor.GoTo(new TextPosition(0, 0));
+                window.Editor.GoTo(new TextPosition(4, 0));
+                Assert.Equal(2, window.CuesPlayed.Count);
+                window.SettingsKept.Update(s => s with { SoundCues = SoundCuesPlayed.Never });
+                window.Editor.GoTo(new TextPosition(3, 0));
+                Assert.Equal(2, window.CuesPlayed.Count);
+            }
         }
         finally
         {

@@ -37,6 +37,12 @@ public sealed partial class ProjectSession : IAsyncDisposable
     /// model, current or kept stale.</summary>
     public event Action? SnapshotChanged;
 
+    /// <summary>A build ran to its end, passed (true) or failed: not one cancelled. On the UI thread.</summary>
+    public event Action<bool>? BuildEnded;
+
+    /// <summary>A test run ended, not one cancelled. On the UI thread.</summary>
+    public event Action<TestRunResult>? TestsEnded;
+
     /// <summary>Whether the model shown is older than the build files: an import failed or is running.</summary>
     public bool IsStale => importer.State.IsStale;
 
@@ -114,11 +120,13 @@ public sealed partial class ProjectSession : IAsyncDisposable
         try
         {
             BuildWindow.Reset();
-            return await build.RunAsync(
+            ProcessResult built = await build.RunAsync(
                 snapshot,
                 new JvmBuildRequest(Root, module, task, arguments ?? []),
                 output => OnUi(() => BuildWindow.Append(output.Line)),
                 running.Token);
+            OnUi(() => BuildEnded?.Invoke(built.ExitCode == 0));
+            return built;
         }
         finally
         {
@@ -154,7 +162,11 @@ public sealed partial class ProjectSession : IAsyncDisposable
             EndOperation(running);
         }
         TestRunResult result = invocation.Complete(process.ExitCode, cancelled);
-        OnUi(() => TestWindow.Show(result));
+        OnUi(() =>
+        {
+            TestWindow.Show(result);
+            TestsEnded?.Invoke(result);
+        });
         return result;
     }
 

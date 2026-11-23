@@ -298,6 +298,41 @@ public sealed record AppSettings : IStateDocument<AppSettings>
     /// editors at first, or a window of its own over the IDE's.</summary>
     public DiffPlace OpenDiffsIn { get; init; } = DiffPlace.Tab;
 
+    /// <summary>When the sound cues play (<see cref="SoundCues"/>): while the system says a screen reader runs, at first, so
+    /// a person who sees the screen hears none; always; or never.</summary>
+    public SoundCuesPlayed SoundCues { get; init; } = SoundCuesPlayed.WithScreenReader;
+
+    /// <summary>A sound as the caret comes to a line holding an error.</summary>
+    public bool SoundOnErrorLine { get; init; } = true;
+
+    /// <summary>A sound as the caret comes to a line holding a warning and no error.</summary>
+    public bool SoundOnWarningLine { get; init; } = true;
+
+    /// <summary>A sound as the caret comes to a line holding a breakpoint.</summary>
+    public bool SoundOnBreakpointLine { get; init; } = true;
+
+    /// <summary>A sound as the caret comes to a line that begins a folded region.</summary>
+    public bool SoundOnFoldedLine { get; init; } = true;
+
+    /// <summary>A sound as the caret comes to a line changed since the last commit.</summary>
+    public bool SoundOnChangedLine { get; init; } = true;
+
+    /// <summary>A sound as a build passes or fails, each its own.</summary>
+    public bool SoundOnBuildEnd { get; init; } = true;
+
+    /// <summary>A sound as a test run passes or fails, each its own.</summary>
+    public bool SoundOnTestsEnd { get; init; } = true;
+
+    /// <summary>A sound as the debugger stops the program the person debugs.</summary>
+    public bool SoundOnDebuggerStop { get; init; } = true;
+
+    /// <summary>A sound as a command the person ran in the terminal fails, where its shell tells.</summary>
+    public bool SoundOnTerminalFailure { get; init; } = true;
+
+    /// <summary>A sound as a save the person asked for is refused (a read-only file, one another program holds, a write
+    /// the system refused).</summary>
+    public bool SoundOnSaveRefused { get; init; } = true;
+
     /// <summary>Highlight Words in a change bar's popup: the words that changed marked in what the lines were and in
     /// the file while the popup is open; the popup's toggle changes it.</summary>
     public bool ChangePopupWords { get; init; } = true;
@@ -530,5 +565,13 @@ public enum DiffPlace
 {
     Window,
     Tab,
+}
+
+/// <summary>When the sound cues play, in the order Settings lists them.</summary>
+public enum SoundCuesPlayed
+{
+    WithScreenReader,
+    Always,
+    Never,
 }
 

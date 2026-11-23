@@ -61,7 +61,17 @@ public sealed partial class EditorWindow
     {
         if (SourcePath is not { } path) return;
         var (document, file) = documents[path];
-        var saved = FileText.SaveOver(path, file, document.Snapshot.ToString());
+        (FileText Written, string? Converted) saved;
+        try
+        {
+            saved = FileText.SaveOver(path, file, document.Snapshot.ToString());
+        }
+        catch (Exception refused) when (refused is IOException or UnauthorizedAccessException)
+        {
+            // Refused (read-only, held by another program, a write the system refused): its cue, then as before.
+            Cue(Shell.SoundCue.SaveRefused);
+            throw;
+        }
         document.MarkSaved();
         documents[path].OnSaved(saved.Written);
         if (Language(path) == "kotlin") RefreshKotlinClasses();
