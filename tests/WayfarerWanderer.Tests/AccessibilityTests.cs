@@ -3,12 +3,16 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Styling;
 using WayfarerWanderer.App;
 using WayfarerWanderer.App.Shell;
+using Passenger.Text;
+using Passenger.Vcs;
 using WayfarerWanderer.App.Shell.Settings;
+using WayfarerWanderer.App.Shell.Vcs;
 using WayfarerWanderer.App.Shell.Welcome;
 
 namespace WayfarerWanderer.Tests;
 
-/// <summary>Wayfarer for the person's eyes and ears: High Contrast while the system asks for it.</summary>
+/// <summary>Wayfarer for the person's eyes and ears: High Contrast while the system asks for it, and every state told by a
+/// shape, sign or letter beside its colour, in the theme's colours or the colour-blind safe palette.</summary>
 public class AccessibilityTests
 {
     private static uint Colour(string token, ThemeVariant variant) =>
@@ -68,6 +72,58 @@ public class AccessibilityTests
             }
             Assert.False(Themes.InHighContrast);
             Assert.Equal(ownPanel, Colour("Panel", ThemeVariant.Dark));
+        }
+        finally
+        {
+            window.SettingsKept.Update(_ => new AppSettings());
+            window.Close();
+        }
+    }
+
+    [Fact]
+    public void EveryStateHasASignOrLetterOfItsOwnBesideItsColour()
+    {
+        ChangeMarkKind[] marks = Enum.GetValues<ChangeMarkKind>();
+        Assert.Equal(marks.Length, marks.Select(DiffSigns.SignOf).Distinct().Count());
+        ChangeKind[] changes = Enum.GetValues<ChangeKind>();
+        Assert.Equal(changes.Length, changes.Select(ChangedFileRow.LetterOf).Distinct().Count());
+    }
+
+    [AvaloniaFact]
+    public void TheColourBlindSafePaletteIsLaidOverTheThemeAndReadsOnItsGrounds()
+    {
+        var window = EditorApplication.CreateWindow(null);
+        window.Show();
+        string[] states = ["Test.Passed", "Test.Failed", "Vcs.Added", "Vcs.Modified", "Vcs.Conflict", "Vcs.File.Added", "Vcs.File.Unversioned"];
+        Dictionary<string, uint> own = states.ToDictionary(t => t, t => Colour(t, ThemeVariant.Dark));
+        try
+        {
+            window.SettingsKept.Update(s => s with { StatePalette = StatePalette.ColourBlindSafe });
+            foreach (ThemeVariant variant in (ThemeVariant[])[ThemeVariant.Dark, ThemeVariant.Light])
+            {
+                uint passed = Colour("Test.Passed", variant);
+                uint failed = Colour("Test.Failed", variant);
+                // Passed in blue, failed in vermilion: told apart without red and green.
+                Assert.True((passed & 0xFF) > ((passed >> 16) & 0xFF), $"{passed:X8} is no blue");
+                Assert.True(((failed >> 16) & 0xFF) > (failed & 0xFF), $"{failed:X8} is no vermilion");
+                // A mark at 3:1 on the panel it is drawn on, a file's name at 4.5:1.
+                uint panel = Colour("Panel", variant);
+                Assert.True(ThemeColours.Ratio(passed, panel) >= 3, $"{variant}: passed {ThemeColours.Ratio(passed, panel)}");
+                Assert.True(ThemeColours.Ratio(Colour("Vcs.File.Added", variant), panel) >= 4.5);
+                Assert.True(ThemeColours.Ratio(Colour("Vcs.Added", variant), Colour("Editor.Gutter", variant)) >= 3);
+            }
+            Assert.NotEqual(own["Vcs.Added"], Colour("Vcs.Added", ThemeVariant.Dark));
+
+            // Under High Contrast it is laid again, at High Contrast's 7:1 for words.
+            using (SystemContrast.StandIn(new ContrastAsked(true, true)))
+            {
+                uint panel = Colour("Panel", ThemeVariant.Dark);
+                Assert.Equal(0xFF1A1A1Au, panel);
+                Assert.True(ThemeColours.Ratio(Colour("Vcs.File.Modified", ThemeVariant.Dark), panel) >= 7);
+            }
+
+            window.SettingsKept.Update(s => s with { StatePalette = StatePalette.Theme });
+            Assert.Equal(own, states.ToDictionary(t => t, t => Colour(t, ThemeVariant.Dark)));
         }
         finally
         {
