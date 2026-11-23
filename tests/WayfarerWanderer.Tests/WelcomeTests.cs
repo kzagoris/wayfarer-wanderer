@@ -79,7 +79,7 @@ public class WelcomeTests
             FirstStartView page = window.ShowFirstStart();
             window.UpdateLayout();
             Assert.Equal(FirstStartView.Screen.Theme, page.Shown);
-            Assert.Equal([Themes.OwnName, "Cubicle"], page.Looks.Select(l => l.Name));
+            Assert.Equal([Themes.OwnName, "Cubicle", ThemeSource.HighContrast], page.Looks.Select(l => l.Name));
             foreach (FirstStartView.Look look in page.Looks)
             {
                 Assert.True(AssetLoader.Exists(look.Picture(dark: true)), look.Name);
@@ -303,18 +303,22 @@ public class WelcomeTests
         window.Width = width / Scale;
         window.Height = height / Scale;
         window.Show();
+        // A copy outside the repository, so the pictures name no branch of the repository they were taken in.
+        string maven = Path.Combine(Directory.CreateTempSubdirectory("wayfarer-pictures-").FullName, "maven");
+        CopyFolder(Fixture("maven"), maven);
         try
         {
-            await window.OpenWorkspaceAsync(Fixture("maven"));
+            await window.OpenWorkspaceAsync(maven);
             window.TrustBanner.IsVisible = false;
-            window.OpenSource(Fixture("maven/app/src/main/java/example/Main.java"));
-            window.ToolDock.ShowBehind(ToolWindowIds.Build);
+            window.OpenSource(Path.Combine(maven, "app", "src", "main", "java", "example", "Main.java"));
             foreach (FirstStartView.Look look in FirstStartView.Candidates())
             {
                 foreach (bool dark in (bool[])[true, false])
                 {
                     window.SettingsKept.Update(s => s with { Look = look.Theme, Theme = dark ? ThemeChoice.Dark : ThemeChoice.Light });
                     window.RequestedThemeVariant = dark ? ThemeVariant.Dark : ThemeVariant.Light;
+                    // A theme's layout is laid as it comes: Build shows over it.
+                    window.ToolDock.ShowBehind(ToolWindowIds.Build);
                     // The code's colours come a moment after the theme changes: a frame drawn first lets them land.
                     for (int settle = 0; settle < 3; settle++)
                     {
@@ -339,6 +343,20 @@ public class WelcomeTests
             window.SettingsKept.Update(_ => new AppSettings());
             window.RequestedThemeVariant = null;
             window.Close();
+            Directory.Delete(Path.GetDirectoryName(maven)!, recursive: true);
+        }
+    }
+
+    private static void CopyFolder(string from, string to)
+    {
+        Directory.CreateDirectory(to);
+        foreach (string folder in Directory.EnumerateDirectories(from, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(to, Path.GetRelativePath(from, folder)));
+        }
+        foreach (string file in Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories))
+        {
+            File.Copy(file, Path.Combine(to, Path.GetRelativePath(from, file)));
         }
     }
 

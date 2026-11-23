@@ -20,7 +20,10 @@ public static class Declared
     public static AppSettings InForce(AppSettings settings) => All.Aggregate(settings, (filled, setting) => setting.FilledIn(filled));
 
     public static readonly ThemeSetting Look = new(code: false, s => s.Look, (s, v) => s with { Look = v },
-        new(D.Appearance, "Theme", "colour color theme look palette source repository passenger-themes " + string.Join(" ", ThemeSource.FormerlyCarried.Select(n => n.ToLowerInvariant()))));
+        new(D.Appearance, "Theme", "colour color theme look palette source repository passenger-themes " + string.Join(" ", ThemeSource.FormerlyCarried.Select(n => n.ToLowerInvariant())))
+        {
+            When = new(s => !(s.FollowSystemContrast && SystemContrast.InForce.High), $"The system asks for high contrast, so {ThemeSource.HighContrast} shows in its place"),
+        });
 
     public static readonly ChoiceSetting<ThemeChoice> Theme = new(s => s.Theme, (s, v) => s with { Theme = v },
         [(ThemeChoice.System, "System"), (ThemeChoice.Dark, "Dark"), (ThemeChoice.Light, "Light")],

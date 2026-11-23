@@ -56,6 +56,7 @@ public sealed partial class EditorWindow : Window
         AddDeclarations();
         AddReadAsText();
         AddFindInFiles();
+        AddAccessibility();
         AddToolWindows(new Grid { Children = { EditorWithBar(), Welcome } });
         AddExplorerActions();
         DockPanel.SetDock(TrustBanner, Dock.Top);

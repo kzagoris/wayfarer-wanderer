@@ -1,0 +1,13 @@
+using WayfarerWanderer.App.Shell;
+
+namespace WayfarerWanderer.App;
+
+/// <summary>What the window reads of the system for the person's eyes and ears, again as it comes in front: whether the
+/// system asks for high contrast (<see cref="SystemContrast"/>).</summary>
+public sealed partial class EditorWindow
+{
+    private void AddAccessibility()
+    {
+        Activated += (_, _) => SystemContrast.LookAgain();
+    }
+}
