@@ -26,7 +26,7 @@ public sealed partial class EditorWindow
     private FileSystemWatcher? workingTree;
     private Timer? treeQuiet;
     private readonly TextBlock statusText = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-    private readonly Button branchButton = new() { Classes = { StyleClasses.StatusItem }, IsVisible = false };
+    private readonly GitBranchWidget branchButton = new();
 
     /// <summary>The open folder's Git: in no working tree until a folder in one opens.</summary>
     public VcsController Vcs { get; } = new();
@@ -48,7 +48,7 @@ public sealed partial class EditorWindow
     /// opens the branches, and the shown file's widgets.</summary>
     private Control StatusLine()
     {
-        branchButton.Click += (_, _) => ShowAllBranches();
+        branchButton.Click += (_, _) => IdeErrors.Observe(ShowBranchPopupAsync());
         statusText.Classes.Add(StyleClasses.Status);
         return StatusBar();
     }
@@ -169,11 +169,20 @@ public sealed partial class EditorWindow
     private bool vcsClosed;
 
     /// <summary>The branch in the status line, the change bars and the Explorer follow what Git read.</summary>
-    private void OnVcsChanged()
+    private void OnVcsChanged() => branchButton.Show(Vcs);
+
+    /// <summary>The branch the status bar shows, null while it shows none (outside a working tree).</summary>
+    public string? BranchShown => branchButton.Shown;
+
+    /// <summary>The status bar's branch popup: what is done next, then the local branches, each with its own menu.</summary>
+    private async Task ShowBranchPopupAsync()
     {
-        branchButton.IsVisible = Vcs.Repository is not null;
-        branchButton.Content = Vcs.Branch ?? "Detached HEAD";
-        ToolTip.SetTip(branchButton, Vcs.Repository is null ? Vcs.Refused ?? "Version control" : $"Git branch: {Vcs.Branch ?? "Detached HEAD"}");
+        ActionContext context = Actions.Registry.Context();
+        BranchesPanel? branches = GitWindow.Log.Branches;
+        IReadOnlyList<Control> items = await GitBranchWidget.PopupAsync(Vcs, action => FlyoutEntry(new MenuEntry(action), context),
+            () => Ask(ClosingAsking(new NamePopup("Create New Branch", string.Empty, async name => (await Vcs.NewBranchAsync(name)).Problem))),
+            ShowAllBranches, branch => branches?.Menu(branch) ?? [], branches?.Favorites ?? new GitBranchesState());
+        ShowOver(branchButton, items);
     }
 
     // Watching the folder: what changes on disk (a build, a terminal's commit) is read again once it pauses.

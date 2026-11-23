@@ -10,7 +10,7 @@ using A = WayfarerWanderer.App.Shell.AppActions;
 
 namespace WayfarerWanderer.Tests;
 
-/// <summary>Passenger 0.4.2's Git features in Wayfarer's window: staging a change or just its
+/// <summary>Passenger 0.4.2's Git features in Wayfarer's window: the status bar's branch, staging a change or just its
 /// selected lines from a diff, rolling back the change at a diff's caret in a file not open, Group by Directory, and Show
 /// Diff with Working Tree of a file the branch lacks.</summary>
 public sealed class GitUiTests : IDisposable
@@ -42,6 +42,31 @@ public sealed class GitUiTests : IDisposable
         catch (IOException)
         {
             // A watcher still letting go: the temporary folder is the system's to clear.
+        }
+    }
+
+    [Fact]
+    public void TheBranchPopupListsTheCurrentBranchThenFavouritesThenTheRest()
+    {
+        BranchInfo current = Branch("feature", current: true);
+        BranchInfo main = Branch("main");
+        BranchInfo other = Branch("other");
+        List<BranchInfo> listed = GitBranchWidget.Listed([other, main, current], new App.Shell.ToolWindows.GitBranchesState());
+        Assert.Equal(["feature", "main", "other"], listed.Select(b => b.Name));
+    }
+
+    [AvaloniaFact]
+    public async Task TheStatusBarShowsTheBranchCheckedOut()
+    {
+        EditorWindow window = await OpenAsync();
+        try
+        {
+            await Until(() => window.BranchShown == "main");
+            Assert.Equal("main", window.BranchShown);
+        }
+        finally
+        {
+            window.Close();
         }
     }
 
@@ -159,6 +184,9 @@ public sealed class GitUiTests : IDisposable
             window.Close();
         }
     }
+
+    private static BranchInfo Branch(string name, bool current = false) =>
+        new(new GitRef($"refs/heads/{name}", name, RefKind.Local), "0000000000000000000000000000000000000000", current);
 
     private static string Lines(params string[] lines) => string.Concat(lines.Select(l => l + "\n"));
 
