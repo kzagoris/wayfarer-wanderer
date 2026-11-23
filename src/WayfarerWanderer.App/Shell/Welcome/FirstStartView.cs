@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Welcome/FirstStartView.cs, MIT (notices/Passenger/LICENSE): with Wayfarer's
+// From Passenger 8a1df7e4 src/Passenger.App/Welcome/FirstStartView.cs, MIT (notices/Passenger/LICENSE): with Wayfarer's
 // mark, name and pictures.
 using Avalonia;
 using Avalonia.Automation;

@@ -1,4 +1,5 @@
-// From Passenger 2044e49b src/Passenger.App/Theme/Themes.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Theme/Themes.cs, MIT (notices/Passenger/LICENSE): C#'s brace levels cut; the
+// own theme named for Wayfarer (OwnName, UseChoice), and the application taken in hand where the one laid in is gone.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
@@ -256,7 +257,7 @@ public static class Themes
             why = file?.Base is { Id: not null }
                 ? await Passenger.Core.BackgroundWork.Run(() => VsCodeBases.KeepAsync(source, code, theme.Name, file, CancellationToken.None))
                 : source.Kind is ThemeSourceKind.BuiltIn or ThemeSourceKind.Added or ThemeSourceKind.OpenVsx
-                ? $"{theme.Name} is no longer kept: {(source.Kind == ThemeSourceKind.OpenVsx ? "choose it again from VS Code themes" : "add its file again")} in Settings › Appearance"
+                ? $"{theme.Name} is no longer kept: {(source.Kind == ThemeSourceKind.OpenVsx ? "choose it again from VS Code themes" : "add its file again")} in {Settings.SettingsDialog.PlaceOfPage(Settings.SettingsDialog.Appearance)}"
                 : await Passenger.Core.BackgroundWork.Run(() => FetchOnceAsync(source, code, theme.Name, kinds));
         }
         finally

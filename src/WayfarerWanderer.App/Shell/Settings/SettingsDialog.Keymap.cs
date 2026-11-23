@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Settings/SettingsDialog.Keymap.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Settings/SettingsDialog.Keymap.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -29,9 +29,8 @@ public sealed partial class SettingsDialog
     private readonly DockPanel keymapHeader = new() { Margin = new Thickness(0, 0, 0, Gaps.Wide) };
     private readonly TextBlock keymapNote = new() { TextWrapping = TextWrapping.Wrap, IsVisible = false, Classes = { StyleClasses.Muted } };
     private readonly ShortcutPanel filterKeys = new("Second stroke");
+    private readonly FilterChip filterChip = new("Clear Filtering");
     private readonly Popup findPopup = new() { Placement = PlacementMode.BottomEdgeAlignedRight, IsLightDismissEnabled = true };
-    private readonly TextBlock filterText = new() { Classes = { StyleClasses.Caption }, VerticalAlignment = VerticalAlignment.Center };
-    private readonly Border filterChip = new() { IsVisible = false, Classes = { StyleClasses.Tag }, VerticalAlignment = VerticalAlignment.Center };
     private readonly Dictionary<KeymapPreset, Keymap> defaults = [];
     private Shortcut? shortcutFilter;
 
@@ -46,13 +45,13 @@ public sealed partial class SettingsDialog
     public ComboBox KeymapChoice { get; } = new FormDropDown { Name = "KeymapChoice" };
 
     /// <summary>Find Actions by Shortcut, the magnifier over a keyboard at the Keymap page's top.</summary>
-    public Button FindByShortcut { get; } = new() { Classes = { StyleClasses.Tool }, Content = KeyboardSearch() };
+    public Button FindByShortcut { get; } = ToolButtons.Give(new Button(), KeyboardSearch(), "Find Actions by Shortcut", keys: true);
 
     /// <summary>Find Actions by Shortcut's popup: the keystrokes the page is narrowed to.</summary>
     public ShortcutPanel FindShortcut => filterKeys;
 
     /// <summary>The x on the shortcut the page is narrowed to (Clear Filtering).</summary>
-    public Button ClearFiltering { get; } = new() { Classes = { ShellClasses.TabPin }, Margin = new Thickness(Gaps.Small, 0, 0, 0) };
+    public Button ClearFiltering => filterChip.Clear;
 
     /// <summary>The shortcut the Keymap page is narrowed to, or null while it lists every action.</summary>
     public Shortcut? ShortcutFilter => shortcutFilter;
@@ -212,16 +211,8 @@ public sealed partial class SettingsDialog
         KeymapChoice.HorizontalAlignment = HorizontalAlignment.Left;
         KeymapChoice.SelectionChanged += (_, _) => ChooseKeymap(KeymapChoices[Math.Max(0, KeymapChoice.SelectedIndex)]);
 
-        ToolButtons.Tip(FindByShortcut, "Find Actions by Shortcut");
         FindByShortcut.Click += (_, _) => findPopup.IsOpen = true;
-
-        PathIcon clear = new() { Classes = { StyleClasses.Small } };
-        clear.Bind(PathIcon.DataProperty, clear.GetResourceObservable(IconKeys.Close));
-        ClearFiltering.Content = clear;
-        ToolButtons.Tip(ClearFiltering, "Clear Filtering");
-        ClearFiltering.Click += (_, _) => ClearShortcutFilter();
-        filterChip.Child = new StackPanel { Orientation = Orientation.Horizontal, Children = { filterText, ClearFiltering } };
-        filterChip.Bind(Border.BackgroundProperty, filterChip.GetResourceObservable(TokenKeys.Selected));
+        filterChip.Cleared += (_, _) => ClearShortcutFilter();
 
         TextBlock title = new() { Classes = { StyleClasses.PaneTitle }, Text = "Find Shortcut" };
         Border popup = new()
@@ -396,8 +387,7 @@ public sealed partial class SettingsDialog
     private void FilterByShortcut(Shortcut? shortcut)
     {
         shortcutFilter = shortcut;
-        filterText.Text = shortcut is null ? null : KeyWords.Of(shortcut);
-        filterChip.IsVisible = shortcut is not null;
+        filterChip.Words = shortcut is null ? null : KeyWords.Of(shortcut);
         Filter();
         if (shortcut is not null)
         {

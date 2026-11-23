@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Settings/SettingsPreview.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Settings/SettingsPreview.cs, MIT (notices/Passenger/LICENSE).
 namespace WayfarerWanderer.App.Shell.Settings;
 
 /// <summary>What an open Settings dialog changes of the look, shown before Apply over the settings in force (<see

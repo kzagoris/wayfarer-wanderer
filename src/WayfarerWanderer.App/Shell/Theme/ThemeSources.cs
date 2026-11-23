@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Theme/ThemeSources.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Theme/ThemeSources.cs, MIT (notices/Passenger/LICENSE).
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;

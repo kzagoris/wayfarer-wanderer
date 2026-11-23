@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Settings/SettingsDialog.cs, MIT (notices/Passenger/LICENSE): its Appearance,
+// From Passenger 8a1df7e4 src/Passenger.App/Settings/SettingsDialog.cs, MIT (notices/Passenger/LICENSE): its Appearance,
 // System Settings, Trusted Folders and Keymap pages; the .NET, MCP, template, code style and tool pages cut.
 using Avalonia;
 using Avalonia.Automation;
@@ -43,7 +43,7 @@ public sealed partial class SettingsDialog : IdeWindow
     private readonly ListBox pages;
     private readonly TextBlock heading;
     private readonly StackPanel body;
-    private readonly TextBlock nothing;
+    private readonly ToolWindows.EmptyState nothing;
 
     /// <summary>The page's room at its right: its gutter, where its scroll bar shows over the page, clear of what it shows.</summary>
     private const double Gutter = Gaps.Page;
@@ -85,7 +85,7 @@ public sealed partial class SettingsDialog : IdeWindow
         heading = new TextBlock { Classes = { StyleClasses.PageTitle }, Margin = new Thickness(0, 0, Gutter, Gaps.Wide) };
         // The scroll bar shows over the scrolled page's right, so the gutter is inside it: the bar stands there, beside the rows.
         body = new StackPanel { Spacing = Gaps.Wide, Margin = new Thickness(0, 0, Gutter, 0) };
-        nothing = new TextBlock { Classes = { StyleClasses.Muted }, Text = "Nothing matches", IsVisible = false, Margin = new Thickness(21, 4) };
+        nothing = new ToolWindows.EmptyState("Nothing matches") { IsVisible = false };
 
         ok.Click += (_, _) => Ok();
         applyButton.Click += (_, _) => Apply();
