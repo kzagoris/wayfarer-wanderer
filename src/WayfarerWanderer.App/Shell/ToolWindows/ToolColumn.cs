@@ -1,5 +1,6 @@
-// From Passenger 2044e49b src/Passenger.App/ToolWindows/ToolColumn.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/ToolWindows/ToolColumn.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
@@ -88,14 +89,14 @@ public sealed class ToolColumn : Panel
         ContextMenu menu = new() { Placement = PlacementMode.RightEdgeAlignedTop };
         foreach (Button button in Overflowing)
         {
-            PathIcon glyph = new() { Data = (button.Content as PathIcon)?.Data };
-            MenuItem item = new() { Header = ToolTip.GetTip(button) as string, Icon = glyph, IsEnabled = button.IsEffectivelyEnabled };
-            if (button is ToggleButton toggle)
-            {
-                item.ToggleType = MenuItemToggleType.CheckBox;
-                item.IsChecked = toggle.IsChecked == true;
-            }
-            item.Click += (_, _) => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            // Named as a screen reader names the button, its action's keys in the menu's column; greyed, its tip says why.
+            string name = AutomationProperties.GetName(button) ?? ToolTip.GetTip(button) as string ?? string.Empty;
+            string? whyNot = button.IsEffectivelyEnabled ? null : ToolTip.GetTip(button) as string ?? name;
+            void Press() => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            string? action = ActionTips.ActionOf(button);
+            MenuItem item = button is ToggleButton toggle ? ListMenus.Toggle(name, toggle.IsChecked == true, _ => Press(), whyNot, action: action)
+                : action is not null ? ListMenus.Keyed(name, action, Press, whyNot) : ListMenus.Item(name, Press, whyNot);
+            item.Icon = new PathIcon { Data = (button.Content as PathIcon)?.Data };
             menu.Items.Add(item);
         }
         menu.Open(more);

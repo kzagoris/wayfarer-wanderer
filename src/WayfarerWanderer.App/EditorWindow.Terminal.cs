@@ -29,6 +29,7 @@ public sealed partial class EditorWindow
             ActionTitle = "Terminal Tool Window",
             Tools = () => terminal?.HeaderTools,
             Activate = ToggleTerminal,
+            TakesKeysAsShown = true,
         });
         Actions.Registry.Add(new IdeAction(AppActions.NewTerminalSession, "New Terminal Session", "Terminal", _ => IdeErrors.Observe(NewTerminalSessionAsync()))
         {
