@@ -1,7 +1,10 @@
 <!-- From Passenger 2044e49b src/Passenger.App/Theme/Shell.axaml, MIT (notices/Passenger/LICENSE). -->
+<!-- Its base styles (fields, buttons, menus' rows, tags, the type ramp) are caught up with 8a1df7e4; the rest is still
+     2044e49b's until the per-area ports. -->
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:app="using:WayfarerWanderer.App.Shell">
+        xmlns:app="using:WayfarerWanderer.App.Shell"
+        xmlns:editor="using:Passenger.Editor">
     <!-- The shell's controls over the Fluent theme. Fluent paints a button's hover and press on its
          content presenter, so each state is restyled there. A later style wins over an earlier one, so the base
          styles come first and a class's style after them says only how it differs. -->
@@ -9,6 +12,9 @@
     <Styles.Resources>
         <!-- A button, a field and a drop-down are one height, so a row of them shares its edges. -->
         <x:Double x:Key="Passenger.ControlHeight">28</x:Double>
+        <!-- The window's words, every word no step of the type ramp sizes (TypeRamp): a window's, and Fluent's controls'. -->
+        <x:Double x:Key="Passenger.BodySize">13</x:Double>
+        <StaticResource x:Key="ControlContentThemeFontSize" ResourceKey="Passenger.BodySize" />
         <!-- A check box's row as tall as a field's (Fluent's is 32), so a page's rows are evenly spaced. -->
         <StaticResource x:Key="CheckBoxMinHeight" ResourceKey="Passenger.ControlHeight" />
         <!-- A form's drop-down (ComboBox.form): one width for every drop-down in a column, so their edges line up. -->
@@ -34,7 +40,7 @@
          size and ground. -->
     <Style Selector="Button">
         <Setter Property="MinHeight" Value="{DynamicResource Passenger.ControlHeight}" />
-        <Setter Property="Padding" Value="14,0" />
+        <Setter Property="Padding" Value="12,0" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
         <Setter Property="CornerRadius" Value="{DynamicResource Passenger.ControlRadius}" />
@@ -80,7 +86,7 @@
         <Setter Property="Margin" Value="4,0" />
         <Setter Property="CornerRadius" Value="{DynamicResource Passenger.ControlRadius}" />
         <Setter Property="MinHeight" Value="{x:Static app:ListRow.Height}" />
-        <Setter Property="Padding" Value="10,3,10,4" />
+        <Setter Property="Padding" Value="12,2,12,4" />
     </Style>
     <!-- A long name ends in an ellipsis rather than cut at the menu's edge (a branch's). -->
     <Style Selector="MenuItem /template/ ContentPresenter#PART_HeaderPresenter TextBlock">
@@ -162,7 +168,7 @@
         <Setter Property="Margin" Value="4,0" />
         <Setter Property="CornerRadius" Value="{DynamicResource Passenger.ControlRadius}" />
         <Setter Property="MinHeight" Value="{x:Static app:ListRow.Height}" />
-        <Setter Property="Padding" Value="10,3,10,4" />
+        <Setter Property="Padding" Value="12,2,12,4" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
 
@@ -222,8 +228,16 @@
     <Style Selector="Border.kindBadge">
         <Setter Property="CornerRadius" Value="{DynamicResource Passenger.BadgeRadius}" />
     </Style>
+    <!-- A tag's words a small step in from its rounded ends, on no ground but one its tag is given. -->
     <Style Selector="Border.tag">
         <Setter Property="CornerRadius" Value="{DynamicResource Passenger.BadgeRadius}" />
+        <Setter Property="Padding" Value="6,0" />
+    </Style>
+    <!-- A filter in force, on the chosen ground, its × nearer its end than its words are to its start. -->
+    <Style Selector="Border.chip">
+        <Setter Property="CornerRadius" Value="{DynamicResource Passenger.BadgeRadius}" />
+        <Setter Property="Padding" Value="8,2,4,2" />
+        <Setter Property="Background" Value="{DynamicResource Passenger.Selected}" />
     </Style>
     <Style Selector="Border.box">
         <Setter Property="CornerRadius" Value="{DynamicResource Passenger.ControlRadius}" />
@@ -341,15 +355,47 @@
     </Style>
     <!-- Selected text readable in both themes: Fluent's is the system's saturated blue, under black text in light. -->
     <!-- A field's caret blinks as every caret does (Carets), never where the system keeps carets shown. -->
+    <!-- Every field one look, a form's, a search's and a tool window's alike: as tall as the buttons and drop-downs beside it
+         (Fluent's is taller), its words a step in from its edge where a drop-down's and a number box's start (FieldInsets),
+         its own height in a row beside something taller (a check box) rather than stretched to that one's. -->
     <Style Selector="TextBox">
+        <Setter Property="MinHeight" Value="{DynamicResource Passenger.ControlHeight}" />
+        <Setter Property="Padding" Value="{x:Static app:FieldInsets.Padding}" />
         <Setter Property="CornerRadius" Value="{DynamicResource Passenger.ControlRadius}" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="SelectionBrush" Value="{DynamicResource Passenger.TextSelection}" />
         <Setter Property="SelectionForegroundBrush" Value="{DynamicResource Passenger.Text}" />
         <Setter Property="CaretBlinkInterval" Value="{DynamicResource Passenger.TextBoxCaretBlink}" />
     </Style>
-    <!-- A field's placeholder, narrower than it, ends in an ellipsis rather than being cut at its edge. -->
+    <!-- A field of several lines starts its text at its top, not halfway down, and fills the room it is given. -->
+    <Style Selector="TextBox[AcceptsReturn=True]">
+        <Setter Property="VerticalContentAlignment" Value="Top" />
+        <Setter Property="VerticalAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="TextBox /template/ Border#PART_BorderElement">
+        <Setter Property="BorderBrush" Value="{DynamicResource Passenger.FieldBorder}" />
+    </Style>
+    <Style Selector="TextBox:pointerover /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource Passenger.Field}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Passenger.FieldBorder}" />
+    </Style>
+    <!-- A focused field keeps its own ground (Fluent turns it black, white in light) and gains the accent edge. After the
+         field's own edge, which would otherwise win and leave the focused field's edge grey. -->
+    <Style Selector="TextBox:focus /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource Passenger.Field}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Passenger.Accent}" />
+    </Style>
+    <Style Selector="TextBox:focus">
+        <Setter Property="Foreground" Value="{DynamicResource Passenger.Text}" />
+    </Style>
+    <!-- A field's placeholder, narrower than it, ends in an ellipsis rather than being cut at its edge: while the field is
+         empty its text scrolls no way, so the placeholder, which lies in what scrolls, is laid out in the field's room. -->
     <Style Selector="TextBox /template/ TextBlock">
         <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+    <Style Selector="TextBox:empty /template/ ScrollViewer#PART_ScrollViewer">
+        <Setter Property="HorizontalScrollBarVisibility" Value="Disabled" />
     </Style>
     <!-- A drop-down framed as a field and as tall, its text inset as a field's (Fluent's is taller and its frame
          brighter). -->
@@ -357,7 +403,7 @@
         <Setter Property="MinHeight" Value="{DynamicResource Passenger.ControlHeight}" />
         <!-- The chosen item's words, narrower than they are, end in an ellipsis rather than being cut at the arrow. -->
         <Setter Property="TextBlock.TextTrimming" Value="CharacterEllipsis" />
-        <Setter Property="Padding" Value="10,0,0,0" />
+        <Setter Property="Padding" Value="{x:Static app:FieldInsets.DropDown}" />
         <Setter Property="CornerRadius" Value="{DynamicResource Passenger.ControlRadius}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Passenger.FieldBorder}" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
@@ -384,14 +430,14 @@
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="{DynamicResource Passenger.FieldBorder}" />
     </Style>
-    <Style Selector="TextBox.search:disabled /template/ Border#PART_BorderElement">
+    <Style Selector="TextBox:disabled /template/ Border#PART_BorderElement">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="{DynamicResource Passenger.FieldBorder}" />
     </Style>
     <!-- A number box likewise, its own height beside something taller; its text box no taller than the box. -->
     <Style Selector="NumericUpDown">
         <Setter Property="MinHeight" Value="{DynamicResource Passenger.ControlHeight}" />
-        <Setter Property="Padding" Value="10,4,6,4" />
+        <Setter Property="Padding" Value="{x:Static app:FieldInsets.Padding}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Passenger.FieldBorder}" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
         <Setter Property="VerticalAlignment" Value="Center" />
@@ -462,11 +508,6 @@
     <!-- Words in a row that gives way when narrow (a list's row, the toolbar) end in an ellipsis, never cut mid-letter. -->
     <Style Selector="app|ShrinkingRow > TextBlock">
         <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-    </Style>
-    <Style Selector="TextBlock.paneTitle">
-        <Setter Property="FontSize" Value="13" />
-        <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="Foreground" Value="{DynamicResource Passenger.Text}" />
     </Style>
     <!-- Every popup's title (PopupFrame), one size and weight. -->
     <Style Selector="TextBlock.popupTitle">
@@ -969,38 +1010,28 @@
     <Style Selector="Button.tabPin:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource Passenger.Selected}" />
     </Style>
-
-    <!-- A search field (the find bar, Go to File): flat, the chrome's own colour, an accent edge when
-         focused, and room at its right for toggles drawn inside it. -->
-    <Style Selector="TextBox.search">
-        <Setter Property="MinHeight" Value="{DynamicResource Passenger.ControlHeight}" />
-        <!-- Fluent's padding would make it a pixel taller than the buttons and drop-downs beside it. -->
-        <Setter Property="Padding" Value="10,4,6,4" />
+    <!-- A glyph's button inside what it acts on (a chip's ×, a field's +): the glyph's square, on a control's radius, a
+         band under the pointer. -->
+    <Style Selector="Button.small">
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Height" Value="16" />
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="{DynamicResource Passenger.ControlRadius}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
-        <!-- Its own height in a row beside something taller (a check box), not stretched to that one's. -->
-        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.small:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Passenger.Selected}" />
+    </Style>
+
+    <!-- A search field (SearchBox: a tool window's filter, a dialog's search, the find bar, Go to File): a field whose words
+         stand at the step of a tool window's dense controls. -->
+    <Style Selector="TextBox.search">
         <Setter Property="FontSize" Value="13" />
-    </Style>
-    <!-- A field of several lines starts its text at its top, not halfway down. -->
-    <Style Selector="TextBox.search[AcceptsReturn=True]">
-        <Setter Property="VerticalContentAlignment" Value="Top" />
-        <Setter Property="VerticalAlignment" Value="Stretch" />
-    </Style>
-    <Style Selector="TextBox.search /template/ Border#PART_BorderElement">
-        <Setter Property="BorderBrush" Value="{DynamicResource Passenger.FieldBorder}" />
-    </Style>
-    <Style Selector="TextBox.search:pointerover /template/ Border#PART_BorderElement">
-        <Setter Property="Background" Value="{DynamicResource Passenger.Field}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource Passenger.FieldBorder}" />
-    </Style>
-    <!-- A focused search field keeps its own ground (Fluent turns it black, white in light) and gains the accent edge.
-         After the field's own edge, which would otherwise win and leave the focused field's edge grey. -->
-    <Style Selector="TextBox.search:focus /template/ Border#PART_BorderElement">
-        <Setter Property="Background" Value="{DynamicResource Passenger.Field}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource Passenger.Accent}" />
-    </Style>
-    <Style Selector="TextBox.search:focus">
-        <Setter Property="Foreground" Value="{DynamicResource Passenger.Text}" />
     </Style>
     <!-- A table's editable cell (Change Signature's parameters): flat on the row's own colour, an accent line under it
          while it has the keys. -->
@@ -1596,5 +1627,55 @@
     <Style Selector="ToggleButton.tabStripTool">
         <Setter Property="Margin" Value="0,0,6,0" />
         <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <!-- A widget's chevron a small step after its words, and an icon (a lead) as far before them. -->
+    <Style Selector="Button.widget PathIcon.chevron">
+        <Setter Property="Margin" Value="6,0,0,0" />
+    </Style>
+    <Style Selector=":is(Control).lead">
+        <Setter Property="Margin" Value="0,0,6,0" />
+    </Style>
+    <!-- A number that counts while it is watched (a filter's tally) in figures of one width, so that while it counts it
+         holds still, and what stands after it with it. -->
+    <Style Selector="TextBlock.count">
+        <Setter Property="FontFeatures" Value="+tnum" />
+    </Style>
+
+    <!-- The type ramp (TypeRamp), last so a step given to a control says its size over the control's own class: words
+         given none are the body's (Passenger.BodySize). Each heading is semibold, a badge's letters bold. -->
+    <Style Selector=":is(Control).caption">
+        <Setter Property="TextElement.FontSize" Value="12" />
+    </Style>
+    <Style Selector="TextBlock.badgeText">
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontWeight" Value="Bold" />
+    </Style>
+    <!-- Code in a pane, at the pane's step whatever size the editor's code is; a framed Border.code's words too. -->
+    <Style Selector=":is(Control).code">
+        <Setter Property="TextElement.FontFamily" Value="{DynamicResource {x:Static editor:CodeFonts.Key}}" />
+        <Setter Property="TextElement.FontSize" Value="12" />
+    </Style>
+    <!-- A name that stands out in its row: a group's, or what the row is about. -->
+    <Style Selector="TextBlock.strong">
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <!-- A section's heading in a pane, a popup's title. -->
+    <Style Selector="TextBlock.paneTitle">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource Passenger.Text}" />
+    </Style>
+    <!-- A dialog's title over its page (DialogFooter.Headed, Question). -->
+    <Style Selector="TextBlock.dialogTitle">
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.pageTitle">
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.heroTitle">
+        <Setter Property="FontSize" Value="28" />
+        <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
 </Styles>

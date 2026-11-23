@@ -37,7 +37,7 @@ public partial class ExplorerView : UserControl
     /// <summary>The most files the filter reads a folder's names from: past these, a filter finds only those read.</summary>
     public const int MostIndexed = 200_000;
 
-    private readonly TextBox filter = ToolWindows.FilterBox.Of();
+    private readonly TextBox filter = SearchBox.Finding("Filter files");
     private readonly Border filterBar;
     private readonly Debounce filtering;
 
