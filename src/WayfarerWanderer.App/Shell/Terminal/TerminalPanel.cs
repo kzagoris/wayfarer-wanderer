@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/ToolWindows/TerminalPanel.cs, MIT (notices/Passenger/LICENSE): its shells
+// From Passenger 8a1df7e4 src/Passenger.App/ToolWindows/TerminalPanel.cs, MIT (notices/Passenger/LICENSE): its shells
 // alone, without run configurations' programs, the agents' shell or a .NET installation's PATH.
 using System.Collections.ObjectModel;
 using Avalonia;
@@ -28,11 +28,13 @@ public sealed class TerminalTab(TerminalSession session, string name) : Observab
 }
 
 /// <summary>The Terminal window: a shell per tab in the open folder, the first started when the window is first shown, +
-/// for another; a tab whose shell ends closes, and the window hides with its last.</summary>
+/// for another; a tab whose shell ends closes, and the window hides with its last. Shown, it takes the keys only as asked
+/// (<see cref="FocusView"/>, a tab started or chosen), never because a layout shows it.</summary>
 public sealed class TerminalPanel : DockPanel
 {
     private readonly ObservableCollection<TerminalTab> tabs = [];
-    private readonly TerminalView view = new();
+    // Refusals.NothingSelected's words, until Refusals is caught up with v0.4.2.
+    private readonly TerminalView view = new() { NothingSelected = "No text is selected" };
     private readonly Func<string> folder;
     private int opened;
     private bool firstComing;
@@ -47,7 +49,7 @@ public sealed class TerminalPanel : DockPanel
             ItemsSource = tabs,
             VerticalAlignment = VerticalAlignment.Center,
             // In a narrow window the last tabs give way first, each name ending in an ellipsis, as the Debug window's do.
-            ItemsPanel = new FuncTemplate<Panel?>(() => new ShrinkingRow { Spacing = 2 }),
+            ItemsPanel = new FuncTemplate<Panel?>(() => new ShrinkingRow { Spacing = Gaps.Hair }),
         };
         ReusedRows.Use(strip, Tab);
         Children.Add(view);
@@ -63,14 +65,13 @@ public sealed class TerminalPanel : DockPanel
                     firstComing = false;
                     if (tabs.Count == 0)
                     {
-                        IdeErrors.Observe(NewSessionAsync());
+                        IdeErrors.Observe(NewSessionAsync(null, focus: false));
                     }
                 });
             }
-            FocusView();
         };
         Button add = ToolButtons.Of(AppActions.NewTerminalSession, IconKeys.Add, "New Session", action => ActionRequested?.Invoke(this, action));
-        HeaderTools = new ShrinkingRow { Spacing = 4, Children = { strip, add } };
+        HeaderTools = new ShrinkingRow { Spacing = Gaps.Tight, Children = { strip, add } };
     }
 
     /// <summary>Raised when the last shell has ended, so the window can hide.</summary>
@@ -78,6 +79,9 @@ public sealed class TerminalPanel : DockPanel
 
     /// <summary>One of the window's actions asked for by its button.</summary>
     public event EventHandler<string>? ActionRequested;
+
+    /// <summary>A command the shell of a person's tab ran failed, with its exit status (<see cref="TerminalSession.CommandEnded"/>).</summary>
+    public event EventHandler<int>? CommandFailed;
 
     /// <summary>The window header's own tools: the tabs, then New Session.</summary>
     public Control HeaderTools { get; }
@@ -94,22 +98,35 @@ public sealed class TerminalPanel : DockPanel
     /// <summary>The tab shown.</summary>
     public TerminalTab? ActiveTab => tabs.FirstOrDefault(t => t.IsActive);
 
-    /// <summary>Starts a shell in a tab of its own and shows it: in the open folder, or in another (Open In, Terminal).</summary>
-    public async Task<TerminalSession> NewSessionAsync(string? at = null)
+    /// <summary>Starts a shell in a tab of its own and shows it with the keys: in the open folder, or in another (Open In,
+    /// Terminal).</summary>
+    public Task<TerminalSession> NewSessionAsync(string? at = null) => NewSessionAsync(at, focus: true);
+
+    /// <summary>Starts a shell in a tab of its own and shows it, with the keys only where <paramref name="focus"/> says; the
+    /// shell's marks (zsh's through a .zshenv of the IDE's) tell it each command's end.</summary>
+    private async Task<TerminalSession> NewSessionAsync(string? at, bool focus)
     {
         TerminalSession session = new(view.Session?.Screen.Columns ?? 120, view.Session?.Screen.Rows ?? 30);
         string name = ++opened == 1 ? "Local" : $"Local ({opened})";
         TerminalTab tab = new(session, name);
         tabs.Add(tab);
-        Show(tab);
+        Show(tab, focus);
         session.Exited += (_, _) => Close(tab);
+        session.CommandEnded += (_, status) =>
+        {
+            if (status != 0)
+            {
+                CommandFailed?.Invoke(this, status);
+            }
+        };
         try
         {
             if (Shell is { } given && string.IsNullOrWhiteSpace(given.App))
             {
                 throw new InvalidOperationException("the Shell path in Settings names no program to start");
             }
-            await session.StartAsync(at ?? folder(), Shell?.App, Shell?.Arguments);
+            string zsh = await BackgroundWork.Run(() => FirstOnPath.ZshFolder(Path.Combine(State.StateStore.DefaultRoot, "cache", "terminal")));
+            await session.StartAsync(at ?? folder(), Shell?.App, Shell?.Arguments, marks: zsh);
         }
         catch (Exception failed) when (failed is IOException or InvalidOperationException or ArgumentException or System.ComponentModel.Win32Exception)
         {
@@ -175,20 +192,18 @@ public sealed class TerminalPanel : DockPanel
     {
         TextBlock name = new() { VerticalAlignment = VerticalAlignment.Center };
         Avalonia.Controls.Primitives.ToggleButton button = null!;
-        button = ToolTabs.Tab(name, false, () =>
+        button = ToolTabs.Tab(name, () =>
         {
             if (button.DataContext is TerminalTab tab)
             {
                 Close(tab);
             }
         }, "Close Session");
-        // A press on the open tab leaves it open, where the toggle would let it go.
         button.Click += (_, _) =>
         {
             if (button.DataContext is TerminalTab tab)
             {
                 Show(tab);
-                button.IsChecked = tab.IsActive;
             }
         };
         return button.Showing<TerminalTab>(tab =>

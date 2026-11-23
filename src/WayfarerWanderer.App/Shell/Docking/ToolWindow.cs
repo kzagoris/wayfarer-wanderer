@@ -1,4 +1,5 @@
-// From Passenger 2044e49b src/Passenger.App/Docking/ToolWindow.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Docking/ToolWindow.cs, MIT (notices/Passenger/LICENSE): what it serves is
+// asked of DockHost.WhyUnserved, without ToolWindowServes' kinds of .NET project, and with no agents' calls.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -167,6 +168,10 @@ public sealed class ToolWindow(string id, string title, string icon, Func<Contro
     /// it again from inside.</summary>
     public Action? Activate { get; init; }
 
+    /// <summary>Whether a show the person asks for (its stripe's button, its tab, a move) gives it the keys as its action
+    /// does: the terminal's, shown to be typed into. A layout showing it, or an attached agent's call, never does.</summary>
+    public bool TakesKeysAsShown { get; init; }
+
     /// <summary>What is chosen in it (its rows), for actions that run on them while it has the keys.</summary>
     public Func<object?>? Chosen { get; init; }
 
@@ -183,12 +188,18 @@ public sealed class ToolWindow(string id, string title, string icon, Func<Contro
     /// <summary>Open in the layout the IDE starts with (the Explorer), and so after Restore Default Layout.</summary>
     public bool OpenAtFirst { get; init; }
 
+    /// <summary>Why it serves nothing in the open folder (<see cref="DockHost.WhyUnserved"/>), which keeps it off the
+    /// stripes, its place and its tabs, its action greyed saying so, its place in the layout kept; null while it serves the
+    /// folder, as a window of every folder always does.</summary>
+    public string? Unserved { get; internal set; }
+
     /// <summary>The action that shows it, as the dock adds it.</summary>
     internal IdeAction? ShowAction(DockHost dock) => Action is { } id
         ? new IdeAction(id, ActionTitle ?? Title, "Tool Windows", _ => (Activate ?? (() => dock.Activate(Id)))())
         {
             Menus = Menus,
             FromTerminal = true,
+            WhyNot = _ => Unserved,
         }
         : null;
 

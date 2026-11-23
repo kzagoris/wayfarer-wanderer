@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Docking/Stripe.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Docking/Stripe.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -47,18 +47,18 @@ internal sealed class Stripe : Border
             [bottom] = Group(),
         };
         // Wide apart and drawn plainly, so the upper and lower windows read as two places, not one list.
-        gap = new Rectangle { Height = 1, Width = 22, Margin = new Thickness(0, 12) };
+        gap = new Rectangle { Height = 1, Width = 22, Margin = new Thickness(0, Gaps.Wide) };
         gap.Bind(Shape.FillProperty, gap.GetResourceObservable(TokenKeys.StripeSeparator));
         // A window too short for every button puts the last ones behind More.
         PathIcon dots = new();
         dots.Bind(PathIcon.DataProperty, dots.GetResourceObservable(IconKeys.More));
-        more = new ToggleButton { Classes = { StyleClasses.Stripe }, Content = dots, IsVisible = false, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 4, 0, 0) };
+        more = new ToggleButton { Classes = { StyleClasses.Stripe }, Content = dots, IsVisible = false, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, Gaps.Tight, 0, 0) };
         ToolButtons.Tip(more, "More Tool Windows");
         more.Click += (_, _) => ShowMore();
         StackPanel sides = new() { [DockPanel.DockProperty] = Dock.Top, Children = { groups[upper], gap, groups[lower], more } };
         groups[bottom].VerticalAlignment = VerticalAlignment.Bottom;
         groups[bottom][DockPanel.DockProperty] = Dock.Bottom;
-        Child = new Panel { Children = { new DockPanel { Margin = new Thickness(0, 6), Children = { sides, groups[bottom] } }, new ThemeBackdrop(BackgroundPlaces.Frame) } };
+        Child = new Panel { Children = { new DockPanel { Margin = new Thickness(0, Gaps.Small), Children = { sides, groups[bottom] } }, new ThemeBackdrop(BackgroundPlaces.Frame) } };
         SizeChanged += (_, _) => FitButtons();
         Classes.Add(StyleClasses.StripeBar);
         AddHandler(ContextRequestedEvent, OnContextRequested);
@@ -150,11 +150,10 @@ internal sealed class Stripe : Border
         }
         if (keysChanged || !shortcuts.ContainsKey(window))
         {
-            shortcuts[window] = window.Action is { } action ? keymap.ShortcutsFor(action).FirstOrDefault()?.Display() : null;
+            shortcuts[window] = window.Action is { } action ? KeyWords.Of(keymap, action) : null;
         }
         button.IsChecked = window.IsShown;
-        string? keys = shortcuts[window];
-        ToolTip.SetTip(button, keys is null ? window.Title : $"{window.Title} ({keys})");
+        ToolTip.SetTip(button, ActionTips.Named(window.Title, shortcuts[window]));
         return button;
     }
 
@@ -182,7 +181,7 @@ internal sealed class Stripe : Border
         return button;
     }
 
-    private static StackPanel Group() => new() { Spacing = 4, HorizontalAlignment = HorizontalAlignment.Center };
+    private static StackPanel Group() => new() { Spacing = Gaps.Tight, HorizontalAlignment = HorizontalAlignment.Center };
 
     /// <summary>The windows whose buttons the stripe has no room for, which More lists.</summary>
     public IReadOnlyList<ToolWindow> Overflowing => [.. cut.Select(button => buttons.First(b => b.Value == button).Key)];
@@ -267,16 +266,17 @@ internal sealed class Stripe : Border
         return nearest ?? AnchorAt(at);
     }
 
-    /// <summary>A place's windows in their order, each checked while it is on the stripe: unchecked, it is taken off as a
-    /// window closed off it is, open or not; checked, it is put back. After them, each other place of this stripe whose
-    /// windows are all off it, so none is out of reach. Opened at the pointer, or beside the stripe for the menu key.</summary>
+    /// <summary>A place's windows serving the open folder in their order, each checked while it is on the stripe: unchecked,
+    /// it is taken off as a window closed off it is, open or not; checked, it is put back. After them, each other place of
+    /// this stripe whose windows are all off it, so none is out of reach. Opened at the pointer, or beside the stripe for the
+    /// menu key.</summary>
     private void ShowChecklist(ToolAnchor anchor, bool atPointer)
     {
         ContextMenu menu = new() { ItemsSource = Checklist(anchor) };
-        List<ToolAnchor> emptied = [.. groups.Keys.Where(a => a != anchor && host.Windows.Any(w => w.Anchor == a) && host.Windows.Where(w => w.Anchor == a).All(w => w.IsClosed))];
+        List<ToolAnchor> emptied = [.. groups.Keys.Where(a => a != anchor && host.Served.Any(w => w.Anchor == a) && host.Served.Where(w => w.Anchor == a).All(w => w.IsClosed))];
         if (emptied.Count > 0)
         {
-            menu.ItemsSource = (Control[])[.. Checklist(anchor), new Separator(), .. emptied.Select(a => new MenuItem { Header = ToolWindow.Name(a), ItemsSource = Checklist(a) })];
+            menu.ItemsSource = (Control[])[.. Checklist(anchor), new Separator(), .. emptied.Select(a => ToolWindows.ListMenus.Sub(ToolWindow.Name(a), Checklist(a)))];
         }
         if (!atPointer)
         {
@@ -290,15 +290,10 @@ internal sealed class Stripe : Border
     }
 
     private List<Control> Checklist(ToolAnchor anchor) =>
-        [.. host.Windows.Where(w => w.Anchor == anchor).OrderBy(w => w.Order).Select(window =>
+        [.. host.Served.Where(w => w.Anchor == anchor).OrderBy(w => w.Order).Select(window =>
         {
-            PathIcon glyph = new();
-            glyph.Bind(PathIcon.DataProperty, glyph.GetResourceObservable(window.Icon));
-            bool on = !window.IsClosed;
-            MenuItem item = new() { Header = window.Title, Icon = glyph, ToggleType = MenuItemToggleType.CheckBox, IsChecked = on };
             string id = window.Id;
-            item.Click += (_, _) => host.SetOnStripe(id, !on);
-            return item;
+            return (Control)ToolWindows.ListMenus.Toggle(window.Title, !window.IsClosed, on => host.SetOnStripe(id, on), icon: window.Icon);
         })];
 
     /// <summary>More's menu: the windows the stripe has no room for, each shown or hidden by a click as its button would.</summary>
@@ -315,12 +310,8 @@ internal sealed class Stripe : Border
         };
         foreach (ToolWindow window in Overflowing)
         {
-            PathIcon glyph = new();
-            glyph.Bind(PathIcon.DataProperty, glyph.GetResourceObservable(window.Icon));
-            MenuItem item = new() { Header = window.Title, Icon = glyph, ToggleType = MenuItemToggleType.CheckBox, IsChecked = window.IsShown };
             string id = window.Id;
-            item.Click += (_, _) => host.Toggle(id);
-            menu.Items.Add(item);
+            menu.Items.Add(ToolWindows.ListMenus.Toggle(window.Title, window.IsShown, _ => host.Toggle(id), icon: window.Icon));
         }
         menu.Open(more);
     }

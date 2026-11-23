@@ -180,6 +180,11 @@ public sealed partial class EditorWindow : Window
             }
             ToolDock.LayoutChanged += (_, _) => state.Layout.Set(ToolDock.Capture());
         }
+        // The theme's layout as the dock's default, laid over what the person has not arranged, now and as it changes.
+        EventHandler followTheme = (_, _) => ToolDock.UseDefault(Themes.Layout);
+        followTheme(null, EventArgs.Empty);
+        Themes.LayoutChanged += followTheme;
+        Closed += (_, _) => Themes.LayoutChanged -= followTheme;
     }
 
     /// <summary>A file chosen in the Explorer, opened in the editor: a binary file has no text to show, so it stays as it was.</summary>
