@@ -115,6 +115,7 @@ public sealed partial class EditorWindow
         view.IgnoreRequested += (_, path) => IdeErrors.Observe(IgnoreAsync(path));
         view.ResolveRequested += (_, _) => ShowConflicts();
         view.MergeRequested += (_, path) => IdeErrors.Observe(MergeAsync(path));
+        view.StageRequested += (_, asked) => IdeErrors.Observe(StageFilesAsync(asked.Changes, asked.Stage));
         view.Confirm = (title, text, yes) => new ConfirmDialog(title, text, yes).ShowDialog<bool>(this);
         return view;
     }
@@ -126,7 +127,8 @@ public sealed partial class EditorWindow
         view.DiffRequested += (_, chosen) => IdeErrors.Observe(ShowCommitDiffAsync(chosen.Commit, chosen.File));
         view.CompareRequested += (_, chosen) => IdeErrors.Observe(CompareWithAsync(chosen.Local, chosen.Commit.Hash, chosen.Commit.Short, chosen.File.Path));
         view.WorkingTreeDiffRequested += (_, chosen) =>
-            IdeErrors.Observe(CompareWithAsync(chosen.File.Path, chosen.Branch.Ref.FullName, chosen.Branch.Name, chosen.File.From ?? chosen.File.Path));
+            IdeErrors.Observe(CompareWithAsync(chosen.File.Path, chosen.Branch.Ref.FullName, chosen.Branch.Name, chosen.File.From ?? chosen.File.Path,
+                added: chosen.File.Kind == ChangeKind.Added));
         view.OpenRequested += (_, path) => OpenFromExplorer(path);
         view.ActionRequested += (_, action) => Actions.TryExecute(action);
         view.NewBranchRequested += (_, commit) =>
@@ -276,7 +278,27 @@ public sealed partial class EditorWindow
         Add(AppActions.Unstash, "Unstash Changes…", () => IdeErrors.Observe(ShowUnstashAsync()));
         Add(AppActions.ShowDiff, "Show Diff", () => IdeErrors.Observe(ShowDiffAsync(SourcePath!)), onFile: true);
         Add(AppActions.Annotate, "Annotate with Git Blame", () => IdeErrors.Observe(ToggleAnnotationsAsync()), onFile: true);
-        Add(AppActions.RollbackLines, "Rollback Lines", () => IdeErrors.Observe(RollbackLinesAsync()), onFile: true);
+        // In a diff, the change at the caret of the side with the keys, as its band's arrow puts it back.
+        Actions.Registry.Add(new IdeAction(AppActions.RollbackLines, "Rollback Lines", "Git", context =>
+            IdeErrors.Observe(DiffWithKeys(context) is { } diff ? RollBackInDiffAsync(diff) : RollbackLinesAsync()))
+        {
+            WhyNot = context => DiffWithKeys(context) is { } diff ? diff.WhyNotRollBack : WhyNotGit(onFile: true, remote: false, null),
+        });
+        // In a diff, the changes (or lines) at its carets; in the Commit window, the files chosen there.
+        Actions.Registry.Add(new IdeAction(AppActions.Stage, "Stage", "Git", context => Staging(context, stage: true))
+        {
+            WhyNot = context => WhyNotStaging(context, stage: true),
+        });
+        Actions.Registry.Add(new IdeAction(AppActions.Unstage, "Unstage", "Git", context => Staging(context, stage: false))
+        {
+            WhyNot = context => WhyNotStaging(context, stage: false),
+        });
+        // The Commit window's Group By › Directory: its files under their folders, else listed flat.
+        Actions.Registry.Add(new IdeAction(AppActions.GroupByDirectory, "Group by Directory", "Git", _ => Vcs.GroupsByDirectory = !Vcs.GroupsByDirectory)
+        {
+            WhyNot = _ => Vcs.Repository is null ? Vcs.NoRepository : null,
+            IsChecked = _ => Vcs.GroupsByDirectory,
+        });
         Add(AppActions.NextChange, "Next Change", () => GoToChange(1), onFile: true);
         Add(AppActions.PreviousChange, "Previous Change", () => GoToChange(-1), onFile: true);
         Add(AppActions.ResolveConflicts, "Resolve Conflicts…", () => ShowConflicts(), () => Vcs.Conflicts.Count == 0 ? "No files are in conflict" : null);
@@ -334,6 +356,30 @@ public sealed partial class EditorWindow
     private const string NoDiff = "No diff has the keys";
 
     private static DiffView? DiffWithKeys(ActionContext context) => (context.Focused as Visual)?.FindAncestorOfType<DiffView>(includeSelf: true);
+
+    /// <summary>Stage or Unstage: in a diff that stages, the changes at its carets (Stage's keys turning to Unstage where the
+    /// index holds them whole already, as the change's own button turns); in the Commit window, the files chosen there.</summary>
+    private void Staging(ActionContext context, bool stage)
+    {
+        if (DiffWithKeys(context) is { } diff)
+        {
+            if (diff.StageAtCarets(stage ? null : false) is { } refused)
+            {
+                StatusText = refused;
+            }
+            return;
+        }
+        IdeErrors.Observe(StageFilesAsync(CommitView.SelectedChanges, stage && !CommitView.SelectedStaged));
+    }
+
+    /// <summary>Why Stage (or Unstage) can't run: no diff that stages nor the Commit window has the keys, or nothing chosen
+    /// there can be.</summary>
+    private string? WhyNotStaging(ActionContext context, bool stage) =>
+        Session is null ? Refusals.NoFolder
+        : DiffWithKeys(context) is { } diff ? diff.Stages ? null : "Only a diff of the working tree against the last commit stages its changes"
+        : commitView is { } commit && (context.Focused as Visual)?.FindAncestorOfType<CommitView>(includeSelf: true) == commit
+            ? commit.WhyNotStage(commit.SelectedChanges, stage)
+        : $"No diff or Commit window has the keys to {(stage ? "stage" : "unstage")} what they show";
 
     private static string? WhyNotJump(DiffView diff) => diff.Source is { } file && File.Exists(file) ? null : $"{Path.GetFileName(diff.Source)} is not on disk";
 

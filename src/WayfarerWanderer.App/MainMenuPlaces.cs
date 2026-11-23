@@ -92,6 +92,8 @@ public static class MainMenuPlaces
         [AppActions.NextChange] = [new("Git", 2, 3)],
         [AppActions.PreviousChange] = [new("Git", 2, 4)],
         [AppActions.ResolveConflicts] = [new("Git", 2, 5)],
+        [AppActions.Stage] = [new("Git", 2, 6)],
+        [AppActions.Unstage] = [new("Git", 2, 7)],
         [AppActions.CreateRepository] = [new("Git", 3, 0)],
         [AppActions.CommitSigning] = [new("Git", 3, 1)],
 

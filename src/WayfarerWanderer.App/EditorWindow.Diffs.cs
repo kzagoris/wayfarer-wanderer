@@ -81,6 +81,7 @@ public sealed partial class EditorWindow
         }
         OpenDocument? open = documents.GetValueOrDefault(path);
         Task<string?> encoding = Vcs.EncodingChangeAsync(path);
+        Task<bool> breaksAlike = Vcs.BreaksStoredAlikeAsync(path);
         TextDocument mine = open?.Text ?? new TextDocument(ReadText(path) ?? string.Empty);
         // An open file's differences are its change bars' own when they are of its text now.
         if (open is null || await Vcs.DiffAsync(open) is not { } diff)
@@ -89,13 +90,16 @@ public sealed partial class EditorWindow
             TextSnapshot text = mine.Snapshot;
             diff = await BackgroundWork.Run(() => FileDiff.Compare(head, text));
         }
+        // Line breaks git converts as it stores the file are no difference (core.autocrlf, a text or eol attribute).
+        diff = diff.StoringBreaksAlike(await breaksAlike);
         string[] besides = [.. new[] { await encoding, mode?.Said }.OfType<string>()];
         return ShowLocalDiff(path, open, mine, diff, "HEAD", note: besides.Length == 0 ? null : string.Join("; ", besides));
     }
 
     /// <summary>A version of a file beside the file as it is now: <paramref name="revision"/>'s text of it at
-    /// <paramref name="then"/> (where it was in that version), the right side the open file's own text when it is open.</summary>
-    public async Task<DiffWindow?> CompareWithAsync(string path, string revision, string version, string then)
+    /// <paramref name="then"/> (where it was in that version), the right side the open file's own text when it is open. A
+    /// file <paramref name="added"/> since that version, which has none of it, is beside an empty side.</summary>
+    public async Task<DiffWindow?> CompareWithAsync(string path, string revision, string version, string then, bool added = false)
     {
         if (Vcs.Repository is null)
         {
@@ -103,7 +107,7 @@ public sealed partial class EditorWindow
             return null;
         }
         FileVersion? was = await Vcs.VersionAsync(revision, then, path);
-        if (was?.Text is not { } theirs)
+        if ((was is null && added ? string.Empty : was?.Text) is not { } theirs)
         {
             StatusText = was is null ? $"{Path.GetFileName(then)} is not in {version}" : $"{Path.GetFileName(then)} is binary in {version}, so it has no lines to compare";
             return null;
@@ -111,7 +115,8 @@ public sealed partial class EditorWindow
         OpenDocument? open = documents.GetValueOrDefault(path);
         TextDocument mine = open?.Text ?? new TextDocument(ReadText(path) ?? string.Empty);
         TextSnapshot text = mine.Snapshot;
-        FileDiff diff = await BackgroundWork.Run(() => FileDiff.Compare(theirs, text));
+        Task<bool> breaksAlike = was is null ? Task.FromResult(false) : Vcs.BreaksStoredAlikeAsync(revision, then, was, path);
+        FileDiff diff = (await BackgroundWork.Run(() => FileDiff.Compare(theirs, text))).StoringBreaksAlike(await breaksAlike);
         return ShowLocalDiff(path, open, mine, diff, version);
     }
 
@@ -148,15 +153,27 @@ public sealed partial class EditorWindow
         {
             DiffView view = Diffs.ForFile(Path.GetFileName(path), diff, mine, open, titles, path, path);
             view.Note = note;
+            // A file not open has a read-only copy for its side: a change rolled back there is written to the file on disk.
+            if (open is null)
+            {
+                view.PutsBackOnDisk = (compared, edit, what) => PutBackOnDiskAsync(path, version, compared, edit, what);
+                FollowDisk(path, view);
+            }
             if (version == "HEAD" && note is null && commitView is { } commits)
             {
                 commits.ConfigureDiff(path, view);
+            }
+            if (version == "HEAD")
+            {
+                StageIn(path, view);
             }
             return view;
         }));
     }
 
-    /// <summary>Shows a diff in a window of its own over this one, closed once its file closes; Jump to Source shows the file.</summary>
+    /// <summary>Shows a diff in a window of its own over this one, closed once its file closes; Jump to Source shows the file.
+    /// The keys of a diff's own actions (Stage, Unstage, Rollback Lines, Diff Settings, Jump to Source, Go to Declaration)
+    /// run them in the diff.</summary>
     private DiffWindow ShowDiff(DiffContent shown)
     {
         DiffView view = shown.Make();
@@ -170,8 +187,130 @@ public sealed partial class EditorWindow
                 Editor.GoTo(new TextPosition(Math.Min(view.Right.CaretPosition.Line, Editor.Document.Snapshot.LineCount - 1), 0));
             }
         };
+        window.AddHandler(KeyDownEvent, (_, e) =>
+        {
+            if (keys.ActionFor(new Shortcut(Keystroke.From(e))) is { } pressed && DiffActions.Contains(pressed))
+            {
+                ActionContext context = new(Editor, window.FocusManager?.GetFocusedElement());
+                e.Handled = pressed == AppActions.GoToDeclaration ? GoToDeclarationFromDiff(view, window) : Actions.Registry.Run(pressed, context) is null;
+            }
+        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         window.Show(this);
         return window;
+    }
+
+    /// <summary>The actions whose keys a diff's window takes for its diff.</summary>
+    private static readonly HashSet<string> DiffActions =
+        [AppActions.Stage, AppActions.Unstage, AppActions.RollbackLines, AppActions.DiffSettings, AppActions.DiffJumpToSource, AppActions.GoToDeclaration];
+
+    /// <summary>Go to Declaration asked on a diff's side that is the open file's own text: the file is shown at the diff's
+    /// caret, where Go to Declaration goes from, as from the file's editor. False where no such side has the keys.</summary>
+    private bool GoToDeclarationFromDiff(DiffView view, DiffWindow window)
+    {
+        if (!view.IsEditable || !view.Right.IsKeyboardFocusWithin || view.Source is not { } file || !File.Exists(file))
+        {
+            return false;
+        }
+        TextPosition caret = view.Right.CaretPosition;
+        window.Close();
+        OpenFromExplorer(file);
+        int line = Math.Min(caret.Line, Editor.Document.Snapshot.LineCount - 1);
+        Editor.GoTo(new TextPosition(line, Math.Min(caret.Column, Editor.Document.Snapshot.GetLineText(line).Length)));
+        Actions.TryExecute(AppActions.GoToDeclaration);
+        return true;
+    }
+
+    /// <summary>A diff's change put back in a file not open (<see cref="DiffView.PutsBackOnDisk"/>): written as a save writes
+    /// it, keeping its encoding and line breaks, unless the file changed on disk since its diff read it or was opened since.
+    /// Null once written, else why not.</summary>
+    private Task<string?> PutBackOnDiskAsync(string path, string version, TextSnapshot compared, TextEdit edit, string what)
+    {
+        string? why;
+        try
+        {
+            why = documents.ContainsKey(path) ? $"{Path.GetFileName(path)} was opened since its diff was shown: roll the change back there"
+                : FileText.Load(path) is not { } file || file.Text != compared.ToString() ? $"{Path.GetFileName(path)} changed on disk since its diff read it: roll the change back again"
+                : null;
+            if (why is null && FileText.Load(path) is { } now)
+            {
+                FileText.SaveOver(path, now, string.Concat(now.Text.AsSpan(0, edit.Start), edit.Text, now.Text.AsSpan(edit.Start + edit.Length)));
+                StatusText = $"Rolled back {what} of {Path.GetFileName(path)} to {version}";
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            why = $"{Path.GetFileName(path)} could not be written: {error.Message}";
+        }
+        if (why is null)
+        {
+            IdeErrors.Observe(Vcs.RefreshAsync());
+        }
+        return Task.FromResult(why);
+    }
+
+    /// <summary>A diff whose file's side is a copy of a file not open takes the file's text again from disk whenever git's
+    /// status is read (after a rollback written there, another program's write), read off the window's thread.</summary>
+    private void FollowDisk(string path, DiffView view)
+    {
+        void Follow(object? sender, EventArgs e) => IdeErrors.Observe(FollowDiskAsync());
+        async Task FollowDiskAsync() => view.FollowDisk(await BackgroundWork.Run(() => ReadText(path)));
+        view.AttachedToVisualTree += (_, _) => Vcs.Changed += Follow;
+        view.DetachedFromVisualTree += (_, _) => Vcs.Changed -= Follow;
+    }
+
+    /// <summary>A diff of a changed text file against the last commit stages its changes into git's index: a change's own
+    /// button and Stage's keys turn as the index holds it, read again whenever the status is.</summary>
+    private void StageIn(string path, DiffView view)
+    {
+        if (Vcs.Changes.FirstOrDefault(c => PathNames.Same(c.Path, path)) is not { Kind: ChangeKind.Modified or ChangeKind.Renamed, Submodule: SubmoduleChange.None })
+        {
+            return;
+        }
+        view.StageWith(diff => HeldInIndexAsync(path, diff));
+        view.StageRequested += (_, asked) => IdeErrors.Observe(StageChangesAsync(view, path, asked.Changes, asked.Stage));
+        void Follow(object? sender, EventArgs e) => view.RefreshStaged();
+        view.AttachedToVisualTree += (_, _) => Vcs.Changed += Follow;
+        view.DetachedFromVisualTree += (_, _) => Vcs.Changed -= Follow;
+    }
+
+    /// <summary>Which changes of a file's diff git's index holds whole; null where it holds no text of it.</summary>
+    private async Task<bool[]?> HeldInIndexAsync(string path, FileDiff diff)
+    {
+        if (await Vcs.IndexTextAsync(path) is not { } index)
+        {
+            return null;
+        }
+        TextSnapshot text = diff.Text;
+        bool alike = diff.BreaksStoredAlike;
+        return await BackgroundWork.Run(() => diff.HeldIn(FileDiff.Compare(index, text).StoringBreaksAlike(alike)));
+    }
+
+    /// <summary>Stages or unstages some of a file's changes (or just the lines chosen of them) from its diff, said in the
+    /// status line.</summary>
+    private async Task StageChangesAsync(DiffView view, string path, IReadOnlyList<DiffHunk> changes, bool stage)
+    {
+        if (Vcs.Changes.FirstOrDefault(c => PathNames.Same(c.Path, path)) is not { } change)
+        {
+            StatusText = $"{Path.GetFileName(path)} has no change to {(stage ? "stage" : "unstage")}";
+            return;
+        }
+        FileDiff diff = view.Compared;
+        VcsOutcome outcome = stage
+            ? await Vcs.StageChangesAsync(path, new PartialCommit(diff, changes, change.From))
+            : await Vcs.UnstageChangesAsync(change, diff, changes);
+        StatusText = outcome.Message;
+        view.RefreshStaged();
+    }
+
+    /// <summary>Stages or unstages files whole, from the Commit window, said in the status line.</summary>
+    private async Task StageFilesAsync(IReadOnlyList<FileChange> changes, bool stage)
+    {
+        if (Vcs.WhyNotStage(changes) is { } refused)
+        {
+            StatusText = refused;
+            return;
+        }
+        StatusText = (await Vcs.StageAsync(changes, stage)).Message;
     }
 
     /// <summary>A file's text as the window would read it, or null where it is binary or cannot be read.</summary>
@@ -206,12 +345,15 @@ public sealed partial class EditorWindow
         Editor.GoTo(new TextPosition(Math.Min(target.Line, document.Text.Snapshot.LineCount - 1), 0));
     }
 
+    /// <summary>Rollback Lines in a diff: the change at the caret of the side with the keys put back, said once done.</summary>
+    private async Task RollBackInDiffAsync(DiffView diff) => StatusText = (await diff.RollBackAtCaretAsync()).Said;
+
     /// <summary>Rollback Lines: the change under the caret goes back to what the last commit has there.</summary>
     private async Task RollbackLinesAsync()
     {
         if (ShownFile is not { } document)
         {
-            StatusText = "No change here to roll back";
+            StatusText = DiffView.NoChangeHere;
             return;
         }
         FileDiff? diff;
@@ -230,10 +372,11 @@ public sealed partial class EditorWindow
         }
         if (diff?.HunkAt(Editor.CaretPosition.Line) is not { } hunk)
         {
-            StatusText = "No change here to roll back";
+            StatusText = DiffView.NoChangeHere;
             return;
         }
         Editor.ApplyEdits([diff.Restore(hunk)]);
+        StatusText = $"Rolled back the change at line {hunk.NewStart + 1} of {document.Name}";
     }
 
     /// <summary>A click on a change bar: a popup of what the lines were, with the change's actions.</summary>
