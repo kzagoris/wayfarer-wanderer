@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Settings/ThemePicker.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Settings/ThemePicker.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -48,13 +48,13 @@ public sealed class ThemePicker : StackPanel
         this.setting = setting;
         this.working = working;
         this.change = change;
-        Spacing = 4;
+        Spacing = Gaps.Tight;
         AutomationProperties.SetName(Box, setting.Row?.Label);
         ReusedRows.Use(Box, () =>
         {
             TextBlock name = new() { VerticalAlignment = VerticalAlignment.Center };
             TextBlock source = new() { Classes = { StyleClasses.Muted }, VerticalAlignment = VerticalAlignment.Center };
-            return new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { name, source } }.Showing<Choice>(choice =>
+            return new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gaps.Normal, Children = { name, source } }.Showing<Choice>(choice =>
             {
                 name.Text = choice.Name;
                 source.Text = choice.Source;

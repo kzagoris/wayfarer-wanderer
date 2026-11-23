@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Vcs/DiffWindow.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Vcs/DiffWindow.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia.Controls;
 using Avalonia.Input;
 
@@ -17,7 +17,7 @@ public sealed class DiffWindow : IdeWindow, IDiffHost
         MinHeight = 300;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         View = view;
-        Content = view;
+        Content = new Panel { Children = { view, Assist } };
         KeyDown += (_, e) =>
         {
             if (e.Key == Key.Escape && e.KeyModifiers == KeyModifiers.None)
@@ -32,6 +32,9 @@ public sealed class DiffWindow : IdeWindow, IDiffHost
     public DiffContent Shown { get; }
 
     public DiffView View { get; }
+
+    /// <summary>The layer over the diff that the code assistance's cards stand on, as over the editors.</summary>
+    public Canvas Assist { get; } = new() { ClipToBounds = false };
 
     public void GiveWay() => Close();
 }

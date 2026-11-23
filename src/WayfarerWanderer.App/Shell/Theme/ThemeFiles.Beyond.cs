@@ -1,4 +1,5 @@
-// From Passenger 2044e49b src/Passenger.App/Theme/ThemeFiles.Beyond.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Theme/ThemeFiles.Beyond.cs, MIT (notices/Passenger/LICENSE).
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Passenger.Core;
@@ -115,7 +116,8 @@ public static partial class ThemeFiles
         if (JsonMembers.Value(code, "size") is { } given)
         {
             size = Number(given, LeastFontSize, MostFontSize)
-                ?? throw new FormatException($"gives fonts' code size as {ThemeJson.Shown(given)}: a size is a number of points, {LeastFontSize} to {MostFontSize}");
+                ?? throw new FormatException(string.Create(CultureInfo.InvariantCulture,
+                    $"gives fonts' code size as {ThemeJson.Shown(given)}: a size is a number of points, {LeastFontSize} to {MostFontSize}"));
         }
         return new ThemeFonts(Family(code, "code"), size, Family(window, "window"));
 
@@ -174,7 +176,8 @@ public static partial class ThemeFiles
         if (of("opacity") is { } shown)
         {
             opacity = Number(shown, 0, MostOpacity)
-                ?? throw new FormatException($"gives background's opacity under {variant} as {ThemeJson.Shown(shown)}: it is 0 to {MostOpacity}, so the code over the picture stays readable");
+                ?? throw new FormatException(string.Create(CultureInfo.InvariantCulture,
+                    $"gives background's opacity under {variant} as {ThemeJson.Shown(shown)}: it is 0 to {MostOpacity}, so the code over the picture stays readable"));
         }
         (uint tint, double strength) = (0, 0);
         if (of("tint") is { } washed)

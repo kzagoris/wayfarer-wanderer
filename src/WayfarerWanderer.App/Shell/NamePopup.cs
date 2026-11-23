@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Vcs/NamePopup.cs, MIT (notices/Passenger/LICENSE): IAnswers cut, its width
+// From Passenger 8a1df7e4 src/Passenger.App/Vcs/NamePopup.cs, MIT (notices/Passenger/LICENSE): IAnswers cut, its width
 // PopupFrame's Narrow.
 using Avalonia;
 using Avalonia.Controls;
@@ -33,12 +33,12 @@ public sealed class NamePopup : UserControl
     {
         this.attempt = attempt;
         Width = 360;
-        name = new TextBox { Classes = { StyleClasses.Search }, Text = initial };
-        problem = new TextBlock { Classes = { StyleClasses.Muted }, FontSize = 12, IsVisible = false, TextWrapping = TextWrapping.Wrap };
-        StackPanel body = new() { Spacing = 8, Children = { new TextBlock { Classes = { ShellClasses.PopupTitle }, Text = title }, name } };
+        name = new TextBox { Text = initial };
+        problem = new TextBlock { Classes = { StyleClasses.Muted, StyleClasses.Caption }, IsVisible = false, TextWrapping = TextWrapping.Wrap };
+        StackPanel body = new() { Spacing = Gaps.Normal, Children = { new TextBlock { Classes = { StyleClasses.PaneTitle }, Text = title }, name } };
         if (option is { } asked)
         {
-            this.option = new CheckBox { Content = asked.Text, IsChecked = asked.On, Focusable = false, FontSize = 12, MinHeight = 0 };
+            this.option = PopupFrame.Option(asked.Text, asked.On);
             this.option.IsCheckedChanged += (_, _) => OptionChanged?.Invoke(this, this.option.IsChecked == true);
             body.Children.Add(this.option);
         }
@@ -53,9 +53,9 @@ public sealed class NamePopup : UserControl
                 ItemsSource = kinds.Select(k => new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
-                    Spacing = 8,
+                    Spacing = Gaps.Normal,
                     Height = ListRow.Height,
-                    Margin = new Thickness(4, 0),
+                    Margin = ListRow.Inset,
                     Children = { k.Icon, new TextBlock { Text = k.Name, VerticalAlignment = VerticalAlignment.Center } },
                 }).ToList(),
                 SelectedIndex = 0,
@@ -67,7 +67,7 @@ public sealed class NamePopup : UserControl
         Content = new Border
         {
             Classes = { StyleClasses.Popup },
-            Padding = new Thickness(12, 10),
+            Padding = PopupFrame.Inset,
             Child = body,
         };
         name.AddHandler(KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel);

@@ -198,7 +198,7 @@ public sealed partial class EditorWindow
             StatusText = found.StoppedIn(Path.GetFileName) is { } stopped ? $"Nothing replaced: {stopped}" : "Nothing to replace";
             return;
         }
-        string what = FilesFound.Count(replaceable);
+        string what = FilesFound.Said(replaceable);
         bool yes = await ConfirmAsync("Replace in Files", $"Replace {what} with '{asked.Replacement}'? A closed file is written; an open file's change can be undone in it.", "Replace All");
         if (yes)
         {
@@ -299,6 +299,6 @@ public sealed partial class EditorWindow
         }
         IReadOnlyList<SearchMatch> replaced = [.. matches.Where(m => changed.Contains(m.Path))];
         string? left = refused.Count == 0 ? null : "not replaced: " + string.Join(", ", refused.Select(r => $"{Path.GetFileName(r.Path)} ({r.Why})"));
-        return string.Join("; ", [replaced.Count > 0 ? $"Replaced {FilesFound.Count(replaced)}" : "Nothing replaced", .. converted, .. left is null ? [] : new[] { left }]);
+        return string.Join("; ", [replaced.Count > 0 ? $"Replaced {FilesFound.Said(replaced)}" : "Nothing replaced", .. converted, .. left is null ? [] : new[] { left }]);
     }
 }

@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Explorer/FileIconSet.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Explorer/FileIconSet.cs, MIT (notices/Passenger/LICENSE).
 namespace WayfarerWanderer.App.Shell.Explorer;
 
 /// <summary>A shape of Passenger's file icons (<c>FileIcon.*</c>, Theme/FileIconSet.axaml) in one of their colours

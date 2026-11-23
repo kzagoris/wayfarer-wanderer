@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Settings/SettingsDialog.Themes.cs, MIT (notices/Passenger/LICENSE): the theme,
+// From Passenger 8a1df7e4 src/Passenger.App/Settings/SettingsDialog.Themes.cs, MIT (notices/Passenger/LICENSE): the theme,
 // dark or light and the code colour scheme; the theme sources and the VS Code themes explorer cut.
 namespace WayfarerWanderer.App.Shell.Settings;
 

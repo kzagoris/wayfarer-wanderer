@@ -1,4 +1,5 @@
-// From Passenger 2044e49b src/Passenger.App/Theme/ThemeFiles.Layout.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Theme/ThemeFiles.Layout.cs, MIT (notices/Passenger/LICENSE).
+using System.Globalization;
 using System.Text.Json;
 using WayfarerWanderer.App.Shell.Docking;
 using Passenger.Core;
@@ -155,6 +156,7 @@ public static partial class ThemeFiles
             return null;
         }
         return Number(given, LeastArea, MostArea)
-            ?? throw new FormatException($"gives layout's {side} size as {ThemeJson.Shown(given)}: an area's size is a number of pixels, {LeastArea} to {MostArea}");
+            ?? throw new FormatException(string.Create(CultureInfo.InvariantCulture,
+                $"gives layout's {side} size as {ThemeJson.Shown(given)}: an area's size is a number of pixels, {LeastArea} to {MostArea}"));
     }
 }

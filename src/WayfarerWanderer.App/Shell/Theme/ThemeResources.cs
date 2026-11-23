@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Theme/ThemeResources.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Theme/ThemeResources.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
@@ -45,6 +45,22 @@ public static class ThemeResources
             laid.ThemeDictionaries[ThemeVariant.Light] = Filled(theme.Light);
         }
         return laid;
+    }
+
+    /// <summary>The colours some tokens (named without <c>Passenger.</c>) take in a variant as the application's resources
+    /// stand, as <c>0xAARRGGBB</c>; null where one is not a plain colour.</summary>
+    public static IReadOnlyDictionary<string, uint>? Colours(Application app, ThemeVariant variant, IReadOnlyList<string> tokens)
+    {
+        Dictionary<string, uint> colours = new(StringComparer.Ordinal);
+        foreach (string token in tokens)
+        {
+            if (!app.TryGetResource(Prefix + token, variant, out object? found) || found is not ISolidColorBrush brush)
+            {
+                return null;
+            }
+            colours[token] = brush.Color.ToUInt32();
+        }
+        return colours;
     }
 
     /// <summary>Tokens as a dictionary of resources, each under its key.</summary>

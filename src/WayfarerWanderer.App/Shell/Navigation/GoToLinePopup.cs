@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Navigation/GoToLinePopup.axaml(.cs), MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Navigation/GoToLinePopup.axaml(.cs), MIT (notices/Passenger/LICENSE).
 using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
@@ -21,18 +21,19 @@ public sealed class GoToLinePopup : UserControl, IAnswers<TextPosition?>
     {
         this.lineCount = lineCount;
         Width = PopupFrame.Narrow;
-        query = new TextBox { Classes = { StyleClasses.Search }, Text = $"{current.Line + 1}:{current.Column + 1}" };
-        problem = new TextBlock { Classes = { StyleClasses.Muted }, FontSize = 12, IsVisible = false, TextWrapping = Avalonia.Media.TextWrapping.Wrap };
+        query = new TextBox { Text = $"{current.Line + 1}:{current.Column + 1}" };
+        problem = new TextBlock { Classes = { StyleClasses.Muted, StyleClasses.Caption }, IsVisible = false, TextWrapping = Avalonia.Media.TextWrapping.Wrap };
         Content = new Border
         {
             Classes = { StyleClasses.Popup },
-            Padding = new Thickness(12, 10),
+            Padding = PopupFrame.Inset,
             Child = new StackPanel
             {
-                Spacing = 8,
-                Children = { new TextBlock { Classes = { ShellClasses.PopupTitle }, Text = "Go to Line:Column" }, query, problem },
+                Spacing = Gaps.Normal,
+                Children = { new TextBlock { Classes = { StyleClasses.PaneTitle }, Text = "Go to Line:Column" }, query, problem },
             },
         };
+        Avalonia.Automation.AutomationProperties.SetName(query, "Go to Line:Column");
         query.AddHandler(KeyDownEvent, OnQueryKeyDown, RoutingStrategies.Tunnel);
         Dispatcher.UIThread.Post(() =>
         {

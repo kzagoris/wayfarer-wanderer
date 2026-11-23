@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Welcome/FirstStartPictures.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Welcome/FirstStartPictures.cs, MIT (notices/Passenger/LICENSE).
 namespace WayfarerWanderer.App.Shell.Welcome;
 
 /// <summary>The first start's pictures of Wayfarer in its own theme and each it carries, dark and light, carried in
@@ -12,8 +12,8 @@ public static class FirstStartPictures
     /// <summary>The largest screen scale a picture drawn at its widest stays sharp on: it holds this many pixels a unit.</summary>
     public const double Sharpest = 3;
 
-    /// <summary>The file of a theme's picture, by the theme's name, in dark or light.</summary>
-    public static string FileOf(string theme, bool dark) => $"{theme.ToLowerInvariant()}-{(dark ? "dark" : "light")}.webp";
+    /// <summary>The file of a theme's picture, by the theme's name in lower case, a space a hyphen, in dark or light.</summary>
+    public static string FileOf(string theme, bool dark) => $"{theme.ToLowerInvariant().Replace(' ', '-')}-{(dark ? "dark" : "light")}.webp";
 
     /// <summary>Where the app carries a theme's picture in dark or light.</summary>
     public static Uri Place(string theme, bool dark) => new($"avares://WayfarerWanderer.App/Shell/Assets/FirstStart/{FileOf(theme, dark)}");

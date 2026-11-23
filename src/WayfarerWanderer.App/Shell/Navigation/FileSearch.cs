@@ -58,7 +58,7 @@ public sealed record FilesFound(IReadOnlyList<SearchMatch> Matches, IReadOnlyLis
         Stopped.Count == 0 ? null : $"the regex took too long and stopped in {string.Join(", ", Stopped.Select(name))}";
 
     /// <summary>How many matches in how many files.</summary>
-    public static string Count(IReadOnlyCollection<SearchMatch> matches)
+    public static string Said(IReadOnlyCollection<SearchMatch> matches)
     {
         int files = matches.Select(m => m.Path).Distinct().Count();
         return $"{Plural.Of(matches.Count, "match", "matches")} in {Plural.Of(files, "file")}";
