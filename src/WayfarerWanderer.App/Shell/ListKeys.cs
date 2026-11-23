@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/ListKeys.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/ListKeys.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -15,6 +15,20 @@ namespace WayfarerWanderer.App.Shell;
 /// and End stay the field's. A list given the keys has them on its chosen row (<see cref="Hold"/>).</summary>
 public static class ListKeys
 {
+    /// <summary>The key of each act (<see cref="ListActs"/>), as <see cref="Act"/> hears it and a menu's item for the act
+    /// shows it (<see cref="ToolWindows.ListMenus"/>).</summary>
+    public const Key OpenKey = Key.Enter;
+
+    /// <inheritdoc cref="OpenKey"/>
+    public const Key SourceKey = Key.F4;
+
+    /// <inheritdoc cref="OpenKey"/>
+    public const Key EditKey = Key.F2;
+
+    /// <summary>The key Remove is shown by: Delete, or on a Mac keyboard the Delete key over Return, which is Backspace.
+    /// <see cref="Act"/> hears both.</summary>
+    public static Key RemoveKey => OperatingSystem.IsMacOS() ? Key.Back : Key.Delete;
+
     /// <summary>Gives a list what its chosen row does by the keys and a double click, the one way a list hears them, ahead
     /// of its rows: Enter and a double click on a row run <see cref="ListActs.Open"/> (Enter <see cref="ListActs.Enter"/>
     /// where the list gives one), F4 <see cref="ListActs.Source"/>, F2 <see cref="ListActs.Edit"/>, Delete and Backspace
@@ -35,9 +49,9 @@ public static class ListKeys
             }
             Action? act = e.KeyModifiers != KeyModifiers.None ? null : e.Key switch
             {
-                Key.Enter => acts.Enter ?? acts.Open,
-                Key.F4 => acts.Source,
-                Key.F2 => acts.Edit,
+                OpenKey => acts.Enter ?? acts.Open,
+                SourceKey => acts.Source,
+                EditKey => acts.Edit,
                 Key.Delete or Key.Back => acts.Remove,
                 _ => null,
             };
@@ -112,9 +126,9 @@ public static class ListKeys
     }
 
     /// <summary>Gives a search field the keys of the list under it, ahead of the field's own: Up, Down, Page Up and Page Down
-    /// move the list's choice (<see cref="Move"/>), Escape clears a search before it cancels, and Enter runs
-    /// <paramref name="enter"/> where one is given.</summary>
-    public static void Search(TextBox search, ListBox list, Action? enter = null) => search.AddHandler(InputElement.KeyDownEvent, (_, e) =>
+    /// move the list's choice (<see cref="Move"/>, past what <paramref name="choosable"/> refuses), Escape clears a search
+    /// before it cancels, and Enter runs <paramref name="enter"/> where one is given.</summary>
+    public static void Search(TextBox search, ListBox list, Action? enter = null, Func<int, bool>? choosable = null) => search.AddHandler(InputElement.KeyDownEvent, (_, e) =>
     {
         if (e.KeyModifiers != KeyModifiers.None)
         {
@@ -122,7 +136,7 @@ public static class ListKeys
         }
         switch (e.Key)
         {
-            case Key.Up or Key.Down or Key.PageUp or Key.PageDown when Move(list, e):
+            case Key.Up or Key.Down or Key.PageUp or Key.PageDown when Move(list, e, choosable):
                 e.Handled = true;
                 break;
             case Key.Enter when enter is not null:
