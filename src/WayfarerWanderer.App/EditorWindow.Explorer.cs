@@ -60,6 +60,28 @@ public sealed partial class EditorWindow
     /// <summary>The popup open over the window, if any: for tests.</summary>
     public Control? Asking => asking.IsOpen ? asking.Child : null;
 
+    /// <summary>The window holds the system's watcher's beat (<see cref="Shell.Workspace.WatchLag.Hold"/>) while it is in
+    /// front, so a Mac whose watcher falls behind under a load of changes has the Explorer and watched files look for
+    /// themselves; in the background the look as it comes in front finds what went unheard.</summary>
+    private void HoldWatchBeat()
+    {
+        IDisposable? beat = null;
+        // A window's coming in front the system posted before it closed may land after: it holds nothing then.
+        bool closed = false;
+        Activated += (_, _) => beat ??= closed ? null : Shell.Workspace.WatchLag.Hold();
+        Deactivated += (_, _) =>
+        {
+            beat?.Dispose();
+            beat = null;
+        };
+        Closed += (_, _) =>
+        {
+            closed = true;
+            beat?.Dispose();
+            beat = null;
+        };
+    }
+
     private void AddExplorerActions()
     {
         Explorer.MenuFor = ExplorerMenu;
@@ -67,6 +89,7 @@ public sealed partial class EditorWindow
         Explorer.RowList.AddHandler(KeyDownEvent, OnExplorerKey);
         asking.PlacementTarget = ToolDock;
         asking.Closed += (_, _) => asking.Child = null;
+        HoldWatchBeat();
 
         Row(A.NewFile, "New File…", row => AskName("New File", string.Empty, name => CreateFile(row.Into!, name, string.Empty)), Holds);
         Row(A.NewFolder, "New Folder…", row => AskName("New Folder", string.Empty, name => CreateFolder(row.Into!, name)), Holds);

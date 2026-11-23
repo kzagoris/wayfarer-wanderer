@@ -649,6 +649,7 @@ public partial class ExplorerView : UserControl
             watcher.Renamed += OnDiskChanged;
             watcher.Error += (_, _) => Dispatcher.UIThread.Post(() => QueueFolder(root));
             watcher.EnableRaisingEvents = true;
+            Workspace.WatchLag.Behind += OnWatchBehind;
         }
         catch (Exception error) when (error is IOException or ArgumentException or PlatformNotSupportedException)
         {
@@ -659,11 +660,22 @@ public partial class ExplorerView : UserControl
 
     private void StopWatching()
     {
+        Workspace.WatchLag.Behind -= OnWatchBehind;
         watcher?.Dispose();
         watcher = null;
         watchQuiet.Stop();
         changedFolders.Clear();
     }
+
+    /// <summary>The system's watcher is behind (<see cref="Workspace.WatchLag"/>, a busy Mac): what it would have said may
+    /// be minutes late, so the whole folder is read again.</summary>
+    private void OnWatchBehind(DateTime since) => Dispatcher.UIThread.Post(() =>
+    {
+        if (folder is { } root)
+        {
+            QueueFolder(root);
+        }
+    });
 
     private void OnDiskChanged(object sender, FileSystemEventArgs e)
     {
