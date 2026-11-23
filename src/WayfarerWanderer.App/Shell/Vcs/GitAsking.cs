@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Containers/ContainerSecrets.cs (Mark, InSaid) and Vcs/VcsController.cs (AskerOf),
+// From Passenger 8a1df7e4 src/Passenger.App/Containers/ContainerSecrets.cs (Mark, InSaid) and Vcs/VcsController.cs (AskerOf),
 // MIT (notices/Passenger/LICENSE): only the secrets a person typed for git, without containers' variables and flags.
 using System.Collections.Concurrent;
 using Passenger.Core;
