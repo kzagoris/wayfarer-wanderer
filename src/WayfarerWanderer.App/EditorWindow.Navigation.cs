@@ -91,13 +91,23 @@ public sealed partial class EditorWindow
     // The popups' host.
 
     /// <summary>A popup over the window in place of any open, the keys in it, and what it answers handed on once it has
-    /// closed (null when given up: Escape or a click outside).</summary>
-    private void ShowSearch<T>(Control popup, IAnswers<T> answers, Action<T> done)
+    /// closed (null when given up: Escape or a click outside); at the top of the window, or with its corner at a point of it
+    /// (a navigation bar's list under its part), kept inside.</summary>
+    private void ShowSearch<T>(Control popup, IAnswers<T> answers, Action<T> done, Point? under = null)
     {
         CloseSearch(focusEditor: false);
-        popup.HorizontalAlignment = HorizontalAlignment.Center;
         popup.VerticalAlignment = VerticalAlignment.Top;
-        popup.Margin = new Thickness(16, 64, 16, 16);
+        if (under is { } at)
+        {
+            popup.HorizontalAlignment = HorizontalAlignment.Left;
+            double width = double.IsNaN(popup.Width) ? 0 : popup.Width;
+            popup.Margin = new Thickness(Math.Max(16, Math.Min(at.X, Bounds.Width - width - 16)), Math.Max(16, at.Y), 16, 16);
+        }
+        else
+        {
+            popup.HorizontalAlignment = HorizontalAlignment.Center;
+            popup.Margin = new Thickness(16, 64, 16, 16);
+        }
         popup.MaxWidth = Math.Max(240, Bounds.Width - 32);
         searchLayer.Children.Clear();
         searchLayer.Children.Add(popup);

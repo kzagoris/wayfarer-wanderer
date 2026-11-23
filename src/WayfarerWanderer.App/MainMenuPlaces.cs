@@ -48,6 +48,7 @@ public static class MainMenuPlaces
         [AppActions.GoToSymbol] = [new("Navigate", 1, 2)],
         [AppActions.GoToLine] = [new("Navigate", 1, 3)],
         [AppActions.FileStructure] = [new("Navigate", 1, 4)],
+        [AppActions.JumpToNavigationBar] = [new("Navigate", 1, 5)],
         [AppActions.RecentFiles] = [new("Navigate", 2, 0)],
         [AppActions.RecentChangedFiles] = [new("Navigate", 2, 1)],
 

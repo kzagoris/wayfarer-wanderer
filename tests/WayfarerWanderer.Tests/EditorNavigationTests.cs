@@ -1,7 +1,9 @@
+using System.Text.Json;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Passenger.Core;
 using Passenger.Text;
@@ -83,6 +85,75 @@ public sealed class EditorNavigationTests : IDisposable
         {
             window.Close();
         }
+    }
+
+    [AvaloniaFact]
+    public async Task TheNavigationBarNamesThePathThenWhereTheCaretIsAndListsWhatStandsBeside()
+    {
+        EditorWindow window = await OpenAsync();
+        try
+        {
+            // A file no server outlines: the path alone.
+            window.OpenSource(Path.Combine(root, "pom.xml"));
+            Assert.True(window.NavigationBar.Bar.IsVisible);
+            Assert.Equal(["pom.xml"], window.NavigationBar.Shown);
+
+            window.OpenSource(main);
+            Assert.Equal(["java", "demo", "Main.java"], window.NavigationBar.Shown);
+            // The outline the Java server gives the status bar's path, given the bar.
+            window.NavigationBar.ShowOutline(main, EditorWindow.DocumentSymbols(JsonDocument.Parse(MainOutline).RootElement, main));
+            window.Editor.GoTo(new TextPosition(6, 8));
+            await Settled(window, () => window.NavigationBar.Shown.Count == 5);
+            Assert.Equal(["java", "demo", "Main.java", "Main", "run()"], window.NavigationBar.Shown);
+            Assert.True(window.NavigationBar.NamesOutline);
+
+            // A member's part lists the type's members, it chosen; another chosen is gone to.
+            window.NavigationBar.Buttons[4].RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            SymbolPopup list = await Shown<SymbolPopup>(window);
+            await list.SettledAsync();
+            Assert.Equal("Members of Main", list.Title);
+            Assert.Equal(["count", "run()"], list.Rows.Select(r => r.Name));
+            Assert.Equal("run()", list.Selected!.Name);
+            list.Selected = list.Rows[0];
+            list.Choose();
+            Assert.Equal(new TextPosition(3, 8), window.Editor.CaretPosition);
+            await Settled(window, () => window.NavigationBar.Shown.Count == 5 && window.NavigationBar.Shown[4] == "count");
+
+            // Turned off, the bar hides and Jump to Navigation Bar lists the caret's part's neighbours instead.
+            window.NavigationBar.IsOn = false;
+            Assert.False(window.NavigationBar.Bar.IsVisible);
+            Assert.True(window.RunFromMenu(WayfarerWanderer.App.Shell.AppActions.JumpToNavigationBar));
+            SymbolPopup jumped = await Shown<SymbolPopup>(window);
+            Assert.Equal("Members of Main", jumped.Title);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private const string MainOutline = """
+        [{ "name": "demo", "kind": 4, "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 13 } },
+           "selectionRange": { "start": { "line": 0, "character": 8 }, "end": { "line": 0, "character": 12 } } },
+         { "name": "Main", "kind": 5, "range": { "start": { "line": 2, "character": 0 }, "end": { "line": 8, "character": 1 } },
+           "selectionRange": { "start": { "line": 2, "character": 6 }, "end": { "line": 2, "character": 10 } },
+           "children": [
+             { "name": "count", "kind": 8, "range": { "start": { "line": 3, "character": 4 }, "end": { "line": 3, "character": 14 } },
+               "selectionRange": { "start": { "line": 3, "character": 8 }, "end": { "line": 3, "character": 13 } } },
+             { "name": "run()", "detail": ": void", "kind": 6, "range": { "start": { "line": 5, "character": 4 }, "end": { "line": 7, "character": 5 } },
+               "selectionRange": { "start": { "line": 5, "character": 9 }, "end": { "line": 5, "character": 12 } } }
+           ] }]
+        """;
+
+    /// <summary>Waits, running the window's work, until a condition holds; fails after two seconds.</summary>
+    private static async Task Settled(EditorWindow window, Func<bool> holds)
+    {
+        for (int i = 0; i < 200 && !holds(); i++)
+        {
+            await Task.Delay(10);
+            Dispatcher.UIThread.RunJobs();
+        }
+        Assert.True(holds());
     }
 
     private static void CtrlTab(EditorWindow window, bool shift = false)
