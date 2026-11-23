@@ -5,7 +5,9 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using Avalonia;
 using Passenger.Core;
+using Passenger.Editor;
 using Passenger.Text;
 using WayfarerWanderer.App;
 using WayfarerWanderer.App.Shell.Navigation;
@@ -125,6 +127,39 @@ public sealed class EditorNavigationTests : IDisposable
             Assert.True(window.RunFromMenu(WayfarerWanderer.App.Shell.AppActions.JumpToNavigationBar));
             SymbolPopup jumped = await Shown<SymbolPopup>(window);
             Assert.Equal("Members of Main", jumped.Title);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task ADoubleClickedWordLightsItsOtherPlacesInTheFileAndOnTheStripe()
+    {
+        EditorWindow window = await OpenAsync();
+        try
+        {
+            window.OpenSource(main);
+            window.UpdateLayout();
+            CodeEditor editor = window.Editor;
+            int at = editor.Document.Snapshot.GetOffset(new TextPosition(6, 10));
+            Avalonia.Point point = editor.TranslatePoint(editor.PointOf(at) + new Avalonia.Vector(2, editor.LineHeight / 2), window)!.Value;
+            window.MouseDown(point, MouseButton.Left);
+            window.MouseUp(point, MouseButton.Left);
+            window.MouseDown(point, MouseButton.Left);
+            window.MouseUp(point, MouseButton.Left);
+            Assert.Equal("count", editor.Document.Snapshot.GetText(editor.Selections.Primary.Range));
+
+            await Settled(window, () => editor.UsageHighlights.Count == 3);
+            TextSnapshot text = editor.Document.Snapshot;
+            Assert.All(editor.UsageHighlights, u => Assert.Equal("count", text.GetText(u.Range)));
+            Assert.Equal([3, 6, 6], editor.UsageHighlights.Select(u => text.GetLineFromOffset(u.Range.Start)));
+            await Settled(window, () => editor.StripeMarks.Count(m => m.Kind is StripeMarkKind.Usage) == 3);
+
+            // The caret off the word takes them away; an edit too, until a word is chosen again.
+            editor.GoTo(new TextPosition(0, 0));
+            Assert.Empty(editor.UsageHighlights);
         }
         finally
         {

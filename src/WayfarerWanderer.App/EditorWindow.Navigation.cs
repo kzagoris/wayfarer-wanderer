@@ -9,6 +9,7 @@ using Passenger.Core;
 using Passenger.Editor;
 using Passenger.Text;
 using WayfarerWanderer.App.Shell;
+using WayfarerWanderer.App.Shell.Editors;
 using WayfarerWanderer.App.Shell.Navigation;
 using WayfarerWanderer.Jvm;
 
@@ -55,11 +56,15 @@ public sealed partial class EditorWindow
     /// <summary>The search popup open over the window, if any.</summary>
     public Control? SearchShown => searchLayer.IsVisible ? searchLayer.Children.FirstOrDefault() : null;
 
+    /// <summary>A word chosen in the editor (a double click's), its other places lit.</summary>
+    private WordPlaces? wordPlaces;
+
     /// <summary>The files Recent Files lists, the latest first: for tests.</summary>
     public IReadOnlyList<string> RecentFiles => recentFiles;
 
     private void AddNavigation()
     {
+        wordPlaces = new WordPlaces(Editor);
         AddNavigate(AppActions.Back, "Back", _ => StepPlaces(-1), _ => placesBack.Count == 0 ? "No place to go back to" : null);
         AddNavigate(AppActions.Forward, "Forward", _ => StepPlaces(1), _ => placesForward.Count == 0 ? "No place to go forward to" : null);
         AddNavigate(AppActions.GoToEverything, "Search Everywhere", _ => ShowSearchEverywhere(), NeedsFolder, ["Go to Everything"]);
@@ -625,6 +630,10 @@ public sealed partial class EditorWindow
         {
             document.Changed += (_, _) =>
             {
+                if (ReferenceEquals(Editor.Document, document))
+                {
+                    wordPlaces?.TextChanged();
+                }
                 if (documents.FirstOrDefault(d => ReferenceEquals(d.Value.Document, document)).Key is { } now && document.IsModified)
                 {
                     Keep(editedFiles, now, PlacesKept);
