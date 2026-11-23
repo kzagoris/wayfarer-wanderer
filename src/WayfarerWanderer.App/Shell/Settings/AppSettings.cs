@@ -205,6 +205,10 @@ public sealed record AppSettings : IStateDocument<AppSettings>
     /// own, that window's place, or asked each time (Open Solution's This Window and New Window).</summary>
     public OpenProjectIn OpenProjectIn { get; init; } = OpenProjectIn.Ask;
 
+    /// <summary>"Confirm before closing": whether Wayfarer asks the person before it quits (Exit, the system's Quit, the last
+    /// window's close) or before any of its windows closes; never at first.</summary>
+    public ConfirmClosing ConfirmBeforeClosing { get; init; } = ConfirmClosing.Never;
+
 
     /// <summary>How much of a Run, Build or Debug console's text is kept, in KB, the oldest lines dropped past
     /// it.</summary>
@@ -311,8 +315,8 @@ public sealed record AppSettings : IStateDocument<AppSettings>
     public static IReadOnlyList<string> Sets { get; } = [nameof(ThemeSources)];
 
     /// <summary>The settings naming a program Passenger runs, or a package of code it loads (the terminal's shell, the Node.js
-    /// the web servers run on, the browser and the Godot it debugs in, ESLint's and Prettier's packages): the person's alone to
-    /// change, which settings_set refuses an agent.</summary>
+    /// the web servers run on, the browser pages open and are debugged in, the Godot games run on, ESLint's and Prettier's
+    /// packages): the person's alone to change, which settings_set refuses an agent.</summary>
     public static IReadOnlySet<string> NamingPrograms { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
         nameof(TerminalShell),
@@ -502,6 +506,14 @@ public enum OpenProjectIn
     NewWindow,
     CurrentWindow,
     Ask,
+}
+
+/// <summary>The choices for "Confirm before closing", in the order Settings lists them.</summary>
+public enum ConfirmClosing
+{
+    Never,
+    WhenQuitting,
+    EveryWindow,
 }
 
 /// <summary>Where a diff opens, in the order Settings lists them.</summary>

@@ -82,16 +82,16 @@ public sealed partial class EditorWindow
         : Editor.IsVisible ? null
         : "No file is open";
 
-    /// <summary>File, Exit: every Wayfarer window closes, each ending its folder's session as its own close does.</summary>
-    private static void Exit()
+    /// <summary>File, Exit: every Wayfarer window closes, each ending its folder's session as its own close does, asking
+    /// first where Confirm before closing says (<see cref="QuitAskedAsync"/>).</summary>
+    private void Exit()
     {
-        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        if (ConfirmsQuit)
         {
-            foreach (Window window in desktop.Windows.ToList())
-            {
-                window.Close();
-            }
+            IdeErrors.Observe(QuitAskedAsync(this));
+            return;
         }
+        Quit();
     }
 
     /// <summary>File, Close Project: the folder's session ended, its files, tree, Git and banners let go of, and the Welcome

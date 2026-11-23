@@ -1,26 +1,52 @@
-// From Passenger 2044e49b src/Passenger.App/BrowseRow.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/BrowseRow.cs, MIT (notices/Passenger/LICENSE).
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Layout;
 
 namespace WayfarerWanderer.App.Shell;
 
-/// <summary>A folder's field with its Browse... button after it, the field filling the row, in reading order for Tab
-/// too. A form's row names its <see cref="Field"/>, the row being no field of its own (<see cref="FormRows"/>).</summary>
+/// <summary>A folder's or file's field with its Browse… button after it, the field filling the row, in reading order for Tab
+/// too: a text box, or an editable drop-down where the field offers choices too. A form's row names its <see cref="Field"/>,
+/// the row being no field of its own (<see cref="FormRows"/>).</summary>
 public sealed class BrowseRow : Grid
 {
-    private BrowseRow(TextBox field, Button browse)
+    private BrowseRow(Control field, Func<Task> pick)
     {
         Field = field;
+        Browse = new Button { Content = "Browse…", Margin = new Thickness(Gaps.Normal, 0, 0, 0) };
+        Browse.Click += (_, _) => IdeErrors.Observe(pick());
         ColumnDefinitions = new ColumnDefinitions("*,Auto");
-        SetColumn(browse, 1);
+        SetColumn(Browse, 1);
         Children.Add(field);
-        Children.Add(browse);
+        Children.Add(Browse);
     }
 
     /// <summary>Styled as the Grid it is.</summary>
     protected override Type StyleKeyOverride => typeof(Grid);
 
-    /// <summary>The folder's field.</summary>
-    public TextBox Field { get; }
+    /// <summary>The folder's or file's field.</summary>
+    public Control Field { get; }
 
-    public static BrowseRow Of(TextBox field, Button browse) => new(field, browse);
+    /// <summary>The Browse… button, which asks the row's pick.</summary>
+    public Button Browse { get; }
+
+    /// <param name="pick">Asks the person for the folder or file and puts it in the field.</param>
+    public static BrowseRow Of(TextBox field, Func<Task> pick) => new(field, pick);
+
+    /// <summary>Wayfarer's: a row whose Browse… clicks <paramref name="browse"/>, for the dialogs still made the old way
+    /// (Clone's), until they pass their pick.</summary>
+    public static BrowseRow Of(TextBox field, Button browse) => new(field, () =>
+    {
+        browse.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        return Task.CompletedTask;
+    });
+
+    /// <summary>A row whose field is a drop-down offering folders or files to choose from (<see cref="Offered"/>), filling the
+    /// row as a text box does, a name typed taken too.</summary>
+    /// <param name="pick">Asks the person for the folder or file and puts it in the field.</param>
+    public static BrowseRow Offering(IEnumerable<string> choices, Func<Task> pick) =>
+        new(new ComboBox { IsEditable = true, ItemsSource = choices, HorizontalAlignment = HorizontalAlignment.Stretch }, pick);
+
+    /// <summary>The field of a row <see cref="Offering"/> made; null for a text box's.</summary>
+    public ComboBox? Offered => Field as ComboBox;
 }

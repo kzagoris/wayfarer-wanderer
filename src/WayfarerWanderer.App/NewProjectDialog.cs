@@ -1,4 +1,4 @@
-// After Passenger 2044e49b src/Passenger.App/Templates/NewProjectDialog.cs, MIT (notices/Passenger/LICENSE): its layout
+// After Passenger 8a1df7e4 src/Passenger.App/Templates/NewProjectDialog.cs, MIT (notices/Passenger/LICENSE): its layout
 // kept (families under a search at the left; names, where it goes and the family's choices at the right; the footer's
 // problem, progress and buttons), dotnet new, packages, Godot and set-ups cut for Wayfarer's bundled JVM starters.
 using Avalonia;
@@ -44,6 +44,10 @@ public sealed record StarterFamily(
     };
 }
 
+/// <summary>A row of the New Project dialog's list: a heading (Recent, All templates), a family, or a recent starter (a
+/// family made with a build system lately), which chooses its family and that build system.</summary>
+public sealed record StarterRow(string? Heading, StarterFamily? Family = null, NewProjectBuild? Recent = null);
+
 /// <summary>What a row of the New Project dialog's JDK drop-down is: a JDK, an action that finds one, or a heading.</summary>
 public enum JdkEntryKind
 {
@@ -69,20 +73,20 @@ public sealed class NewProjectDialog : IdeWindow
     private const string DefaultName = "untitled";
     private const string DefaultGroup = "com.example";
 
-    private readonly TextBox search = new() { Classes = { StyleClasses.Search }, PlaceholderText = "Search", Margin = new Thickness(8, 8, 8, 6) };
+    private readonly TextBox search = SearchBox.Of("Search templates");
     private readonly ListBox list;
-    private readonly TextBlock nothing = new() { Classes = { StyleClasses.Muted }, Text = "Nothing matches", Margin = new Thickness(12), IsVisible = false };
-    private readonly TextBlock heading = new() { FontSize = 16, FontWeight = FontWeight.SemiBold };
-    private readonly TextBlock description = new() { Classes = { StyleClasses.Muted }, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
-    private readonly TextBox projectName = new() { Classes = { StyleClasses.Search } };
-    private readonly TextBox directory = new() { Classes = { StyleClasses.Search } };
-    private readonly Button browse = new() { Content = "Browse…", Margin = new Thickness(8, 0, 0, 0) };
-    private readonly TextBlock where = new() { Classes = { StyleClasses.Muted }, FontSize = 12, TextWrapping = TextWrapping.Wrap };
-    private readonly ComboBox language = new() { Classes = { StyleClasses.Form }, HorizontalAlignment = HorizontalAlignment.Left };
+    private readonly TextBlock nothing = new() { Classes = { StyleClasses.Muted }, Text = "Nothing matches", Margin = new Thickness(Gaps.Wide), IsVisible = false };
+    private readonly TextBlock heading = new() { Classes = { StyleClasses.PageTitle } };
+    private readonly TextBlock description = new() { Classes = { StyleClasses.Muted }, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, Gaps.Tight, 0, 0) };
+    private readonly TextBox projectName = new();
+    private readonly TextBox directory = new();
+    private readonly BrowseRow folderRow;
+    private readonly TextBlock where = FormRows.Note();
+    private readonly ComboBox language = new FormDropDown();
     private readonly Control languageRow;
-    private readonly ComboBox build = new() { Classes = { StyleClasses.Form }, HorizontalAlignment = HorizontalAlignment.Left };
-    private readonly TextBlock buildNote = new() { Classes = { StyleClasses.Muted }, FontSize = 12, TextWrapping = TextWrapping.Wrap };
-    private readonly ComboBox jdk = new() { Classes = { StyleClasses.Form }, HorizontalAlignment = HorizontalAlignment.Stretch, MaxDropDownHeight = 420 };
+    private readonly ComboBox build = new FormDropDown();
+    private readonly TextBlock buildNote = FormRows.Note();
+    private readonly ComboBox jdk = new FormDropDown { MaxDropDownHeight = 420 };
     private readonly Button advancedToggle = new()
     {
         Background = Brushes.Transparent,
@@ -90,20 +94,20 @@ public sealed class NewProjectDialog : IdeWindow
         Padding = new Thickness(0, 2),
     };
     private readonly RowIcon advancedChevron = RowIcon.Chevron();
-    private readonly StackPanel advanced = new() { Spacing = 10, IsVisible = false };
+    private readonly StackPanel advanced = new() { Spacing = FormRows.Between, IsVisible = false };
     private readonly JdkRegistry registry;
     private List<JdkEntry> jdkEntries = [];
     private JdkEntry? jdkChosen;
 
     /// <summary>A home given the table lacks (JAVA_HOME's, or one set), listed at the top of the table's JDKs.</summary>
     private string? jdkOther;
-    private readonly TextBox group = new() { Classes = { StyleClasses.Search } };
+    private readonly TextBox group = new();
     private readonly Control groupRow;
-    private readonly TextBox artifact = new() { Classes = { StyleClasses.Search } };
+    private readonly TextBox artifact = new();
     private readonly TextBlock artifactLabel;
-    private readonly TextBox package = new() { Classes = { StyleClasses.Search } };
-    private readonly TextBlock writes = new() { Classes = { StyleClasses.Muted }, FontSize = 12, TextWrapping = TextWrapping.Wrap };
-    private readonly ProgressBar bar = new() { IsIndeterminate = true, Height = 4, MinHeight = 4, Width = 160, VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBox package = new();
+    private readonly TextBlock writes = FormRows.Note();
+    private readonly ProgressBar bar = new() { IsIndeterminate = true, Width = 160 };
     private readonly TextBlock progress = new() { Classes = { StyleClasses.Muted }, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
     private readonly StackPanel working;
     private readonly TextBlock problem = new() { Classes = { StyleClasses.Error }, TextWrapping = TextWrapping.Wrap, IsVisible = false, VerticalAlignment = VerticalAlignment.Center };
@@ -113,6 +117,7 @@ public sealed class NewProjectDialog : IdeWindow
     private readonly Dictionary<string, NewProjectBuild> buildOf = new(StringComparer.Ordinal);
 
     private IReadOnlyList<StarterFamily> listed = StarterFamily.All;
+    private IReadOnlyList<StarterRow> rows = [];
     private StarterFamily? family;
     private CancellationTokenSource? creating;
 
@@ -127,12 +132,14 @@ public sealed class NewProjectDialog : IdeWindow
     /// <param name="folder">The directory the project's folder is made in.</param>
     /// <param name="jdkHome">The JDK chosen at first; JAVA_HOME's when null, else the table's first JDK new enough.</param>
     /// <param name="jdks">The JDK table the drop-down lists; <see cref="JdkRegistry.Current"/> when null.</param>
-    public NewProjectDialog(string folder, string? jdkHome = null, JdkRegistry? jdks = null)
+    /// <param name="recent">The starters made lately, newest first, by <see cref="KnownBy"/>: listed first, under Recent.</param>
+    public NewProjectDialog(string folder, string? jdkHome = null, JdkRegistry? jdks = null, IReadOnlyList<string>? recent = null)
     {
         registry = jdks ?? JdkRegistry.Current;
+        Recent = recent ?? [];
         FormRows.Scope(this);
         Title = "New Project";
-        Width = 860;
+        Width = DialogWidths.Workspace;
         Height = 600;
         MinWidth = 680;
         MinHeight = 460;
@@ -141,27 +148,30 @@ public sealed class NewProjectDialog : IdeWindow
         list = new ListBox
         {
             Classes = { StyleClasses.Tree },
-            // The chosen family's band as wide as the search field above, its name where the field's text starts.
-            Padding = new Thickness(8, 0),
+            // The chosen family's band as wide as the search field above, its name in line with the field's magnifier.
+            Padding = new Thickness(Gaps.Normal, 0),
         };
         ReusedRows.Use(list, Item);
+        ListRow.Headings(list, item => item is StarterRow { Heading: not null });
         list.SelectionChanged += (_, _) =>
         {
-            if (!setting && list.SelectedItem is StarterFamily chosen)
+            if (!setting && list.SelectedItem is StarterRow { Family: { } chosen } row)
             {
-                ChooseFamily(chosen);
+                ChooseFamily(chosen, row.Recent);
             }
         };
         search.TextChanged += (_, _) => Filter();
-        ListKeys.Search(search, list);
+        ListKeys.Search(search, list, choosable: i => i < rows.Count && rows[i].Heading is null);
+        search.Margin = new Thickness(Gaps.Normal, Gaps.Normal, Gaps.Normal, Gaps.Small);
         DockPanel leftPanel = new();
         DockPanel.SetDock(search, Dock.Top);
         leftPanel.Children.Add(search);
         leftPanel.Children.Add(new Panel { Children = { list, nothing } });
-        Border left = new() { Width = 220, BorderThickness = new Thickness(0, 0, 1, 0), Child = leftPanel };
+        Border left = new() { Width = 220, BorderThickness = Hairlines.After, Child = leftPanel };
         left.Bind(Border.BorderBrushProperty, left.GetResourceObservable(TokenKeys.Divider));
 
         directory.Text = folder;
+        folderRow = BrowseRow.Of(directory, BrowseAsync);
         ReusedRows.Use(jdk, JdkRow);
         // Headings and the rule are shown, never chosen.
         jdk.ContainerPrepared += (_, e) =>
@@ -169,11 +179,10 @@ public sealed class NewProjectDialog : IdeWindow
         jdk.SelectionChanged += (_, _) => JdkSelected();
         FillJdks(jdkHome ?? Environment.GetEnvironmentVariable("JAVA_HOME"));
         group.Text = DefaultGroup;
-        browse.Click += (_, _) => IdeErrors.Observe(BrowseAsync());
         advancedToggle.Content = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 6,
+            Spacing = Gaps.Small,
             Children = { advancedChevron, new TextBlock { Text = "Advanced Settings", VerticalAlignment = VerticalAlignment.Center } },
         };
         advancedToggle.Click += (_, _) => AdvancedShown = !AdvancedShown;
@@ -198,40 +207,37 @@ public sealed class NewProjectDialog : IdeWindow
             }
         };
 
-        languageRow = Row("Language:", language);
-        groupRow = Row("Group:", group);
-        Grid artifactRow = FormRows.Of("Artifact:", artifact, out artifactLabel);
+        languageRow = Row("Language", language);
+        groupRow = Row("Group", group);
+        Grid artifactRow = FormRows.Of("Artifact", artifact, out artifactLabel);
         advanced.Children.Add(groupRow);
         advanced.Children.Add(artifactRow);
         advanced.Children.Add(Row("Package:", package));
         Control advancedRule = Rule();
         advancedRule.VerticalAlignment = VerticalAlignment.Center;
-        advancedRule.Margin = new Thickness(10, 0, 0, 0);
+        advancedRule.Margin = new Thickness(Gaps.Normal, 0, 0, 0);
         Grid advancedHeader = new() { ColumnDefinitions = { new ColumnDefinition(GridLength.Auto), new ColumnDefinition(GridLength.Star) } };
         advancedHeader.Children.Add(advancedToggle);
         Grid.SetColumn(advancedRule, 1);
         advancedHeader.Children.Add(advancedRule);
         StackPanel right = new()
         {
-            Margin = new Thickness(24, 18, 24, 18),
-            Spacing = 10,
+            [DialogFooter.InsetProperty] = true,
+            Spacing = FormRows.Between,
             Children =
             {
-                new StackPanel { Children = { heading, description }, Margin = new Thickness(0, 0, 0, 8) },
-                Row("Name:", projectName),
-                Row("Location:", BrowseRow.Of(directory, browse)),
-                Row(null, where),
+                new StackPanel { Children = { heading, description }, Margin = new Thickness(0, 0, 0, Gaps.Normal) },
+                Row("Name", projectName),
+                Row("Location", folderRow, [where]),
                 Rule(),
                 languageRow,
-                Row("Build system:", build),
-                Row(null, buildNote),
-                Row("JDK:", jdk),
-                Row(null, writes),
+                Row("Build system", build, [buildNote]),
+                Row("JDK", jdk, [writes]),
                 advancedHeader,
                 advanced,
             },
         };
-        working = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, IsVisible = false, Children = { bar, progress } };
+        working = new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gaps.Normal, IsVisible = false, Children = { bar, progress } };
         create.Click += (_, _) => IdeErrors.Observe(CreateAsync());
         Closing += (_, _) => creating?.Cancel();
         DockPanel.SetDock(left, Dock.Left);
@@ -261,6 +267,22 @@ public sealed class NewProjectDialog : IdeWindow
 
     /// <summary>The family chosen.</summary>
     public StarterFamily? Family => family;
+
+    /// <summary>The starters made lately, newest first, by <see cref="KnownBy"/>.</summary>
+    public IReadOnlyList<string> Recent { get; }
+
+    /// <summary>The list's rows as shown: Recent's heading and starters where any match, All templates' heading, the families.</summary>
+    public IReadOnlyList<StarterRow> Rows => rows;
+
+    /// <summary>The row chosen in the list.</summary>
+    public StarterRow? ChosenRow => list.SelectedItem as StarterRow;
+
+    /// <summary>What Create made from, by <see cref="KnownBy"/>, to keep among the recent ones; null before a family and
+    /// build system are chosen.</summary>
+    public string? Chosen => family is not null && Build is { } made ? KnownBy(family, made) : null;
+
+    /// <summary>The name a starter is kept by among the recent ones: its family's and its build system's.</summary>
+    public static string KnownBy(StarterFamily family, NewProjectBuild build) => $"{family.Name} {StarterFamily.BuildName(build)}".ToLowerInvariant();
 
     /// <summary>The search over the families.</summary>
     public string Query
@@ -389,7 +411,20 @@ public sealed class NewProjectDialog : IdeWindow
     /// <summary>Chooses a family by its name, as a click on its row does; false when it is not listed.</summary>
     public bool Choose(string name)
     {
-        int at = listed.ToList().FindIndex(f => f.Name == name);
+        int at = rows.ToList().FindIndex(r => r.Recent is null && r.Family?.Name == name);
+        if (at < 0)
+        {
+            return false;
+        }
+        list.SelectedIndex = at;
+        return true;
+    }
+
+    /// <summary>Chooses a recent starter by <see cref="KnownBy"/>, as a click on its row under Recent does; false when it is
+    /// not listed.</summary>
+    public bool ChooseRecent(string key)
+    {
+        int at = rows.ToList().FindIndex(r => r is { Family: { } f, Recent: { } b } && KnownBy(f, b) == key);
         if (at < 0)
         {
             return false;
@@ -503,30 +538,59 @@ public sealed class NewProjectDialog : IdeWindow
         return null;
     }
 
-    /// <summary>Lists the families the search finds, keeping the one chosen where it still is, else taking the first.</summary>
+    private const string RecentHeading = "Recent";
+
+    private const string AllHeading = "All templates";
+
+    /// <summary>Lists the starters made lately that the search finds under Recent, then the families it finds, keeping the
+    /// row chosen where it still is, else taking the first of Recent at first, the first family after a search.</summary>
     private void Filter()
     {
         string[] words = Query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         listed = [.. StarterFamily.All.Where(f => f.Matches(words))];
-        int at = family is null ? -1 : listed.ToList().IndexOf(family);
-        if (at < 0 && listed.Count > 0)
+        List<StarterRow> shown = [];
+        List<StarterRow> recent = [.. Recent.Select(RecentRow).OfType<StarterRow>().Where(r => r.Family!.Matches(words))];
+        if (recent.Count > 0)
         {
-            at = 0;
+            shown.Add(new StarterRow(RecentHeading));
+            shown.AddRange(recent);
+            shown.Add(new StarterRow(AllHeading));
+        }
+        int first = shown.Count;
+        shown.AddRange(listed.Select(f => new StarterRow(null, f)));
+        StarterRow? was = list.SelectedItem as StarterRow;
+        int at = was is null ? -1 : shown.FindIndex(r => r.Heading is null && r.Family == was.Family && r.Recent == was.Recent);
+        if (at < 0 && family is not null && Query.Length > 0)
+        {
+            at = shown.FindIndex(first, r => r.Family == family);
+        }
+        if (at < 0)
+        {
+            at = Query.Length == 0 && recent.Count > 0 ? 1 : listed.Count > 0 ? first : -1;
         }
         setting = true;
-        list.ItemsSource = listed;
+        rows = shown;
+        list.ItemsSource = shown;
         list.SelectedIndex = at;
         setting = false;
-        nothing.IsVisible = listed.Count == 0;
-        ChooseFamily(at < 0 ? null : listed[at]);
+        nothing.IsVisible = listed.Count == 0 && recent.Count == 0;
+        ChooseFamily(at < 0 ? null : shown[at].Family, at < 0 ? null : shown[at].Recent);
     }
 
-    /// <summary>A family chosen: its languages (the one chosen kept where it has it) and build systems (the one chosen in
-    /// it last, else its first).</summary>
-    private void ChooseFamily(StarterFamily? chosen)
+    /// <summary>A recent starter's row, by <see cref="KnownBy"/>; null for one no family offers now.</summary>
+    private static StarterRow? RecentRow(string key) =>
+        StarterFamily.All.SelectMany(f => f.Builds.Where(b => KnownBy(f, b) == key).Select(b => new StarterRow(null, f, b))).FirstOrDefault();
+
+    /// <summary>A family chosen: its languages (the one chosen kept where it has it) and build systems (<paramref
+    /// name="made"/> where a recent starter's row gives one, else the one chosen in it last, else its first).</summary>
+    private void ChooseFamily(StarterFamily? chosen, NewProjectBuild? made = null)
     {
         if (ReferenceEquals(chosen, family))
         {
+            if (made is { } again && Build != again)
+            {
+                Build = again;
+            }
             return;
         }
         NewProjectLanguage? languageWas = Language;
@@ -542,7 +606,8 @@ public sealed class NewProjectDialog : IdeWindow
         language.ItemsSource = chosen.Languages.Select(l => l.ToString()).ToList();
         language.SelectedIndex = languageWas is { } was && chosen.Languages.Contains(was) ? chosen.Languages.ToList().IndexOf(was) : 0;
         build.ItemsSource = chosen.Builds.Select(StarterFamily.BuildName).ToList();
-        build.SelectedIndex = buildOf.TryGetValue(chosen.Name, out NewProjectBuild last) ? chosen.Builds.ToList().IndexOf(last) : 0;
+        build.SelectedIndex = made is { } given ? chosen.Builds.ToList().IndexOf(given)
+            : buildOf.TryGetValue(chosen.Name, out NewProjectBuild last) ? chosen.Builds.ToList().IndexOf(last) : 0;
         setting = false;
         heading.Text = chosen.Name;
         description.Text = chosen.Description;
@@ -559,7 +624,7 @@ public sealed class NewProjectDialog : IdeWindow
         }
         bool module = Build == NewProjectBuild.IntelliJ;
         groupRow.IsVisible = !module;
-        artifactLabel.Text = module ? "Module name:" : "Artifact:";
+        artifactLabel.Text = module ? "Module name" : "Artifact";
         int? highest = Language is { } chosen ? ProjectGenerator.HighestJdk(chosen) : null;
         string jdks = highest is int top ? $"JDK {ProjectGenerator.MinimumJdk} to {top}" : $"JDK {ProjectGenerator.MinimumJdk} or newer";
         buildNote.Text = Build switch
@@ -710,32 +775,46 @@ public sealed class NewProjectDialog : IdeWindow
         problem.IsVisible = !busy && problem.Text is not null;
         create.IsEnabled = !busy && family is not null;
         list.IsEnabled = !busy;
-        foreach (Control field in (Control[])[search, projectName, directory, browse, language, build, jdk, advancedToggle, group, artifact, package])
+        foreach (Control field in (Control[])[search, projectName, directory, folderRow.Browse, language, build, jdk, advancedToggle, group, artifact, package])
         {
             field.IsEnabled = !busy;
         }
     }
 
-    /// <summary>A row for whichever family the list hands its container: its name, and its build systems on hover.</summary>
+    /// <summary>A row for whichever row the list hands its container: a heading's words; a family's name, its build systems
+    /// on hover; a recent starter's family and build system.</summary>
     private static Control Item()
     {
         TextBlock name = new() { TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
-        Border item = new() { Padding = new Thickness(5, 6), Child = name };
-        return item.Showing<StarterFamily>(row =>
+        Border item = new() { Padding = new Thickness(Gaps.Tight, Gaps.Small), Child = name };
+        TextBlock heading = ListRow.Heading();
+        Panel shown = new() { Children = { heading, item } };
+        return shown.Showing<StarterRow>(each =>
         {
-            name.Text = row.Name;
-            ToolTip.SetTip(item, $"{row.Name}: {string.Join(", ", row.Builds.Select(StarterFamily.BuildName))}");
+            heading.IsVisible = each.Heading is not null;
+            item.IsVisible = each.Family is not null;
+            heading.Text = each.Heading;
+            if (each is { Family: { } row, Recent: { } made })
+            {
+                name.Text = $"{row.Name} ({StarterFamily.BuildName(made)})";
+                ToolTip.SetTip(item, $"{row.Name}: {StarterFamily.BuildName(made)}");
+            }
+            else if (each.Family is { } family)
+            {
+                name.Text = family.Name;
+                ToolTip.SetTip(item, $"{family.Name}: {string.Join(", ", family.Builds.Select(StarterFamily.BuildName))}");
+            }
         });
     }
 
     private Control Rule()
     {
-        Border rule = new() { Height = 1, Margin = new Thickness(0, 6) };
+        Border rule = new() { Height = 1, Margin = new Thickness(0, Gaps.Small) };
         rule.Bind(Border.BackgroundProperty, rule.GetResourceObservable(TokenKeys.Separator));
         return rule;
     }
 
-    private static Control Row(string? label, Control editor) => FormRows.Of(label, editor);
+    private static Control Row(string? label, Control editor, IReadOnlyList<TextBlock>? notes = null) => FormRows.Of(label, editor, notes ?? []);
 
     private async Task BrowseAsync()
     {

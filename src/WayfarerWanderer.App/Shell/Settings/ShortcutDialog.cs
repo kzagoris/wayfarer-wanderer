@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Settings/ShortcutDialog.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Settings/ShortcutDialog.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -57,7 +57,7 @@ public abstract class ShortcutDialog : IdeWindow
     /// <summary>Lays the dialog out: the action it is for, then the <paramref name="field"/> its shortcut is given in.</summary>
     protected void Frame(string action, string where, Control field) => Content = DialogFooter.Page(new StackPanel
     {
-        Margin = new Thickness(16, 14, 16, 16),
+        [DialogFooter.InsetProperty] = true,
         Spacing = FormRows.Between,
         Children = { Named(action, where), field, conflictsPanel },
     }, DialogFooter.OkCancel(OkButton, () => Close(null)));
