@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Navigation/SymbolPopup.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Navigation/SymbolPopup.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -164,22 +164,8 @@ public sealed class SymbolPopup : SearchPopup<SymbolRow>
     public static Control ReusedRow()
     {
         RowIcon icon = new() { Margin = new Thickness(0, 0, Gaps.Small, 0), VerticalAlignment = VerticalAlignment.Center };
-        TextBlock letter = new()
-        {
-            FontSize = 10,
-            FontWeight = FontWeight.Bold,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        Border badge = new()
-        {
-            Width = 16,
-            Height = 16,
-            Classes = { StyleClasses.KindBadge },
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, Gaps.Small, 0),
-            Child = letter,
-        };
+        Border badge = Tags.Kind(out TextBlock letter);
+        badge.Margin = new Thickness(0, 0, Gaps.Small, 0);
         TextBlock where = ListRow.DetailText();
         where.MaxWidth = 260;
         TextBlock name = new() { [DockPanel.DockProperty] = Dock.Left, VerticalAlignment = VerticalAlignment.Center };
@@ -192,10 +178,9 @@ public sealed class SymbolPopup : SearchPopup<SymbolRow>
             MaxWidth = 300,
             HorizontalAlignment = HorizontalAlignment.Left,
         };
-        string? letterBrush = null, badgeBrush = null, whereBrush = null, detailBrush = null;
+        string? badgeBrush = null, whereBrush = null, detailBrush = null;
         where.Resource(TextBlock.ForegroundProperty, ref whereBrush, TokenKeys.TextMuted);
         detail.Resource(TextBlock.ForegroundProperty, ref detailBrush, TokenKeys.TextMuted);
-        letter.Resource(TextBlock.ForegroundProperty, ref letterBrush, TokenKeys.BadgeText);
         // The detail is cut short where the row is narrower than its words, never drawn under where it is.
         DockPanel named = new() { ClipToBounds = true, Children = { name, detail } };
         DockPanel row = new() { Height = ListRow.Height, Children = { where, icon, badge, named } };
