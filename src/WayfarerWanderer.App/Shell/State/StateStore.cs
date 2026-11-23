@@ -1,7 +1,6 @@
-// From Passenger 2044e49b src/Passenger.App/State/StateStore.cs, MIT (notices/Passenger/LICENSE).
-using System.Security.Cryptography;
-using System.Text;
+// From Passenger 8a1df7e4 src/Passenger.App/State/StateStore.cs, MIT (notices/Passenger/LICENSE).
 using System.Text.Json.Nodes;
+using Passenger.Core;
 using WayfarerWanderer.App.Shell.Settings;
 
 namespace WayfarerWanderer.App.Shell.State;
@@ -144,7 +143,7 @@ public sealed class ProjectState
 
     public static string FolderOf(string root, string folder)
     {
-        string hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(folder)))[..12];
+        string hash = FileNames.Hash(folder, 12);
         return Path.Combine(root, "workspaces", $"{Path.GetFileName(folder)}-{hash}");
     }
 

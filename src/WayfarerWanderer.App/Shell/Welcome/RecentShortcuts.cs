@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Welcome/RecentShortcuts.cs, MIT (notices/Passenger/LICENSE): its system lists
+// From Passenger 8a1df7e4 src/Passenger.App/Welcome/RecentShortcuts.cs, MIT (notices/Passenger/LICENSE): its system lists
 // of recent solutions, kept as Wayfarer's recent folders, each entry a start of Wayfarer of its own.
 using Avalonia;
 using Avalonia.Controls;
@@ -77,7 +77,7 @@ public static class RecentShortcuts
         }
         else if (OperatingSystem.IsMacOS() && Application.Current is { } app)
         {
-            NativeDock.SetMenu(app, DockMenu([.. Shortcuts(recent.Value).Take(DockShows)]));
+            NativeMenus.Fill(app, NativeDock.MenuProperty, DockItems([.. Shortcuts(recent.Value).Take(DockShows)]));
         }
     }
 
@@ -85,25 +85,26 @@ public static class RecentShortcuts
     public static IEnumerable<(string Path, RecentShortcut Shortcut)> Shortcuts(RecentFoldersState recent) =>
         RecentShortcut.Recent(recent.Newest().Select(r => (r.Path, r.Entry.Name)), Directory.Exists);
 
-    /// <summary>The Dock's menu: the recent ones titled apart, each opened from the window in front as File, Recent Folders
-    /// opens it, then New Window, which starts another Wayfarer.</summary>
-    private static NativeMenu DockMenu(IReadOnlyList<(string Path, RecentShortcut Shortcut)> recent)
+    /// <summary>The Dock's menu's items, in the one menu the application keeps for it (<see cref="NativeMenus"/>): the
+    /// recent ones titled apart, each opened from the window in front as File, Recent Folders opens it, then New Window,
+    /// which starts another Wayfarer.</summary>
+    private static List<NativeMenuItemBase> DockItems(IReadOnlyList<(string Path, RecentShortcut Shortcut)> recent)
     {
-        NativeMenu menu = new();
+        List<NativeMenuItemBase> items = [];
         foreach (((string path, _), RecentShortcut shortcut) in recent.Zip(RecentShortcut.ToldApart(recent, RecentRow.Home)))
         {
             NativeMenuItem item = new(shortcut.Title) { ToolTip = shortcut.Tip };
             item.Click += (_, _) => Front()?.OpenRecent(path);
-            menu.Add(item);
+            items.Add(item);
         }
-        if (menu.Items.Count > 0)
+        if (items.Count > 0)
         {
-            menu.Add(new NativeMenuItemSeparator());
+            items.Add(new NativeMenuItemSeparator());
         }
         NativeMenuItem newWindow = new(NewWindow.Title);
         newWindow.Click += (_, _) => StartAnother(NewWindow.Arguments);
-        menu.Add(newWindow);
-        return menu;
+        items.Add(newWindow);
+        return items;
     }
 
     /// <summary>The window in front, else the last opened.</summary>

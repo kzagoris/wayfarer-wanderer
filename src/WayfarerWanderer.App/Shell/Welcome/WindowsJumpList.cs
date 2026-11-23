@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Welcome/WindowsJumpList.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Welcome/WindowsJumpList.cs, MIT (notices/Passenger/LICENSE).
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Passenger.Core;
@@ -93,7 +93,7 @@ public static unsafe partial class WindowsJumpList
             }
             uint slots;
             Guid arrayId = ObjectArray;
-            int done = ((delegate* unmanaged[Stdcall]<nint, uint*, Guid*, nint*, int>)Slot(list, BeginList))(list, &slots, &arrayId, &gone);
+            int done = ((delegate* unmanaged[Stdcall]<nint, uint*, Guid*, nint*, int>)ComCalls.Slot(list, BeginList))(list, &slots, &arrayId, &gone);
             if (done < 0)
             {
                 return Failed("the list was not begun", done);
@@ -129,18 +129,18 @@ public static unsafe partial class WindowsJumpList
                 }
                 fixed (char* name = RecentShortcuts.Category)
                 {
-                    done = ((delegate* unmanaged[Stdcall]<nint, char*, nint, int>)Slot(list, AppendCategory))(list, name, category);
+                    done = ((delegate* unmanaged[Stdcall]<nint, char*, nint, int>)ComCalls.Slot(list, AppendCategory))(list, name, category);
                 }
                 if (done < 0 && done != RecentItemsOff)
                 {
                     return Failed("the recent ones were not added", done);
                 }
             }
-            if ((done = Links(exe, tasks, out jobs)) < 0 || (done = ((delegate* unmanaged[Stdcall]<nint, nint, int>)Slot(list, AddUserTasks))(list, jobs)) < 0)
+            if ((done = Links(exe, tasks, out jobs)) < 0 || (done = ((delegate* unmanaged[Stdcall]<nint, nint, int>)ComCalls.Slot(list, AddUserTasks))(list, jobs)) < 0)
             {
                 return Failed("its tasks were not added", done);
             }
-            if ((done = ((delegate* unmanaged[Stdcall]<nint, int>)Slot(list, CommitList))(list)) < 0)
+            if ((done = ((delegate* unmanaged[Stdcall]<nint, int>)ComCalls.Slot(list, CommitList))(list)) < 0)
             {
                 return Failed("it was not kept", done);
             }
@@ -151,12 +151,12 @@ public static unsafe partial class WindowsJumpList
         {
             if (begun)
             {
-                ((delegate* unmanaged[Stdcall]<nint, int>)Slot(list, AbortList))(list);
+                ((delegate* unmanaged[Stdcall]<nint, int>)ComCalls.Slot(list, AbortList))(list);
             }
-            Release(jobs);
-            Release(category);
-            Release(gone);
-            Release(list);
+            ComCalls.Release(jobs);
+            ComCalls.Release(category);
+            ComCalls.Release(gone);
+            ComCalls.Release(list);
         }
     }
 
@@ -175,7 +175,7 @@ public static unsafe partial class WindowsJumpList
         }
         finally
         {
-            Release(list);
+            ComCalls.Release(list);
         }
     }
 
@@ -186,7 +186,7 @@ public static unsafe partial class WindowsJumpList
     {
         HashSet<string> taken = new(StringComparer.Ordinal);
         uint count = 0;
-        if (gone == 0 || ((delegate* unmanaged[Stdcall]<nint, uint*, int>)Slot(gone, GetCount))(gone, &count) < 0)
+        if (gone == 0 || ((delegate* unmanaged[Stdcall]<nint, uint*, int>)ComCalls.Slot(gone, GetCount))(gone, &count) < 0)
         {
             return taken;
         }
@@ -196,18 +196,18 @@ public static unsafe partial class WindowsJumpList
         {
             nint link = 0;
             // An item of another kind (a file's shell item) is no link of Wayfarer's, and fails the ask.
-            if (((delegate* unmanaged[Stdcall]<nint, uint, Guid*, nint*, int>)Slot(gone, GetAt))(gone, i, &linkId, &link) < 0)
+            if (((delegate* unmanaged[Stdcall]<nint, uint, Guid*, nint*, int>)ComCalls.Slot(gone, GetAt))(gone, i, &linkId, &link) < 0)
             {
                 continue;
             }
             fixed (char* into = words)
             {
-                if (((delegate* unmanaged[Stdcall]<nint, char*, int, int>)Slot(link, GetArguments))(link, into, words.Length) >= 0)
+                if (((delegate* unmanaged[Stdcall]<nint, char*, int, int>)ComCalls.Slot(link, GetArguments))(link, into, words.Length) >= 0)
                 {
                     taken.Add(new string(into));
                 }
             }
-            Release(link);
+            ComCalls.Release(link);
         }
         return taken;
     }
@@ -236,19 +236,19 @@ public static unsafe partial class WindowsJumpList
                 }
                 fixed (char* icon = exe)
                 {
-                    done = ((delegate* unmanaged[Stdcall]<nint, char*, int, int>)Slot(link, SetIconLocation))(link, icon, 0);
+                    done = ((delegate* unmanaged[Stdcall]<nint, char*, int, int>)ComCalls.Slot(link, SetIconLocation))(link, icon, 0);
                 }
                 Guid storeId = PropertyStore;
                 if (done < 0 || (done = Marshal.QueryInterface(link, in storeId, out store)) < 0 || (done = Titled(store, shortcut.Title)) < 0)
                 {
                     break;
                 }
-                done = ((delegate* unmanaged[Stdcall]<nint, nint, int>)Slot(collection, AddObject))(collection, link);
+                done = ((delegate* unmanaged[Stdcall]<nint, nint, int>)ComCalls.Slot(collection, AddObject))(collection, link);
             }
             finally
             {
-                Release(store);
-                Release(link);
+                ComCalls.Release(store);
+                ComCalls.Release(link);
             }
         }
         return done;
@@ -262,8 +262,8 @@ public static unsafe partial class WindowsJumpList
         {
             PropertyKey key = Title;
             PropVariant value = new() { Type = Words, Value = words };
-            int done = ((delegate* unmanaged[Stdcall]<nint, PropertyKey*, PropVariant*, int>)Slot(store, SetValue))(store, &key, &value);
-            return done < 0 ? done : ((delegate* unmanaged[Stdcall]<nint, int>)Slot(store, Commit))(store);
+            int done = ((delegate* unmanaged[Stdcall]<nint, PropertyKey*, PropVariant*, int>)ComCalls.Slot(store, SetValue))(store, &key, &value);
+            return done < 0 ? done : ((delegate* unmanaged[Stdcall]<nint, int>)ComCalls.Slot(store, Commit))(store);
         }
         finally
         {
@@ -275,7 +275,7 @@ public static unsafe partial class WindowsJumpList
     {
         fixed (char* words = text)
         {
-            return ((delegate* unmanaged[Stdcall]<nint, char*, int>)Slot(self, slot))(self, words);
+            return ((delegate* unmanaged[Stdcall]<nint, char*, int>)ComCalls.Slot(self, slot))(self, words);
         }
     }
 
@@ -287,16 +287,6 @@ public static unsafe partial class WindowsJumpList
         int done = CoCreateInstance(&kind, 0, InProcess, &asked, &into);
         made = done < 0 ? 0 : into;
         return done;
-    }
-
-    private static void* Slot(nint self, int index) => (*(void***)self)[index];
-
-    private static void Release(nint reference)
-    {
-        if (reference != 0)
-        {
-            Marshal.Release(reference);
-        }
     }
 
     [LibraryImport("ole32.dll")]

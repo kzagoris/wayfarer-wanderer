@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Workspace/OpenDocument.cs, MIT (notices/Passenger/LICENSE): how the file is
+// From Passenger 8a1df7e4 src/Passenger.App/Workspace/OpenDocument.cs, MIT (notices/Passenger/LICENSE): how the file is
 // stored and indented, as the status bar's widgets show and change it. Its .editorconfig is read for what it says, but a
 // save here keeps how the file was read, so the tips say what it asks rather than what the next save does.
 using Passenger.Core;
@@ -26,6 +26,9 @@ public sealed partial class OpenDocument
 
     /// <summary>Whether the text cannot be edited: a file marked read-only on disk opens so.</summary>
     public bool IsReadOnly => Text.IsReadOnly;
+
+    /// <summary>Why every change of it is refused while it is read-only (<see cref="IsReadOnly"/>); null while it is not.</summary>
+    public string? ReadOnlyWhy => IsReadOnly ? $"{Name} is read-only" : null;
 
     /// <summary>What the .editorconfig files over the file say of it, as last read, and read again once it moves.</summary>
     public EditorConfig Conventions
@@ -150,7 +153,7 @@ public sealed partial class OpenDocument
     /// <summary>Why converting the indentation would be refused: the file is read-only, or tabs in a language that takes only
     /// spaces.</summary>
     public string? WhyNotConverted(bool toTabs) =>
-        IsReadOnly ? $"{Name} is read-only"
+        ReadOnlyWhy is { } readOnly ? readOnly
         : toTabs && SpacesAlone ? $"{Name} indents with spaces only: {System.IO.Path.GetExtension(Path).TrimStart('.').ToUpperInvariant()} takes no tabs"
         : null;
 
@@ -275,9 +278,9 @@ public sealed partial class OpenDocument
     /// encoding taken, is the text.</summary>
     private void Change(IReadOnlyList<TextEdit> edits, SelectionSet carets, Stored after, bool write)
     {
-        if (IsReadOnly)
+        if (ReadOnlyWhy is { } readOnly)
         {
-            throw new IOException($"{Name} is read-only");
+            throw new IOException(readOnly);
         }
         Stored before = Current;
         TextEdit[] sorted = [.. edits.OrderBy(e => e.Start)];

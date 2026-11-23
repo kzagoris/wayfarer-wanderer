@@ -15,15 +15,15 @@ using WayfarerWanderer.App.Shell.ToolWindows;
 namespace WayfarerWanderer.App.Shell.Welcome;
 
 /// <summary>The Welcome screen, a start page in the window while nothing is open: Wayfarer's mark and version, New Project,
-/// Open Folder and Clone Repository, and the folders opened lately (each with the build it holds), newest first and
-/// narrowed as a search is typed. Up and Down choose one from the search box or the list, Enter opens it, and Delete
+/// Open Folder, Open File and Clone Repository, and the folders opened lately (each with the build it holds), newest first
+/// and narrowed as a search is typed. Up and Down choose one from the search box or the list, Enter opens it, and Delete
 /// (Backspace on the Mac) or its menu removes it. One gone from disk is marked, and the window says so when it is opened
 /// (<see cref="Say"/>).</summary>
 public sealed class WelcomeView : UserControl
 {
     private readonly TextBox search;
     private readonly ListBox list;
-    private readonly TextBlock empty;
+    private readonly EmptyState empty;
     private readonly TextBlock notice;
     private readonly TextBlock title;
     private readonly TextBlock subtitle;
@@ -38,7 +38,7 @@ public sealed class WelcomeView : UserControl
         subtitle = new()
         {
             Classes = { StyleClasses.WelcomeSubtitle },
-            Text = $"Version {OwnVersion.Shown}. Start a new Java or Kotlin project, or open a folder of one.",
+            Text = $"Version {OwnVersion.Shown}. Start a new Java or Kotlin project, open a folder of one or a file, or clone a repository.",
             TextWrapping = TextWrapping.Wrap,
         };
         Grid hero = new() { Classes = { StyleClasses.WelcomeHero }, ColumnDefinitions = new ColumnDefinitions("Auto,*") };
@@ -51,23 +51,29 @@ public sealed class WelcomeView : UserControl
         NewProjectButton.Click += (_, _) => NewProjectRequested?.Invoke(this, EventArgs.Empty);
         OpenFolderButton = Action(IconKeys.FolderOpen, "Open Folder", "A Maven, Gradle or IntelliJ project");
         OpenFolderButton.Click += (_, _) => OpenFolderRequested?.Invoke(this, EventArgs.Empty);
+        OpenFileButton = Action(IconKeys.DocumentText, "Open File", "Any file, on its own");
+        OpenFileButton.Click += (_, _) => OpenFileRequested?.Invoke(this, EventArgs.Empty);
         CloneButton = Action(IconKeys.Branch, "Clone Repository", "From a Git URL");
         CloneButton.Click += (_, _) => CloneRequested?.Invoke(this, EventArgs.Empty);
-        WrapPanel actions = new() { Classes = { StyleClasses.WelcomeActions }, Children = { NewProjectButton, OpenFolderButton, CloneButton } };
-        // Three, then one across in a narrow page, so no tile is cut off at its edge.
+        WrapPanel actions = new() { Classes = { StyleClasses.WelcomeActions }, Children = { NewProjectButton, OpenFolderButton, OpenFileButton, CloneButton } };
+        // As many across as fit whole, in rows as even as they go, so no tile is cut off at its edge or left alone in a row.
         actions.SizeChanged += (_, e) =>
         {
             double gap = actions.ItemSpacing;
-            int across = e.NewSize.Width >= 3 * ActionWidth + 2 * gap ? 3 : 1;
+            int fit = Math.Clamp((int)((e.NewSize.Width + gap) / (ActionWidth + gap)), 1, actions.Children.Count);
+            int rows = (actions.Children.Count + fit - 1) / fit;
+            int across = (actions.Children.Count + rows - 1) / rows;
             actions.ItemWidth = Math.Floor((e.NewSize.Width - (across - 1) * gap) / across);
         };
 
         TextBlock recent = new() { Classes = { StyleClasses.WelcomeSection }, Text = "Recent folders", VerticalAlignment = VerticalAlignment.Center };
-        search = new TextBox { Classes = { StyleClasses.Search, StyleClasses.WelcomeSearch }, PlaceholderText = "Search recent folders", [Grid.ColumnProperty] = 1 };
+        search = SearchBox.Of("Search recent folders");
+        search.Classes.Add(StyleClasses.WelcomeSearch);
+        Grid.SetColumn(search, 1);
         search.TextChanged += (_, _) => Filter();
         Grid bar = new() { Classes = { StyleClasses.WelcomeRecentBar }, ColumnDefinitions = new ColumnDefinitions("Auto,*"), Children = { recent, search } };
 
-        notice = new TextBlock { TextWrapping = TextWrapping.Wrap, IsVisible = false, Margin = new Thickness(4, 0, 4, 10) };
+        notice = new TextBlock { TextWrapping = TextWrapping.Wrap, IsVisible = false, Margin = new Thickness(Gaps.Tight, 0, Gaps.Tight, Gaps.Wide) };
         notice.Bind(TextBlock.ForegroundProperty, notice.GetResourceObservable(TokenKeys.Warning));
         list = new ListBox
         {
@@ -94,7 +100,7 @@ public sealed class WelcomeView : UserControl
             new Separator(),
             ListMenus.Item("Remove from Recent Folders", OperatingSystem.IsMacOS() ? "Back" : "Delete", () => RemoveRequested?.Invoke(this, chosen)),
         ]);
-        empty = new TextBlock { Classes = { StyleClasses.EmptyText, ShellClasses.WelcomeEmpty } };
+        empty = new EmptyState();
 
         Page page = new() { Classes = { StyleClasses.WelcomePage } };
         foreach (Control top in (Control[])[hero, actions, bar, notice])
@@ -151,8 +157,8 @@ public sealed class WelcomeView : UserControl
     /// <summary>The narrowest the hero is with the mark beside its words.</summary>
     private const double NarrowHero = 360;
 
-    /// <summary>The narrowest an action's tile is before the tiles go two or one across.</summary>
-    private const double ActionWidth = 160;
+    /// <summary>The narrowest an action's tile is, its name and hint whole beside its icon.</summary>
+    private const double ActionWidth = 200;
 
     /// <summary>One of the page's actions: its icon, its name, and in a few words what it opens.</summary>
     private static Button Action(string icon, string name, string hint)
@@ -176,6 +182,9 @@ public sealed class WelcomeView : UserControl
     /// <summary>A click on Open Folder.</summary>
     public event EventHandler? OpenFolderRequested;
 
+    /// <summary>A click on Open File, for a file to open in the editor.</summary>
+    public event EventHandler? OpenFileRequested;
+
     /// <summary>A click on Clone Repository.</summary>
     public event EventHandler? CloneRequested;
 
@@ -193,6 +202,9 @@ public sealed class WelcomeView : UserControl
 
     /// <summary>The Open Folder button, for a click on it.</summary>
     public Button OpenFolderButton { get; }
+
+    /// <summary>The Open File button, for a click on it.</summary>
+    public Button OpenFileButton { get; }
 
     /// <summary>The Clone Repository button, for a click on it.</summary>
     public Button CloneButton { get; }
@@ -251,7 +263,7 @@ public sealed class WelcomeView : UserControl
         if (focused && list.SelectedIndex >= 0)
         {
             // The rows are made anew, so the focus goes back to the one chosen.
-            Dispatcher.UIThread.Post(() => list.ContainerFromIndex(list.SelectedIndex)?.Focus(), DispatcherPriority.Loaded);
+            Dispatcher.UIThread.Post(() => ListKeys.Hold(list), DispatcherPriority.Loaded);
         }
     }
 
@@ -279,15 +291,15 @@ public sealed class WelcomeView : UserControl
         DockPanel line = new() { Classes = { StyleClasses.WelcomeRow } };
         DockPanel.SetDock(badge, Dock.Left);
         line.Children.Add(badge);
-        TextBlock gone = new() { Text = "Missing", FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 4, 0) };
+        TextBlock gone = ListRow.DetailText();
+        gone.Text = "Missing";
         gone.Bind(TextBlock.ForegroundProperty, gone.GetResourceObservable(TokenKeys.Warning));
-        DockPanel.SetDock(gone, Dock.Right);
         line.Children.Add(gone);
         TextBlock kindText = new() { Classes = { ShellClasses.WelcomeKindText } };
         Border kind = new() { Classes = { ShellClasses.WelcomeKind }, Child = kindText, VerticalAlignment = VerticalAlignment.Center };
         DockPanel.SetDock(kind, Dock.Right);
         line.Children.Add(kind);
-        line.Children.Add(new StackPanel { VerticalAlignment = VerticalAlignment.Center, Spacing = 2, Children = { name, where } });
+        line.Children.Add(new StackPanel { VerticalAlignment = VerticalAlignment.Center, Spacing = Gaps.Hair, Children = { name, where } });
         return line.Showing<RecentRow>(row =>
         {
             letters.Text = Initials(row.Name);
