@@ -8,25 +8,9 @@ namespace WayfarerWanderer.App;
 /// list shows, and what typing narrows and orders it by.</summary>
 public sealed record CompletionChoice(JsonElement Item, string Label, string Detail, string Filter, string Sort, int Kind, int Index)
 {
-    /// <summary>The short mark the list shows before a suggestion for its LSP kind.</summary>
-    public string Badge => Kind switch
-    {
-        2 or 3 => "m",          // method, function
-        4 => "c",               // constructor
-        5 or 10 => "f",         // field, property
-        6 or 18 => "v",         // variable, reference
-        7 => "C",               // class
-        8 => "I",               // interface
-        9 or 19 => "p",         // module, folder (a package)
-        13 => "E",              // enum
-        20 => "e",              // enum member
-        21 => "K",              // constant
-        14 => "k",              // keyword
-        15 => "s",              // snippet
-        22 => "S",              // struct (a record)
-        25 => "T",              // type parameter
-        _ => "·",
-    };
+    /// <summary>The short mark the list shows before a suggestion for its LSP kind, as every badge marks that kind
+    /// (<see cref="Shell.KindBadges"/>).</summary>
+    public string Badge => Shell.KindBadges.Of(Shell.KindBadges.OfCompletion(Kind)).Letter;
 
     /// <summary>The label as the list lays it out: the name (with its parameters), what qualifies it (a type's package,
     /// a member's owner) shown faint beside it, and its type or detail shown at the right. JDT LS puts all three in the

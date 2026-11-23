@@ -133,7 +133,7 @@ public sealed partial class ProjectStructureDialog : IdeWindow
         body.Children.Add(FormRows.Of("Name:", new TextBlock { Text = Path.GetFileName(root), VerticalAlignment = VerticalAlignment.Center }));
         body.Children.Add(FormRows.Of("Build:", new TextBlock { Text = snapshot?.BuildSystem.ToString() ?? "not imported", VerticalAlignment = VerticalAlignment.Center }));
         List<Jdk> jdks = [.. JdkRegistry.Current.All()];
-        ComboBox jdk = new() { MinWidth = 280, ItemsSource = jdks.Select(j => j.Name).ToList(), SelectedItem = ProjectJdkName() };
+        ComboBox jdk = new() { MinWidth = 280, ItemsSource = jdks.Select(j => j.Name).ToList(), SelectedItem = ProjectJdkName(), [Avalonia.Automation.AutomationProperties.NameProperty] = "Project JDK" };
         jdk.SelectionChanged += (_, _) =>
         {
             if (jdk.SelectedItem is string name && name != ProjectJdkName())
@@ -244,7 +244,7 @@ public sealed partial class ProjectStructureDialog : IdeWindow
             body.Children.Add(DialogFooter.Paragraph("The project has not been imported yet."));
             return;
         }
-        ListBox modules = new() { ItemsSource = snapshot.Modules.Select(m => m.Id).ToList(), MaxHeight = 140 };
+        ListBox modules = new() { ItemsSource = snapshot.Modules.Select(m => m.Id).ToList(), MaxHeight = 140, [Avalonia.Automation.AutomationProperties.NameProperty] = "Modules" };
         modules.SelectedItem = selectedModule is not null && snapshot.Module(selectedModule) is not null ? selectedModule : snapshot.Modules.FirstOrDefault()?.Id;
         modules.SelectionChanged += (_, _) =>
         {
@@ -302,9 +302,9 @@ public sealed partial class ProjectStructureDialog : IdeWindow
     {
         string iml = ImlOf(module);
         List<(string Type, string Name, string Scope)> entries = OrderEntries(iml);
-        ListBox list = new() { ItemsSource = entries.Select(e => $"{e.Name}    {e.Type}    {e.Scope}").ToList(), MaxHeight = 200 };
+        ListBox list = new() { ItemsSource = entries.Select(e => $"{e.Name}    {e.Type}    {e.Scope}").ToList(), MaxHeight = 200, [Avalonia.Automation.AutomationProperties.NameProperty] = "Dependencies" };
         body.Children.Add(list);
-        ComboBox scope = new() { ItemsSource = IdeaProjectWriter.Scopes, SelectedItem = "COMPILE", MinWidth = 120 };
+        ComboBox scope = new() { ItemsSource = IdeaProjectWriter.Scopes, SelectedItem = "COMPILE", MinWidth = 120, [Avalonia.Automation.AutomationProperties.NameProperty] = "Scope" };
         Button maven = new() { Content = "Add from Maven…" };
         maven.Click += (_, _) => UnawaitedWork.Observe(AddMavenAsync(iml, scope.SelectedItem as string ?? "COMPILE"));
         Button jars = new() { Content = "Add Jars or Folder…" };
@@ -435,7 +435,7 @@ public sealed partial class ProjectStructureDialog : IdeWindow
     private void ShowLibraries()
     {
         IReadOnlyList<IdeaProjectLibrary> libraries = IdeaProjectWriter.Libraries(root);
-        ListBox list = new() { ItemsSource = libraries.Select(l => l.MavenId is { } id ? $"{l.Name}    (Maven: {id})" : $"{l.Name}    {string.Join(", ", l.Classes)}").ToList(), MaxHeight = 300 };
+        ListBox list = new() { ItemsSource = libraries.Select(l => l.MavenId is { } id ? $"{l.Name}    (Maven: {id})" : $"{l.Name}    {string.Join(", ", l.Classes)}").ToList(), MaxHeight = 300, [Avalonia.Automation.AutomationProperties.NameProperty] = "Libraries" };
         body.Children.Add(list);
         Button maven = new() { Content = "Add from Maven…" };
         maven.Click += (_, _) => UnawaitedWork.Observe(AddMavenAsync(null, "COMPILE"));
@@ -483,7 +483,7 @@ public sealed partial class ProjectStructureDialog : IdeWindow
         IReadOnlyList<MissingKeptJdk> missing = JdkRegistry.Current.MissingKept();
         List<string> names = [.. jdks.Select(j => j.Name), .. missing.Select(m => m.Name)];
         IReadOnlyList<string> rows = JdkRows();
-        ListBox list = new() { ItemsSource = rows, MaxHeight = 280 };
+        ListBox list = new() { ItemsSource = rows, MaxHeight = 280, [Avalonia.Automation.AutomationProperties.NameProperty] = "JDKs" };
         list.SelectedIndex = selectedJdk is not null ? names.IndexOf(selectedJdk) : -1;
         TextBlock users = new() { TextWrapping = TextWrapping.Wrap };
         list.SelectionChanged += (_, _) =>

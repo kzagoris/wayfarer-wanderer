@@ -223,23 +223,6 @@ public sealed class SymbolPopup : SearchPopup<SymbolRow>
         });
     }
 
-    /// <summary>The letter and colour of a symbol of each kind.</summary>
-    public static (string Letter, string Brush) Badge(SymbolKind kind) => kind switch
-    {
-        SymbolKind.Namespace or SymbolKind.Package or SymbolKind.Module => ("N", TokenKeys.Syntax_Namespace),
-        SymbolKind.Class => ("C", TokenKeys.Syntax_Class),
-        SymbolKind.Method or SymbolKind.Function or SymbolKind.Constructor => ("m", TokenKeys.Syntax_Method),
-        SymbolKind.Property => ("p", TokenKeys.Syntax_Property),
-        SymbolKind.Field => ("f", TokenKeys.Syntax_Field),
-        SymbolKind.Enum => ("E", TokenKeys.Syntax_Enum),
-        SymbolKind.Interface => ("I", TokenKeys.Syntax_Interface),
-        SymbolKind.Variable => ("v", TokenKeys.TextMuted),
-        SymbolKind.Constant => ("c", TokenKeys.Syntax_Constant),
-        SymbolKind.EnumMember => ("e", TokenKeys.Syntax_EnumMember),
-        SymbolKind.Struct => ("S", TokenKeys.Syntax_Struct),
-        SymbolKind.Event => ("e", TokenKeys.Syntax_Event),
-        SymbolKind.Operator => ("o", TokenKeys.TextMuted),
-        SymbolKind.TypeParameter => ("T", TokenKeys.Syntax_TypeParameter),
-        _ => ("·", TokenKeys.TextMuted),
-    };
+    /// <summary>The letter and colour of a symbol of each kind, as every badge has them (<see cref="KindBadges"/>).</summary>
+    public static (string Letter, string Brush) Badge(SymbolKind kind) => KindBadges.Of(KindBadges.Of(kind));
 }

@@ -248,4 +248,42 @@ public class AccessibilityTests
             window.Close();
         }
     }
+
+    [AvaloniaFact]
+    public void EveryFieldAndListOfTheToolWindowsIsHeardByAName()
+    {
+        var window = EditorApplication.CreateWindow(null);
+        window.Show();
+        try
+        {
+            foreach (Avalonia.Controls.Control tool in (Avalonia.Controls.Control[])[window.DebugTool, window.BuildTool, window.TestsTool])
+            {
+                foreach (Avalonia.Controls.Control field in Avalonia.LogicalTree.LogicalExtensions.GetLogicalDescendants(tool).OfType<Avalonia.Controls.Control>()
+                    .Where(c => c is Avalonia.Controls.TextBox or Avalonia.Controls.ComboBox or Avalonia.Controls.ListBox))
+                {
+                    bool named = Avalonia.Automation.AutomationProperties.GetName(field) is { Length: > 0 }
+                        || Avalonia.Automation.AutomationProperties.GetLabeledBy(field) is not null;
+                    Assert.True(named, $"{tool.GetType().Name}'s {field.GetType().Name} has no accessible name");
+                }
+            }
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [Fact]
+    public void AKindShowsTheSameBadgeInCompletionAndInGoToSymbol()
+    {
+        // The protocol's completion kinds (2 a method, 4 a constructor, 7 a class, 21 a constant) and symbol kinds alike.
+        Assert.Equal(SymbolPopupBadge(WayfarerWanderer.App.Shell.Navigation.SymbolKind.Method), Completion(2));
+        Assert.Equal(SymbolPopupBadge(WayfarerWanderer.App.Shell.Navigation.SymbolKind.Constructor), Completion(4));
+        Assert.Equal(SymbolPopupBadge(WayfarerWanderer.App.Shell.Navigation.SymbolKind.Class), Completion(7));
+        Assert.Equal(SymbolPopupBadge(WayfarerWanderer.App.Shell.Navigation.SymbolKind.Constant), Completion(21));
+        Assert.Equal("N", SymbolPopupBadge(WayfarerWanderer.App.Shell.Navigation.SymbolKind.Package));
+
+        static string SymbolPopupBadge(WayfarerWanderer.App.Shell.Navigation.SymbolKind kind) => WayfarerWanderer.App.Shell.Navigation.SymbolPopup.Badge(kind).Letter;
+        static string Completion(int kind) => KindBadges.Of(KindBadges.OfCompletion(kind)).Letter;
+    }
 }

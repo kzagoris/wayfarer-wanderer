@@ -13,6 +13,7 @@ public sealed class TestToolWindow : UserControl
         Content = new ListBox
         {
             ItemsSource = Cases,
+            [Avalonia.Automation.AutomationProperties.NameProperty] = "Test results",
             DisplayMemberBinding = new Avalonia.Data.Binding(nameof(JunitCase.DisplayName))
         };
     }

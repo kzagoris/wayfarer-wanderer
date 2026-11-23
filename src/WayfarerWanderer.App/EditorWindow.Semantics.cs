@@ -433,7 +433,7 @@ public sealed partial class EditorWindow
         var path = SourcePath!;
         var caret = Editor.CaretPosition;
         var versions = OpenSourcePaths.ToDictionary(p => p, p => FindOpenDocument(p)!.Version, PathNames.Comparer);
-        TextBox name = new() { PlaceholderText = "New symbol name", VerticalAlignment = VerticalAlignment.Top };
+        TextBox name = new() { PlaceholderText = "New symbol name", VerticalAlignment = VerticalAlignment.Top, [Avalonia.Automation.AutomationProperties.NameProperty] = "New symbol name" };
         var prompt = ChoiceDialog("Rename Symbol", name, "Preview", out var preview);
         prompt.Height = 150;
         preview.IsEnabled = false;

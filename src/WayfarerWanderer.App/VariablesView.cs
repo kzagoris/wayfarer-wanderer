@@ -264,7 +264,7 @@ public sealed class VariablesView : UserControl
         else value.Opacity = 0.6;
         row.Children.Add(value);
 
-        TextBox editor = new() { MinWidth = 160, Padding = new Thickness(2, 0), VerticalAlignment = VerticalAlignment.Center, IsVisible = false };
+        TextBox editor = new() { MinWidth = 160, Padding = new Thickness(2, 0), VerticalAlignment = VerticalAlignment.Center, IsVisible = false, [Avalonia.Automation.AutomationProperties.NameProperty] = $"Value of {node.Name}" };
         row.Children.Add(editor);
         bool done = false;
         void Finish(bool commit)
