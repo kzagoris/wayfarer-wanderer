@@ -206,4 +206,46 @@ public class AccessibilityTests
             window.Close();
         }
     }
+
+    [AvaloniaFact]
+    public void SettingsHoldsEverythingForEyesAndEarsOnOnePage()
+    {
+        var window = EditorApplication.CreateWindow(null);
+        window.Show();
+        SettingsDialog dialog = window.ShowSettings();
+        try
+        {
+            Assert.Contains(SettingsDialog.AccessibilityPage, dialog.Pages);
+            dialog.Page = SettingsDialog.AccessibilityPage;
+            Assert.Equal(["Use High Contrast while the system asks for it", "Colours of states", "Play sound cues", "An error on the caret's line",
+                "A warning on the caret's line", "A breakpoint on the caret's line", "A folded region at the caret's line", "A line changed since the last commit",
+                "A build passing or failing", "A test run passing or failing", "The debugger stopping", "A command in the terminal failing", "A save refused"], dialog.Shown);
+
+            // Each cue's row is greyed, saying why, while the cues play never.
+            Assert.Null(dialog.WhyGreyed("A save refused"));
+            dialog.Change(s => s with { SoundCues = SoundCuesPlayed.Never });
+            Assert.Equal("Play sound cues is Never", dialog.WhyGreyed("A save refused"));
+
+            // A search finds the page by what a person would type.
+            dialog.Query = "deuteranopia";
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.Equal([SettingsDialog.AccessibilityPage], dialog.Pages);
+            dialog.Query = "screen reader";
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.Contains("Play sound cues", dialog.Shown);
+
+            // The palette previews before Apply, and Apply keeps it.
+            dialog.Query = string.Empty;
+            dialog.Change(s => s with { StatePalette = StatePalette.ColourBlindSafe });
+            dialog.Apply();
+            Assert.Equal(StatePalette.ColourBlindSafe, window.SettingsKept.Value.StatePalette);
+            Assert.Equal(SoundCuesPlayed.Never, window.SettingsKept.Value.SoundCues);
+        }
+        finally
+        {
+            dialog.Close();
+            window.SettingsKept.Update(_ => new AppSettings());
+            window.Close();
+        }
+    }
 }

@@ -117,7 +117,7 @@ public class WelcomeTests
         SettingsDialog dialog = window.ShowSettings();
         try
         {
-            Assert.Equal([SettingsDialog.Appearance, SettingsDialog.SystemPage, SettingsDialog.EditorPage, SettingsDialog.KeymapPage], dialog.Pages);
+            Assert.Equal([SettingsDialog.Appearance, SettingsDialog.SystemPage, SettingsDialog.AccessibilityPage, SettingsDialog.EditorPage, SettingsDialog.KeymapPage], dialog.Pages);
             Assert.Contains(Themes.OwnName, dialog.ThemePicker.Listed);
             Assert.DoesNotContain("Passenger", dialog.ThemePicker.Listed);
             Assert.Contains("Reopen projects on startup", ShownOn(dialog, SettingsDialog.SystemPage));

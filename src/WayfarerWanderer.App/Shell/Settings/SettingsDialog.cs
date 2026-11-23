@@ -18,6 +18,7 @@ public sealed partial class SettingsDialog : IdeWindow
 {
     public const string Appearance = "Appearance";
     public const string SystemPage = "System Settings";
+    public const string AccessibilityPage = "Accessibility";
     public const string EditorPage = "Editor";
     public const string KeymapPage = "Keymap";
 
@@ -25,7 +26,7 @@ public sealed partial class SettingsDialog : IdeWindow
     /// "Settings | Appearance".</summary>
     public static string PlaceOfPage(string page) => $"Settings | {page}";
 
-    private static readonly string[] Order = [Appearance, SystemPage, TrustPage, EditorPage, KeymapPage];
+    private static readonly string[] Order = [Appearance, SystemPage, AccessibilityPage, TrustPage, EditorPage, KeymapPage];
 
     /// <summary>Puts what the options changed in force: from the settings as they were applied last, to the options'.</summary>
     private readonly Action<AppSettings, AppSettings> apply;
@@ -207,6 +208,20 @@ public sealed partial class SettingsDialog : IdeWindow
         Add(Declared.CaretWidth);
         Add(Declared.ShowNavigationBar);
         Add(Declared.MainMenuBar);
+
+        Add(Declared.FollowSystemContrast);
+        Add(Declared.StatePalette);
+        Add(Declared.SoundCues);
+        Add(Declared.SoundOnErrorLine);
+        Add(Declared.SoundOnWarningLine);
+        Add(Declared.SoundOnBreakpointLine);
+        Add(Declared.SoundOnFoldedLine);
+        Add(Declared.SoundOnChangedLine);
+        Add(Declared.SoundOnBuildEnd);
+        Add(Declared.SoundOnTestsEnd);
+        Add(Declared.SoundOnDebuggerStop);
+        Add(Declared.SoundOnTerminalFailure);
+        Add(Declared.SoundOnSaveRefused);
 
         Add(Declared.ReopenProjectsOnStartup);
         Add(Declared.ConfirmBeforeClosing);
