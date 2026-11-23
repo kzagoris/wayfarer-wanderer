@@ -257,7 +257,7 @@ public sealed class NavigationTests : IDisposable
         {
             MenuItem navigate = window.MainMenuNamed("Navigate");
             string[] titles = [.. navigate.Items.OfType<MenuItem>().Select(i => (string)i.Header!)];
-            Assert.Equal(["Back", "Forward", "Search Everywhere", "Go to File…", "Go to Symbol…", "Go to Line:Column…", "File Structure", "Recent Files", "Recently Changed Files"], titles);
+            Assert.Equal(["Back", "Forward", "Search Everywhere", "Go to File…", "Go to Symbol…", "Go to Line:Column…", "File Structure", "Jump to Navigation Bar", "Go to Declaration", "Recent Files", "Recently Changed Files"], titles);
             // No folder is open: the searches over one say so.
             Assert.False(navigate.Items.OfType<MenuItem>().Single(i => (string)i.Header! == "Go to File…").IsEnabled);
         }

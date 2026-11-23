@@ -64,6 +64,8 @@ public sealed partial class EditorWindow
         if (!shown.TryGetValue(document, out Shown? held))
         {
             shown[document] = held = new Shown(new DocumentDecorations(document));
+            // An address written in a comment or string is underlined, and Go to Declaration follows it.
+            held.Decorations.SetAddresses(WrittenLink);
         }
         if (held.Language != language)
         {

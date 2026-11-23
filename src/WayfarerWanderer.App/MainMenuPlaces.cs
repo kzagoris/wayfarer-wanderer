@@ -39,6 +39,7 @@ public static class MainMenuPlaces
         [AppActions.ReplaceInFiles] = [new("Edit", 3, 1)],
 
         // View: Tool Windows (0, 0) lists the dock's windows as it opens.
+        [AppActions.ReadAsText] = [new("View", 1, 0)],
 
         // Navigate: Back and Forward, the Go to popups, the recent files.
         [AppActions.Back] = [new("Navigate", 0, 0)],
@@ -48,8 +49,10 @@ public static class MainMenuPlaces
         [AppActions.GoToSymbol] = [new("Navigate", 1, 2)],
         [AppActions.GoToLine] = [new("Navigate", 1, 3)],
         [AppActions.FileStructure] = [new("Navigate", 1, 4)],
-        [AppActions.RecentFiles] = [new("Navigate", 2, 0)],
-        [AppActions.RecentChangedFiles] = [new("Navigate", 2, 1)],
+        [AppActions.JumpToNavigationBar] = [new("Navigate", 1, 5)],
+        [AppActions.GoToDeclaration] = [new("Navigate", 2, 0)],
+        [AppActions.RecentFiles] = [new("Navigate", 3, 0)],
+        [AppActions.RecentChangedFiles] = [new("Navigate", 3, 1)],
 
         // Code and Refactor: the language servers'.
         [EditorWindow.CompleteAction] = [new("Code", 0, 0)],

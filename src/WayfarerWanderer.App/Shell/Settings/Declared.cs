@@ -60,4 +60,8 @@ public static class Declared
     public static readonly NumberSetting CaretWidth = new(s => s.CaretWidth, (s, v) => s with { CaretWidth = v }, 1, 8, 1,
         new(D.EditorPage, "Caret width", "caret cursor insertion point text cursor width thickness thick broad bold visibility accessibility terminal",
             "How broad the editor's caret is, and the terminal's Line and Underline cursors."), "px");
+
+    public static readonly ToggleSetting ShowNavigationBar = new(s => s.ShowNavigationBar, (s, v) => s with { ShowNavigationBar = v },
+        new(D.EditorPage, "Show navigation bar", "breadcrumbs path package type member outline structure jump appearance",
+            "Over the editor, where its caret is: the file's folders and name, then a Java or Kotlin file's type and member, each listing what stands beside it."));
 }

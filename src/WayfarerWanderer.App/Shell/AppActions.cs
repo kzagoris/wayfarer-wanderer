@@ -53,11 +53,21 @@ public static class AppActions
     public const string CloseTab = "app.closeTab";
     public const string NextTab = "app.nextTab";
     public const string PreviousTab = "app.previousTab";
+
+    // Rider's Switcher: Ctrl+Tab, and Ctrl+Shift+Tab going the other way, in $default's and Mac OS X 10.5+'s own lists,
+    // which every keymap here takes; Control on the Mac too.
+    public const string Switcher = "app.switcher";
+    public const string SwitcherBackward = "app.switcherBackward";
     public const string GoToFile = "app.goToFile";
     public const string GoToLine = "app.goToLine";
     public const string GoToSymbol = "app.goToSymbol";
     public const string GoToEverything = "app.goToEverything";
     public const string FileStructure = "app.fileStructure";
+
+    // Rider's ShowNavBar (Jump to Navigation Bar): Ctrl+F2 in its Visual Studio keymap, Ctrl+Shift+; (Cmd+Shift+; on the
+    // Mac) in its VS Code keymaps, Alt+Home in $default's and Mac OS X 10.5+'s. Its Visual Studio OSX keymap gives its
+    // Cmd+F2 to Toggle Bookmark too, which keeps it here, and Mac OS X 10.5+'s Cmd+Up is the editor's Text Start here.
+    public const string JumpToNavigationBar = "app.jumpToNavigationBar";
 
     // Rider's GotoRelated (Related Symbol), here a XAML or Razor file's code-behind and back: its Visual Studio keymaps'
     // Ctrl+Alt+F7 and Cmd+Shift+F7, its VS Code keymaps' (from their parents) Ctrl+Alt+Home and Ctrl+Cmd+Up.
@@ -441,6 +451,10 @@ public static class AppActions
     public const string NextRegion = "app.nextRegion";
     public const string PreviousRegion = "app.previousRegion";
 
+    // What the thing at hand says, as plain text to read (a card, the terminal's last command, a diff's changes, the last
+    // message), which no keymap of Rider's has an action for: Ctrl+Alt+R (Ctrl+Cmd+R on the Mac) in every keymap.
+    public const string ReadAsText = "app.readAsText";
+
     // The debugger's, on the active editor and the session.
     public const string ToggleBreakpoint = "app.debug.toggleBreakpoint";
     public const string ToggleBreakpointEnabled = "app.debug.toggleBreakpointEnabled";
@@ -675,7 +689,11 @@ public static class AppActions
         // A chord no keymap here takes and a game is unlikely to want, as the game hears it while it has the keys.
         Keymap keymap = Base(preset).Bind(GameKeys, "control F11")
             .Bind(NextRegion, OperatingSystem.IsMacOS() ? "control meta BACK_QUOTE" : "control alt BACK_QUOTE")
-            .Bind(PreviousRegion, OperatingSystem.IsMacOS() ? "control meta shift BACK_QUOTE" : "control alt shift BACK_QUOTE");
+            .Bind(PreviousRegion, OperatingSystem.IsMacOS() ? "control meta shift BACK_QUOTE" : "control alt shift BACK_QUOTE")
+            .Bind(ReadAsText, OperatingSystem.IsMacOS() ? "control meta R" : "control alt R")
+            // The Switcher's keys are the same in every keymap of Rider's (Switcher).
+            .Bind(Switcher, "control TAB")
+            .Bind(SwitcherBackward, "control shift TAB");
         foreach ((string action, string[] shortcuts) in overrides)
         {
             List<Shortcut> keys = [];
@@ -878,6 +896,7 @@ public static class AppActions
             .Bind(ShowSettings, "control alt S")
             .Bind(ShowNuGet, "alt 7", "alt shift 7")
             .Bind(FileStructure, "alt BACK_SLASH")
+            .Bind(JumpToNavigationBar, "control F2")
             .Bind(GoToRelated, "control alt F7")
             .Bind(Find, "control F")
             .Bind(Replace, "control H")
@@ -1006,6 +1025,7 @@ public static class AppActions
                 .Bind(GoToLine, "control G")
                 .Bind(GoToSymbol, "meta T")
                 .Bind(FileStructure, "meta alt O", "meta shift O")
+                .Bind(JumpToNavigationBar, "meta shift SEMICOLON")
                 .Bind(GoToRelated, "control meta UP")
                 .Bind(FindAction, "F1", "meta shift P", "meta shift A")
                 .Bind(FindInFiles, "meta shift F")
@@ -1123,6 +1143,7 @@ public static class AppActions
             .Bind(GoToSymbol, "control T")
             .Bind(GoToEverything, "F1", "control shift A")
             .Bind(FileStructure, "control shift O")
+            .Bind(JumpToNavigationBar, "control shift SEMICOLON")
             .Bind(GoToRelated, "control alt HOME")
             .Bind(FindAction, "control shift P")
             .Bind(FindInFiles, "control shift F")
@@ -1250,6 +1271,7 @@ public static class AppActions
                 .Bind(GoToSymbol, "meta O", "meta alt O")
                 .Bind(GoToEverything, "shift , shift")
                 .Bind(FileStructure, "meta F12")
+                .Bind(JumpToNavigationBar, "alt HOME")
                 .Bind(GoToRelated, "control meta UP")
                 .Bind(FindAction, "meta shift A")
                 .Bind(FindInFiles, "meta shift F")
@@ -1369,6 +1391,7 @@ public static class AppActions
             .Bind(GoToSymbol, "control N", "control alt shift N")
             .Bind(GoToEverything, "shift , shift")
             .Bind(FileStructure, "control F12")
+            .Bind(JumpToNavigationBar, "alt HOME")
             .Bind(GoToRelated, "control alt HOME")
             .Bind(FindAction, "control shift A")
             .Bind(FindInFiles, "control shift F")

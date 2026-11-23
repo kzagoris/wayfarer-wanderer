@@ -33,8 +33,20 @@ public static class Refusals
             ? string.Create(CultureInfo.InvariantCulture, $"the text replaced would be {length:N0} characters long, more than {SearchResult.MostReplaced:N0}")
             : null;
 
-    /// <summary>No tab is open and no tool window serves the folder, for the Switcher.</summary>
-    public const string NothingToSwitchTo = "No tab or tool window is open to switch to";
+    /// <summary>Read as Text's view, the keys in it.</summary>
+    public const string OnlyToRead = "The text is only to read: Escape goes back to where you were";
+
+    /// <summary>Read as Text where the keys are in nothing it reads.</summary>
+    public const string NothingToRead = "Nothing here to read as text: put the keys in the editor, the terminal, a diff or the status bar";
+
+    /// <summary>Read as Text in the editor where its language server says nothing of what the caret is on.</summary>
+    public const string NothingAtCaret = "Nothing at the caret to read as text: its language server says nothing of it";
+
+    /// <summary>Read as Text asked again in its own view.</summary>
+    public const string ReadingAlready = "Its text is open: Escape goes back to where you were";
+
+    /// <summary>No file is open and no tool window serves the folder, for the Switcher.</summary>
+    public const string NothingToSwitchTo = "No file or tool window is open to switch to";
 
     /// <summary>The folder open is in no Git working tree.</summary>
     public const string NoRepository = "The folder is not in a Git repository";

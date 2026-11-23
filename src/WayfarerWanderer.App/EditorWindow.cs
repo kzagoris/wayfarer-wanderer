@@ -52,8 +52,11 @@ public sealed partial class EditorWindow : Window
         AddMainMenuActions();
         TrustBanner = TrustWorkspaceBanner();
         AddNavigation();
+        AddSwitcher();
+        AddDeclarations();
+        AddReadAsText();
         AddFindInFiles();
-        AddToolWindows(new Grid { Children = { Editor, Welcome } });
+        AddToolWindows(new Grid { Children = { EditorWithBar(), Welcome } });
         AddExplorerActions();
         DockPanel.SetDock(TrustBanner, Dock.Top);
         DockPanel.SetDock(asking, Dock.Top);

@@ -11,9 +11,10 @@ using WayfarerWanderer.App.Shell.Navigation;
 
 namespace WayfarerWanderer.App;
 
-/// <summary>The status bar's path: the shown file's last folders and its name, then the type and member the caret is in,
-/// from the language server's outline (asked again as editing pauses, and never starting a server of its own accord); a
-/// click on a member goes to it, on the file or a folder shows it in the Project window.</summary>
+/// <summary>The status bar's path: the shown file's last folders and its name, then, where the navigation bar over the
+/// editor does not name them (<see cref="Shell.Editors.NavigationBar.NamesOutline"/>), the type and member the caret is
+/// in, from the language server's outline (asked again as editing pauses, and never starting a server of its own accord),
+/// which the bar is given too; a click on a member goes to it, on the file or a folder shows it in the Project window.</summary>
 public sealed partial class EditorWindow
 {
     private readonly PathCrumbs breadcrumbs = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Avalonia.Thickness(0, 0, 18, 0) };
@@ -61,6 +62,7 @@ public sealed partial class EditorWindow
             outlined = null;
             OutlineLater();
         }
+        NavigationBar.Show(text is null ? null : SourcePath, text is null || SourcePath is not { } path ? [] : [.. FileCrumbs(path).Select(c => (c.Text, c.Path))]);
         ShowBreadcrumbs();
     }
 
@@ -105,6 +107,7 @@ public sealed partial class EditorWindow
             {
                 outline = DocumentSymbols(answer, path);
                 outlined = path;
+                NavigationBar.ShowOutline(path, outline);
                 ShowBreadcrumbs();
             }
         }
@@ -120,7 +123,7 @@ public sealed partial class EditorWindow
         if (Editor.IsVisible && SourcePath is { } path)
         {
             wanted.AddRange(FileCrumbs(path));
-            if (outlined == path)
+            if (outlined == path && !NavigationBar.NamesOutline)
             {
                 int line = Editor.CaretPosition.Line;
                 // The rows are in the file's order, each under its container: the caret's chain is the deepest run of rows

@@ -250,6 +250,7 @@ public sealed partial class EditorWindow
             TerminalSettingsChanged(change);
             FollowMainMenu(SettingsKept.Value);
             FollowTitleBar(SettingsKept.Value);
+            FollowNavigationBar(SettingsKept.Value);
         });
 
     /// <summary>The Trusted Folders page's change put in force and kept: a folder trusted anew is trusted, one whose trust

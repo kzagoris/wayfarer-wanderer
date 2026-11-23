@@ -205,6 +205,7 @@ public sealed partial class SettingsDialog : IdeWindow
         Add(Declared.DisplayScale);
         Add(Declared.EditorFontFamily);
         Add(Declared.CaretWidth);
+        Add(Declared.ShowNavigationBar);
         Add(Declared.MainMenuBar);
 
         Add(Declared.ReopenProjectsOnStartup);
