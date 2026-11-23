@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Explorer/FileIcons.cs, MIT (notices/Passenger/LICENSE): the solution and project
+// From Passenger 8a1df7e4 src/Passenger.App/Explorer/FileIcons.cs, MIT (notices/Passenger/LICENSE): the solution and project
 // kinds cut, a JVM module's folder drawn filled in their place.
 using Avalonia;
 using Avalonia.Controls;
@@ -12,7 +12,7 @@ namespace WayfarerWanderer.App.Shell.Explorer;
 public static class FileIcons
 {
     public static Geometry For(ExplorerNode node) => Look(node) is { } look
-        ? Find<Geometry>($"FileIcon.{look.Shape}")
+        ? Find<Geometry>(Shaped(look))
         : Find<Geometry>(node.JvmFolder == JvmFolder.Module
             ? node.IsExpanded ? IconKeys.SolutionFolderOpen : IconKeys.SolutionFolder
             : node.IsExpanded ? IconKeys.FolderOpen : IconKeys.Explorer);
@@ -21,7 +21,17 @@ public static class FileIcons
         ? Tint(look)
         : Find<IBrush>(node.JvmFolder == JvmFolder.Module ? TokenKeys.File_SolutionFolder : TokenKeys.File_Folder);
 
-    public static Geometry ForFile(string path) => Find<Geometry>($"FileIcon.{FileIconSet.ForFile(Path.GetFileName(path)).Shape}");
+    /// <summary>The resource of a shape of the file icons.</summary>
+    private static string Shaped(FileIconLook look) => $"FileIcon.{look.Shape}";
+
+    /// <summary>A folder's icon by its name, as the Explorer draws a folder on disk.</summary>
+    public static Geometry ForFolder(string name, bool open) => FileIconSet.ForFolder(name) is { } look
+        ? Find<Geometry>(Shaped(look))
+        : Find<Geometry>(open ? IconKeys.FolderOpen : IconKeys.Explorer);
+
+    public static IBrush BrushForFolder(string name) => FileIconSet.ForFolder(name) is { } look ? Tint(look) : Find<IBrush>(TokenKeys.File_Folder);
+
+    public static Geometry ForFile(string path) => Find<Geometry>(Shaped(FileIconSet.ForFile(Path.GetFileName(path))));
 
     public static IBrush BrushForFile(string path) => Tint(FileIconSet.ForFile(Path.GetFileName(path)));
 

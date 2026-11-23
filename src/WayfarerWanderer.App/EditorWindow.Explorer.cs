@@ -1,6 +1,7 @@
-// The Explorer's row menu, its keys and its drags, after Passenger 2044e49b src/Passenger.App/MainWindow.ExplorerActions.cs,
+// The Explorer's row menu, its keys and its drags, after Passenger 8a1df7e4 src/Passenger.App/MainWindow.ExplorerActions.cs,
 // MainWindow.Files.cs and MainWindow.FileMoves.cs, MIT (notices/Passenger/LICENSE): the solution, project, NuGet, Docker,
-// Aspire, Godot, nesting, Local History, Git and multi-file Undo parts cut, and C#'s Class/Interface made Java's and Kotlin's.
+// Aspire, Godot, nesting, Local History and Git parts cut, Undo kept only for a Delete, and C#'s Class/Interface made
+// Java's and Kotlin's.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -38,7 +39,13 @@ public sealed partial class EditorWindow
     /// <summary>The actions a row's keys run while the Explorer has them, those the editor shares (the clipboard's, Delete)
     /// taken from it there.</summary>
     private static readonly HashSet<string> ExplorerKeys =
-        [E.Cut, E.Copy, E.Paste, E.Delete, E.Backspace, A.Rename, A.CopyPath, A.RevealInFileManager, A.NewFile, A.NewFolder, A.NewType];
+        [E.Cut, E.Copy, E.Paste, E.Delete, E.Backspace, E.Undo, E.Redo, A.Rename, A.CopyPath, A.RevealInFileManager, A.NewFile, A.NewFolder, A.NewType];
+
+    /// <summary>The Explorer's deletes Undo takes back out of the Trash, the last on top, each what one Delete moved there.</summary>
+    private readonly Stack<IReadOnlyList<Trashed>> deletesDone = [];
+
+    /// <summary>The deletes Undo took back, which Redo moves to the Trash again; cleared by the next Delete.</summary>
+    private readonly Stack<IReadOnlyList<Trashed>> deletesUndone = [];
 
     /// <summary>What Cut or Copy last put on the clipboard, whose text is their paths: a Paste finds them only while the
     /// clipboard still holds that text, so text copied since is never taken for them.</summary>
@@ -506,9 +513,11 @@ public sealed partial class EditorWindow
     private static string NotMade(string name, Exception error) =>
         $"{name} could not be made: {(error is UnauthorizedAccessException ? "access denied" : error.Message)}";
 
+    /// <summary>Why a name given a new or renamed file or folder is none: empty, holding a character no name may, or with a
+    /// part that climbs out of its folder (".."), where two dots inside a name (release..notes.txt) are its own.</summary>
     private static string? Invalid(string name) =>
         name.Trim().Length == 0 ? "A name is needed"
-        : name.IndexOfAny(Path.GetInvalidFileNameChars().Where(c => c is not '/' and not '\\').ToArray()) >= 0 || name.Contains("..", StringComparison.Ordinal) ? $"{name} is not a file name"
+        : name.IndexOfAny(Path.GetInvalidFileNameChars().Where(c => c is not '/' and not '\\').ToArray()) >= 0 || name.Split(['/', '\\']).Contains("..") ? $"{name} is not a file name"
         : null;
 
     private static bool Stands(string path) => File.Exists(path) || Directory.Exists(path);
@@ -533,16 +542,22 @@ public sealed partial class EditorWindow
         await DeleteAsync(paths);
     }
 
-    /// <summary>Moves files and folders to the Trash, closing what of them is open; true once all are gone.</summary>
-    public Task<bool> DeleteAsync(IReadOnlyList<string> paths)
+    /// <summary>Moves files and folders to the Trash, closing what of them is open; true once all are gone. Where it is
+    /// <paramref name="undoable"/> (a Delete of its own, not a paste's replacing), it is one step of Undo, which brings back
+    /// out of the Trash what it moved there, and Redo moves it there again.</summary>
+    public Task<bool> DeleteAsync(IReadOnlyList<string> paths, bool undoable = true)
     {
         List<string> gone = [];
         List<string> refused = [];
+        List<Trashed> trashed = [];
         foreach (string path in paths)
         {
             try
             {
-                Trash.Move(path);
+                if (Trash.Move(path) is { } went)
+                {
+                    trashed.Add(went);
+                }
                 gone.Add(path);
                 Forget(path);
             }
@@ -555,9 +570,74 @@ public sealed partial class EditorWindow
         {
             CameOrWent(gone);
         }
+        if (undoable && trashed.Count > 0)
+        {
+            deletesDone.Push(trashed);
+            deletesUndone.Clear();
+        }
         Explorer.Say(string.Join("; ", [.. gone.Count > 0 ? [$"Deleted {Plural.Listed([.. gone.Select(Path.GetFileName).OfType<string>()])}"] : Array.Empty<string>(), .. refused]));
         return Task.FromResult(refused.Count == 0);
     }
+
+    /// <summary>Undo or Redo where the Explorer's rows have the keys or its menu asks: its last Delete brought back out of
+    /// the Trash, or the last one undone moved there again; false where it is not the Explorer's to do, the editor's or a
+    /// text box's then.</summary>
+    private bool UndoInExplorer(ActionContext context, bool redo)
+    {
+        if (!InExplorer(context) || (redo ? deletesUndone : deletesDone).Count == 0)
+        {
+            return false;
+        }
+        IReadOnlyList<Trashed> step = (redo ? deletesUndone : deletesDone).Pop();
+        List<string> done = [];
+        List<string> refused = [];
+        List<Trashed> again = [];
+        foreach (Trashed item in redo ? step : step.Reverse())
+        {
+            string name = Path.GetFileName(item.From);
+            try
+            {
+                if (redo)
+                {
+                    if (Trash.Move(item.From) is { } went)
+                    {
+                        again.Add(went);
+                    }
+                    Forget(item.From);
+                }
+                else
+                {
+                    Trash.PutBack(item);
+                    again.Add(item);
+                }
+                done.Add(item.From);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+            {
+                refused.Add($"{name} could not be {(redo ? "deleted" : "brought back")}: {error.Message}");
+            }
+        }
+        if (again.Count > 0)
+        {
+            (redo ? deletesDone : deletesUndone).Push(again);
+        }
+        if (done.Count > 0)
+        {
+            CameOrWent(done);
+            if (!redo)
+            {
+                Explorer.Reveal(done[^1]);
+            }
+        }
+        string names = Plural.Listed([.. done.Select(Path.GetFileName).OfType<string>()]);
+        Explorer.Say(string.Join("; ", [.. done.Count > 0 ? [redo ? $"Deleted {names}" : $"Brought {names} back from the {TrashName}"] : Array.Empty<string>(), .. refused]));
+        return true;
+    }
+
+    /// <summary>Why Undo or Redo does nothing in the Explorer, or null where it has a delete to take back or do again; null
+    /// too where it is not the Explorer's, for the editor or text box to say.</summary>
+    private string? WhyNotUndoInExplorer(ActionContext context, bool redo) =>
+        !InExplorer(context) ? null : (redo ? deletesUndone : deletesDone).Count == 0 ? $"No delete to {(redo ? "redo" : "undo")} in the Explorer" : null;
 
     private static string DeleteQuestion(IReadOnlyList<string> paths) => paths.Count == 1
         ? $"Delete {(Directory.Exists(paths[0]) ? "the folder " : string.Empty)}{Path.GetFileName(paths[0])}{(Directory.Exists(paths[0]) ? " with all it holds" : string.Empty)}? It goes to the {TrashName}."
@@ -637,7 +717,7 @@ public sealed partial class EditorWindow
     }
 
     /// <summary>Moves or copies files and folders into a folder: what is there already stays put, a folder never goes
-    /// inside itself, two of one name never go at all, a copy into its own folder is named by the person, and a name taken
+    /// inside itself nor replaces one holding it, two of one name never go at all, a copy into its own folder is named by the person, and a name taken
     /// there is replaced (to the Trash) only once they agree. The line under the Explorer's rows says what went where and
     /// what could not; the last one put is chosen. Answers with where each went.</summary>
     public async Task<IReadOnlyList<string>> PutAsync(IReadOnlyList<string> paths, string into, bool copy)
@@ -655,6 +735,12 @@ public sealed partial class EditorWindow
         foreach (string source in paths)
         {
             string name = Path.GetFileName(source);
+            // One whose name there is a folder holding it would go to the Trash with what it replaced: it stays, said, unasked.
+            if (PathNames.IsUnder(source, Path.Combine(into, name)))
+            {
+                refused.Add($"{name} would replace the folder holding it");
+                continue;
+            }
             if (!Stands(source))
             {
                 refused.Add($"{name} is no longer there");
@@ -678,7 +764,7 @@ public sealed partial class EditorWindow
             else if (Stands(target))
             {
                 if (!await ConfirmAsync("Files Already Exist", $"{name} with the same name already exists in '{Path.GetFileName(into)}'. Replace?", "Replace")
-                    || !await DeleteAsync([target]))
+                    || !await DeleteAsync([target], undoable: false))
                 {
                     continue;
                 }

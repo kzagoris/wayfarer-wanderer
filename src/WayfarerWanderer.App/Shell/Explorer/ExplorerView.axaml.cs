@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Explorer/ExplorerView.axaml.cs, MIT (notices/Passenger/LICENSE): the Solution
+// From Passenger 8a1df7e4 src/Passenger.App/Explorer/ExplorerView.axaml.cs, MIT (notices/Passenger/LICENSE): the Solution
 // view, single-click opening and file nesting cut. Wayfarer reads the folder's files for the filter itself, as it has
 // no index, and watches the folder so the rows follow what the build and other programs write.
 using Avalonia;
@@ -42,7 +42,7 @@ public partial class ExplorerView : UserControl
     private readonly Debounce filtering;
 
     /// <summary>Under the rows, how many more files a filter matched than the tree shows.</summary>
-    private readonly TextBlock more = new() { Classes = { StyleClasses.EmptyText }, IsVisible = false };
+    private readonly ToolWindows.EmptyState more = new() { IsVisible = false };
 
     /// <summary>Filters asked for, numbering each: only the newest one's answer lands.</summary>
     private int asked;
@@ -71,12 +71,12 @@ public partial class ExplorerView : UserControl
     public ExplorerView()
     {
         InitializeComponent();
-        filter.Margin = new Thickness(6, 0, 4, 0);
+        filter.Margin = new Thickness(Gaps.Small, 0, Gaps.Tight, 0);
         filter.PlaceholderText = "Filter files";
         filterBar = ToolWindows.ToolBars.Top(filter);
         filterBar.IsVisible = false;
         Body.Children.Add(filterBar);
-        more.Margin = new Thickness(16, 6);
+        more.Margin = new Thickness(Gaps.Group, Gaps.Small);
         said.Margin = new Thickness(16, 4, 16, 6);
         StackPanel foot = new() { Children = { more, said } };
         Grid.SetRow(foot, 2);
@@ -283,15 +283,7 @@ public partial class ExplorerView : UserControl
         {
             return;
         }
-        if (Rows.SelectedIndex < 0)
-        {
-            Rows.SelectedIndex = 0;
-        }
-        int index = Rows.SelectedIndex;
-        // A row scrolled out of sight, or in a window just shown, has no container until it is laid out in view.
-        Rows.ScrollIntoView(index);
-        Rows.UpdateLayout();
-        Rows.ContainerFromIndex(index)?.Focus();
+        ListKeys.Hold(Rows, chooseFirst: true);
     }
 
     /// <summary>The filter's text: the rows narrowed to the files whose names hold it, with their folders.</summary>
@@ -413,7 +405,7 @@ public partial class ExplorerView : UserControl
             return;
         }
         Tree.Filter(found.Files);
-        more.Text = $"{found.More:N0} more {Plural.Noun(found.More, "file")} {Plural.Agreeing(found.More, "matches", "match")}: a longer filter narrows them";
+        more.Text = $"{Numbers.Said(found.More)} more {Plural.Noun(found.More, "file")} {Plural.Agreeing(found.More, "matches", "match")}: a longer filter narrows them";
         more.IsVisible = found.More > 0;
         ShowHint();
     }
@@ -513,7 +505,7 @@ public partial class ExplorerView : UserControl
         RowGlyphs glyphs = new();
         glyphs.ChevronPressed += OnChevronPressed;
         TextBlock name = new() { VerticalAlignment = VerticalAlignment.Center };
-        TextBlock detail = new() { Classes = { StyleClasses.Muted }, FontSize = 12, Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        TextBlock detail = new() { Classes = { StyleClasses.Muted, StyleClasses.Caption }, Margin = new Thickness(Gaps.Normal, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         StackPanel row = new() { Orientation = Orientation.Horizontal, Height = ListRow.Height, Children = { glyphs, name, detail } };
         return row.Showing<ExplorerNode>(node =>
         {

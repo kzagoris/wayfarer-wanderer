@@ -187,6 +187,53 @@ public sealed class ExplorerActionsTests : IDisposable
     }
 
     [AvaloniaFact]
+    public async Task UndoBringsADeleteBackFromTheTrashAndRedoDeletesItAgain()
+    {
+        EditorWindow window = await OpenAsync();
+        try
+        {
+            string guide = Path.Combine(root, "docs", "guide.md");
+            Assert.True(await window.DeleteAsync([guide]));
+            Assert.False(File.Exists(guide));
+
+            Choose(window, "docs");
+            window.Explorer.FocusRows();
+            window.KeyPress(Key.Z, RawInputModifiers.Control, PhysicalKey.Z, "z");
+            await Settle();
+            Assert.True(File.Exists(guide));
+            Assert.Equal($"Brought guide.md back from the {(OperatingSystem.IsWindows() ? "Recycle Bin" : "Trash")}", window.Explorer.Said);
+
+            window.Explorer.FocusRows();
+            window.KeyPress(Key.Y, RawInputModifiers.Control, PhysicalKey.Y, "y");
+            await Settle();
+            Assert.False(File.Exists(guide));
+            Assert.Equal("Deleted guide.md", window.Explorer.Said);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task APasteNeverReplacesTheFolderHoldingIt()
+    {
+        Write("docs/docs/inner.md", "# inner");
+        EditorWindow window = await OpenAsync();
+        try
+        {
+            string inner = Path.Combine(root, "docs", "docs");
+            Assert.Empty(await window.PutAsync([inner], root, copy: false));
+            Assert.True(File.Exists(Path.Combine(inner, "inner.md")));
+            Assert.Equal("docs would replace the folder holding it", window.Explorer.Said);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
     public async Task CutThenPasteMovesTheFileIntoTheFolder()
     {
         EditorWindow window = await OpenAsync();
