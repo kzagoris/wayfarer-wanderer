@@ -7,6 +7,9 @@ namespace WayfarerWanderer.App;
 /// it when it can. A view of the <see cref="IdeAction"/> the window's <see cref="ActionRegistry"/> holds.</summary>
 public sealed record EditorAction(string Id, string Title, Func<bool> Available, Action Execute)
 {
+    /// <summary>Whether Find Action lists it in its menu's order among the others so marked (<see cref="IdeAction.KeepsMenuOrder"/>).</summary>
+    public bool KeepsMenuOrder { get; init; }
+
     public bool TryExecute()
     {
         if (!Available())
@@ -33,7 +36,7 @@ public sealed class EditorActions
     public const string Pause = AppActions.Pause;
     public const string Rerun = AppActions.Rerun;
     public const string OpenWorkspace = AppActions.OpenFolder;
-    public const string OpenSource = AppActions.Open;
+    public const string OpenSource = AppActions.OpenFile;
     public const string SaveSource = AppActions.Save;
     public const string Stop = AppActions.Stop;
     public const string NewProject = AppActions.NewProject;
@@ -63,6 +66,7 @@ public sealed class EditorActions
         Registry.Add(new IdeAction(action.Id, action.Title, Group, _ => action.Execute())
         {
             WhyNot = _ => action.Available() ? null : $"{action.Title} is not available here",
+            KeepsMenuOrder = action.KeepsMenuOrder,
         });
         views[action.Id] = action;
     }

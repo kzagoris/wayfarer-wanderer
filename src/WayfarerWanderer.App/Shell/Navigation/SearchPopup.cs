@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/SearchPopup.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/SearchPopup.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -34,29 +34,30 @@ public abstract class SearchPopup<T> : UserControl, IAnswers<T?>
     protected SearchPopup(string title, string placeholder, double width, string? initialQuery = null, (string Label, bool Checked)? option = null)
     {
         Width = width;
-        this.title = new TextBlock { Classes = { ShellClasses.PopupTitle }, Text = title, VerticalAlignment = VerticalAlignment.Center };
-        query = new TextBox { Classes = { StyleClasses.Search }, PlaceholderText = placeholder, Text = initialQuery ?? string.Empty };
+        this.title = new TextBlock { Classes = { StyleClasses.PaneTitle }, Text = title, VerticalAlignment = VerticalAlignment.Center };
+        query = SearchBox.InPopup(title, placeholder);
+        query.Text = initialQuery ?? string.Empty;
         results = new ListBox
         {
             Classes = { StyleClasses.Tree },
             MaxHeight = ListHeight,
-            Margin = new Thickness(0, 0, 0, 8),
+            Margin = new Thickness(0, 0, 0, Gaps.Normal),
         };
         ReusedRows.Use(results, Row);
-        empty = new TextBlock { Classes = { StyleClasses.Muted }, Margin = new Thickness(12, 0, 12, 12), IsVisible = false };
+        empty = new TextBlock { Classes = { StyleClasses.Muted }, Margin = new Thickness(Gaps.Wide, 0, Gaps.Wide, Gaps.Wide), IsVisible = false };
         ListKeys.Act(results, new ListActs { Open = Choose });
+        results.SelectionChanged += (_, _) => ChoiceMoved();
         query.TextChanged += (_, _) => QueryChanged();
         query.AddHandler(KeyDownEvent, OnQueryKeyDown, RoutingStrategies.Tunnel);
         if (option is { } shown)
         {
-            // Not focusable: the keys stay with the query.
-            this.option = new CheckBox { Content = shown.Label, IsChecked = shown.Checked, Focusable = false, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+            this.option = PopupFrame.Option(shown.Label, shown.Checked);
             this.option.IsCheckedChanged += (_, _) => OptionTurned();
             DockPanel.SetDock(this.option, Dock.Right);
             heading.Children.Add(this.option);
         }
         heading.Children.Add(this.title);
-        StackPanel top = new() { Margin = new Thickness(12, 10, 12, 8), Spacing = 8, Children = { heading, query } };
+        StackPanel top = new() { Margin = new Thickness(Gaps.Wide, Gaps.Wide, Gaps.Wide, Gaps.Normal), Spacing = Gaps.Normal, Children = { heading, query } };
         DockPanel.SetDock(top, Dock.Top);
         DockPanel.SetDock(empty, Dock.Top);
         Content = new Border { Classes = { StyleClasses.Popup }, Child = new DockPanel { Children = { top, empty, results } } };
@@ -84,11 +85,15 @@ public abstract class SearchPopup<T> : UserControl, IAnswers<T?>
     /// <summary>The query's box, which has the keys while the popup is open.</summary>
     public TextBox QueryBox => query;
 
-    /// <summary>What the popup is called over its query.</summary>
+    /// <summary>What the popup is called over its query, and the query's name.</summary>
     public string Title
     {
         get => title.Text ?? string.Empty;
-        protected set => title.Text = value;
+        protected set
+        {
+            title.Text = value;
+            Avalonia.Automation.AutomationProperties.SetName(query, value);
+        }
     }
 
     /// <summary>What the popup says in place of rows (nothing found, or why it could not look), or null when it lists some.</summary>
@@ -135,6 +140,18 @@ public abstract class SearchPopup<T> : UserControl, IAnswers<T?>
 
     /// <summary>The switch turned.</summary>
     protected virtual void OptionTurned() => QueryChanged();
+
+    /// <summary>The row chosen changed: by a key, a click, or what is listed.</summary>
+    protected virtual void ChoiceMoved()
+    {
+    }
+
+    /// <summary>Chooses the row at an index of those listed, brought into sight.</summary>
+    protected void ChooseAt(int index)
+    {
+        results.SelectedIndex = index;
+        results.ScrollIntoView(index);
+    }
 
     /// <summary>Lists what a query found, <paramref name="chosen"/> chosen and in sight, or <paramref name="none"/> when it
     /// found nothing.</summary>

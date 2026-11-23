@@ -163,7 +163,7 @@ public sealed partial class EditorWindow
             between.IsVisible = i > 0;
             crumb.IsVisible = true;
             crumb.Content = part.Target is null ? part.Text : NameOf(part.Text);
-            crumb.Opacity = part.Muted ? 0.75 : 1;
+            ListRow.Dim(crumb, part.Muted);
         }
         for (int i = wanted.Count; i < crumbButtons.Count; i++)
         {

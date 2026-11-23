@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Explorer/ExplorerTree.cs, MIT (notices/Passenger/LICENSE): its File System view,
+// From Passenger 8a1df7e4 src/Passenger.App/Explorer/ExplorerTree.cs, MIT (notices/Passenger/LICENSE): its File System view,
 // with the solution, project, dependency, nesting and version control parts cut. Wayfarer marks the folders the
 // JVM import names (modules and their source roots) in their place.
 using Avalonia;
@@ -511,8 +511,8 @@ public sealed class ExplorerNode : Observable, ITreeRow
     /// <summary>A file or folder that can be cut, copied, dragged, renamed or deleted: any but the top one.</summary>
     public bool IsMovable => !IsTop && Path is not null;
 
-    public Thickness Indent => new(Depth * 16, 0, 0, 0);
-    public double Opacity => IsDimmed || IsCut ? 0.55 : 1;
+    public Thickness Indent => new(Depth * Gaps.Indent, 0, 0, 0);
+    public double Opacity => IsDimmed || IsCut ? ListRow.Dimmed : 1;
     public Geometry Icon => FileIcons.For(this);
     public IBrush IconBrush => FileIcons.BrushFor(this);
 

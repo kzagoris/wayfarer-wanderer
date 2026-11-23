@@ -44,14 +44,21 @@ public sealed partial class EditorWindow
         });
         Actions.Registry.Add(new IdeAction(AppActions.Exit, OperatingSystem.IsMacOS() ? "Quit Wayfarer Wanderer" : "Exit", WayfarerGroup, _ => Exit()));
         Actions.Registry.Add(new IdeAction(AppActions.FindAction, "Find Action…", WayfarerGroup, _ => OpenFindAction()));
-        AddEdit(EditorKeys.Undo, "Undo", box => box.Undo());
-        AddEdit(EditorKeys.Redo, "Redo", box => box.Redo());
+        AddEdit(EditorKeys.Undo, "Undo", box => box.Undo(), redo: false);
+        AddEdit(EditorKeys.Redo, "Redo", box => box.Redo(), redo: true);
         AddEdit(EditorKeys.SelectAll, "Select All", box => box.SelectAll());
 
-        void AddEdit(string id, string title, Action<TextBox> inBox) =>
-            Actions.Registry.Add(new IdeAction(id, title, "Edit", context => EditText(context, id, inBox))
+        // Undo and Redo take the Explorer's last Delete back, or do it again, where its rows have the keys.
+        void AddEdit(string id, string title, Action<TextBox> inBox, bool? redo = null) =>
+            Actions.Registry.Add(new IdeAction(id, title, "Edit", context =>
             {
-                WhyNot = WhyNotEditText,
+                if (redo is not { } again || !UndoInExplorer(context, again))
+                {
+                    EditText(context, id, inBox);
+                }
+            })
+            {
+                WhyNot = context => (redo is { } again ? WhyNotUndoInExplorer(context, again) : null) ?? WhyNotEditText(context),
                 InEditor = true,
             });
     }

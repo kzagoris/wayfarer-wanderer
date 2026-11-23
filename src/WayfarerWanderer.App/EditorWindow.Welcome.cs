@@ -43,6 +43,7 @@ public sealed partial class EditorWindow
     {
         Welcome.NewProjectRequested += (_, _) => Actions.TryExecute(EditorActions.NewProject);
         Welcome.OpenFolderRequested += (_, _) => Actions.TryExecute(EditorActions.OpenWorkspace);
+        Welcome.OpenFileRequested += (_, _) => Actions.TryExecute(EditorActions.OpenSource);
         Welcome.CloneRequested += (_, _) => Actions.TryExecute(AppActions.CloneRepository);
         Actions.Add(new EditorAction(AppActions.CloneRepository, "Clone Repository…", () => true, () => ShowCloneRepository()));
         Welcome.Chosen += (_, row) => OpenRecent(row.Path);

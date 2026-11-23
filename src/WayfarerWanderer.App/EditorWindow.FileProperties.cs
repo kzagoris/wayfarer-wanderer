@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/MainWindow.FileProperties.cs, MIT (notices/Passenger/LICENSE): over Wayfarer's
+// From Passenger 8a1df7e4 src/Passenger.App/MainWindow.FileProperties.cs, MIT (notices/Passenger/LICENSE): over Wayfarer's
 // one editor, its file the one shown.
 using Avalonia.Controls;
 using Passenger.Core;
@@ -61,7 +61,7 @@ public sealed partial class EditorWindow
 
     /// <summary>Why the file's line separator and encoding cannot change: none is open, or it is read-only.</summary>
     private string? Unchangeable(ActionContext _) =>
-        ShownFile is not { } file ? Refusals.NoFile : file.IsReadOnly ? Refusals.ReadOnly(file.Name) : null;
+        ShownFile is not { } file ? Refusals.NoFile : file.ReadOnlyWhy;
 
     /// <summary>A menu over a status bar widget, opening upward from its right edge.</summary>
     private static void ShowOver(Control widget, IEnumerable<Control> items)
@@ -111,7 +111,9 @@ public sealed partial class EditorWindow
         string said = lines == 0
             ? $"Every line of {document.Name} outside its text blocks already indents with {kind}"
             : $"Converted the indentation of {Plural.Of(lines, "line")} of {document.Name} to {kind}, {(tabs ? "a tab" : Plural.Of(document.Indentation.Options.Size, "space"))} a level";
-        StatusText = inStrings == 0 ? said : $"{said}; {Plural.Of(inStrings, "line")} inside text blocks left as {Plural.Agreeing(inStrings, "it is", "they are")}";
+        said = inStrings == 0 ? said : $"{said}; {Plural.Of(inStrings, "line")} inside text blocks left as {Plural.Agreeing(inStrings, "it is", "they are")}";
+        StatusText = said;
+        ActionWork.Tell(true, said);
     }
 
     /// <summary>An indentation chosen for the file on the widget, or none to follow it again.</summary>
@@ -132,12 +134,7 @@ public sealed partial class EditorWindow
         string current = document.EncodingName;
         MenuItem Item(FileEncoding encoding) => MenuChoice.Of(encoding.Name, encoding.Name == current,
             () => IdeErrors.Observe(ChooseEncodingAsync(document, encoding)));
-        MenuItem more = new() { Header = "More" };
-        foreach (FileEncoding encoding in FileEncoding.More)
-        {
-            more.Items.Add(Item(encoding));
-        }
-        ShowOver(encodingButton, [.. FileEncoding.First.Select(Item), new Separator(), more]);
+        ShowOver(encodingButton, [.. FileEncoding.First.Select(Item), new Separator(), Shell.ToolWindows.ListMenus.Sub("More", [.. FileEncoding.More.Select(Item)])]);
     }
 
     /// <summary>An encoding chosen: taken at once when the bytes read as the same text and the text writes as the same bytes,
@@ -145,9 +142,9 @@ public sealed partial class EditorWindow
     /// when it would lose something.</summary>
     public async Task ChooseEncodingAsync(OpenDocument document, FileEncoding to)
     {
-        if (document.IsReadOnly)
+        if (document.ReadOnlyWhy is { } readOnly)
         {
-            StatusText = Refusals.ReadOnly(document.Name);
+            StatusText = readOnly;
             return;
         }
         string from = document.EncodingName;
