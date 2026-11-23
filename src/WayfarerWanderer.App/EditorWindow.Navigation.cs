@@ -391,10 +391,7 @@ public sealed partial class EditorWindow
                 }
             }
             return FilterOutline(outline, query.Trim());
-        })
-        {
-            Initial = rows => rows.Select((row, i) => (row, i)).LastOrDefault(r => r.row.Spans(caretLine)).i,
-        };
+        }, initial: rows => rows.Select((row, i) => (row, i)).LastOrDefault(r => r.row.Spans(caretLine)).i);
         ShowSearch(popup, popup, row =>
         {
             if (row is not null)

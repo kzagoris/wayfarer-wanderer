@@ -70,11 +70,16 @@ public sealed class SymbolPopup : SearchPopup<SymbolRow>
     private CancellationTokenSource? asking;
     private Task searching = Task.CompletedTask;
 
+    /// <param name="initial">Which of the first rows to choose before anything is typed (the caret's member), given here so
+    /// a search that answers at once chooses it too.</param>
+    /// <param name="width">How wide it is, a step of the popups' scale: wide for the files and places of a solution, less for
+    /// a file's own few (a navigation bar's list).</param>
     public SymbolPopup(string title, string placeholder, Func<string, CancellationToken, Task<IReadOnlyList<SymbolRow>>> search, string? initialQuery = null,
-        (string Label, bool Checked)? option = null)
-        : base(title, placeholder, PopupFrame.Wide, initialQuery, option)
+        (string Label, bool Checked)? option = null, Func<IReadOnlyList<SymbolRow>, int>? initial = null, double width = PopupFrame.Wide)
+        : base(title, placeholder, width, initialQuery, option)
     {
         this.search = search;
+        Initial = initial;
         typing = new Debounce(Pause, Refresh);
         IdeErrors.Observe(Refresh());
     }
@@ -86,7 +91,7 @@ public sealed class SymbolPopup : SearchPopup<SymbolRow>
     public bool IsSettled { get; private set; }
 
     /// <summary>Which of the first rows to choose (the caret's member), before anything is typed.</summary>
-    public Func<IReadOnlyList<SymbolRow>, int>? Initial { get; init; }
+    public Func<IReadOnlyList<SymbolRow>, int>? Initial { get; }
 
     /// <summary>Done once the answer to the query as it now is is in, for a test.</summary>
     public async Task SettledAsync()
@@ -158,7 +163,7 @@ public sealed class SymbolPopup : SearchPopup<SymbolRow>
     /// is handed: its badge (a file's icon for a file), its name and type, where it is.</summary>
     public static Control ReusedRow()
     {
-        RowIcon icon = new() { Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
+        RowIcon icon = new() { Margin = new Thickness(0, 0, Gaps.Small, 0), VerticalAlignment = VerticalAlignment.Center };
         TextBlock letter = new()
         {
             FontSize = 10,
@@ -172,23 +177,16 @@ public sealed class SymbolPopup : SearchPopup<SymbolRow>
             Height = 16,
             Classes = { StyleClasses.KindBadge },
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 8, 0),
+            Margin = new Thickness(0, 0, Gaps.Small, 0),
             Child = letter,
         };
-        TextBlock where = new()
-        {
-            [DockPanel.DockProperty] = Dock.Right,
-            FontSize = 12,
-            Margin = new Thickness(12, 0, 8, 0),
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxWidth = 260,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
+        TextBlock where = ListRow.DetailText();
+        where.MaxWidth = 260;
         TextBlock name = new() { [DockPanel.DockProperty] = Dock.Left, VerticalAlignment = VerticalAlignment.Center };
         // A member's type follows its name close, as "sum(int): long"; a container stands apart.
         TextBlock detail = new()
         {
-            FontSize = 12,
+            Classes = { StyleClasses.Caption },
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
             MaxWidth = 300,
@@ -220,8 +218,8 @@ public sealed class SymbolPopup : SearchPopup<SymbolRow>
             where.Text = symbol.Where ?? string.Empty;
             name.Text = symbol.Name;
             detail.Text = symbol.Detail ?? string.Empty;
-            detail.Margin = new Thickness(symbol.Detail?.StartsWith(':') == true ? 0 : 8, 0, 0, 0);
-            row.Margin = new Thickness(symbol.Depth * 16, 0, 0, 0);
+            detail.Margin = new Thickness(symbol.Detail?.StartsWith(':') == true ? 0 : Gaps.Normal, 0, 0, 0);
+            row.Margin = new Thickness(symbol.Depth * Gaps.Indent, 0, 0, 0);
         });
     }
 
