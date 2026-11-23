@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Settings/SettingsDialog.cs, MIT (notices/Passenger/LICENSE): its Appearance,
+// From Passenger 8a1df7e4 src/Passenger.App/Settings/SettingsDialog.cs, MIT (notices/Passenger/LICENSE): its Appearance,
 // System Settings, Trusted Folders and Keymap pages; the .NET, MCP, template, code style and tool pages cut.
 using Avalonia;
 using Avalonia.Automation;
@@ -18,6 +18,7 @@ public sealed partial class SettingsDialog : IdeWindow
 {
     public const string Appearance = "Appearance";
     public const string SystemPage = "System Settings";
+    public const string AccessibilityPage = "Accessibility";
     public const string EditorPage = "Editor";
     public const string KeymapPage = "Keymap";
 
@@ -25,7 +26,7 @@ public sealed partial class SettingsDialog : IdeWindow
     /// "Settings | Appearance".</summary>
     public static string PlaceOfPage(string page) => $"Settings | {page}";
 
-    private static readonly string[] Order = [Appearance, SystemPage, TrustPage, EditorPage, KeymapPage];
+    private static readonly string[] Order = [Appearance, SystemPage, AccessibilityPage, TrustPage, EditorPage, KeymapPage];
 
     /// <summary>Puts what the options changed in force: from the settings as they were applied last, to the options'.</summary>
     private readonly Action<AppSettings, AppSettings> apply;
@@ -42,7 +43,7 @@ public sealed partial class SettingsDialog : IdeWindow
     private readonly ListBox pages;
     private readonly TextBlock heading;
     private readonly StackPanel body;
-    private readonly TextBlock nothing;
+    private readonly ToolWindows.EmptyState nothing;
 
     /// <summary>The page's room at its right: its gutter, where its scroll bar shows over the page, clear of what it shows.</summary>
     private const double Gutter = Gaps.Page;
@@ -84,7 +85,7 @@ public sealed partial class SettingsDialog : IdeWindow
         heading = new TextBlock { Classes = { StyleClasses.PageTitle }, Margin = new Thickness(0, 0, Gutter, Gaps.Wide) };
         // The scroll bar shows over the scrolled page's right, so the gutter is inside it: the bar stands there, beside the rows.
         body = new StackPanel { Spacing = Gaps.Wide, Margin = new Thickness(0, 0, Gutter, 0) };
-        nothing = new TextBlock { Classes = { StyleClasses.Muted }, Text = "Nothing matches", IsVisible = false, Margin = new Thickness(21, 4) };
+        nothing = new ToolWindows.EmptyState("Nothing matches") { IsVisible = false };
 
         ok.Click += (_, _) => Ok();
         applyButton.Click += (_, _) => Apply();
@@ -207,6 +208,20 @@ public sealed partial class SettingsDialog : IdeWindow
         Add(Declared.CaretWidth);
         Add(Declared.ShowNavigationBar);
         Add(Declared.MainMenuBar);
+
+        Add(Declared.FollowSystemContrast);
+        Add(Declared.StatePalette);
+        Add(Declared.SoundCues);
+        Add(Declared.SoundOnErrorLine);
+        Add(Declared.SoundOnWarningLine);
+        Add(Declared.SoundOnBreakpointLine);
+        Add(Declared.SoundOnFoldedLine);
+        Add(Declared.SoundOnChangedLine);
+        Add(Declared.SoundOnBuildEnd);
+        Add(Declared.SoundOnTestsEnd);
+        Add(Declared.SoundOnDebuggerStop);
+        Add(Declared.SoundOnTerminalFailure);
+        Add(Declared.SoundOnSaveRefused);
 
         Add(Declared.ReopenProjectsOnStartup);
         Add(Declared.ConfirmBeforeClosing);

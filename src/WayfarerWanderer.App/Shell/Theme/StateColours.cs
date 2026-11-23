@@ -1,5 +1,4 @@
 // From Passenger 8a1df7e4 src/Passenger.App/Theme/StateColours.cs, MIT (notices/Passenger/LICENSE).
-// Not yet wired: no setting chooses the palette until Wayfarer takes up the accessibility settings.
 using static WayfarerWanderer.App.Shell.ThemeColours;
 
 namespace WayfarerWanderer.App.Shell;

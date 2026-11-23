@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Theme/ThemeSources.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Theme/ThemeSources.cs, MIT (notices/Passenger/LICENSE).
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -84,7 +84,11 @@ public sealed partial record ThemeSource(ThemeSourceKind Kind, string Name)
 
     /// <summary>The themes Passenger carries in its built-in source beside its own, by name, which the command line's
     /// <c>--look</c> names.</summary>
-    public static readonly IReadOnlyList<string> Carried = ["Cubicle"];
+    public static readonly IReadOnlyList<string> Carried = ["Cubicle", HighContrast];
+
+    /// <summary>The carried theme of high contrast, its words at WCAG AAA's 7:1, which Wayfarer takes while the system asks
+    /// for high contrast, as the window reads it of the system.</summary>
+    public const string HighContrast = "High Contrast";
 
     /// <summary>The themes Passenger carried before they moved to its themes repository, which the command line's
     /// <c>--look</c> names and 0.3's settings kept by these names.</summary>

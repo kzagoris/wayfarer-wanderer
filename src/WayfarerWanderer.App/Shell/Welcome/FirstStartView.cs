@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Welcome/FirstStartView.cs, MIT (notices/Passenger/LICENSE): with Wayfarer's
+// From Passenger 8a1df7e4 src/Passenger.App/Welcome/FirstStartView.cs, MIT (notices/Passenger/LICENSE): with Wayfarer's
 // mark, name and pictures.
 using Avalonia;
 using Avalonia.Automation;
@@ -197,7 +197,10 @@ public sealed class FirstStartView : UserControl, IOwnKeys
         if (Shown == Screen.Theme)
         {
             title.Text = $"Welcome to {Product.Name}";
-            about.Text = $"Choose a theme to begin, then dark or light. {SettingsDialog.PlaceOfPage(SettingsDialog.Appearance)} changes either at any time.";
+            about.Text = Themes.InHighContrast
+                ? $"Your system asks for high contrast, so {ThemeSource.HighContrast} shows while it does. Choose the theme for when it no longer asks, "
+                    + $"then dark or light. {SettingsDialog.PlaceOfPage(SettingsDialog.Appearance)} changes either at any time."
+                : $"Choose a theme to begin, then dark or light. {SettingsDialog.PlaceOfPage(SettingsDialog.Appearance)} changes either at any time.";
             foreach (Look look in Looks)
             {
                 Add(Tile(look.Name, look.Words, look.Picture(dark), look.Theme == settings.Look, () => ChooseLook(look)));

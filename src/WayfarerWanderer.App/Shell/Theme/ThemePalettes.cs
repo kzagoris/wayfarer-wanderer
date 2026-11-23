@@ -184,50 +184,50 @@ public static class ThemePalettes
         t["Test.NotRun"] = t["CheckBorder"];
 
         uint gutterGround = given.TryGetValue("Editor.Gutter", out uint ownGutter) && IsDark(ownGutter) == dark ? Over(ownGutter, editor) : editor;
-        t["Passenger.Vcs.Added"] = L("Passenger.Vcs.Added", p.Green, [gutterGround], Mark, dark);
-        t["Passenger.Vcs.Modified"] = L("Passenger.Vcs.Modified", p.Blue, [gutterGround], Mark, dark);
-        t["Passenger.Vcs.Deleted"] = L("Passenger.Vcs.Deleted", Mix(muted, panel, 0.15), [gutterGround], Mark, dark);
-        t["Passenger.Vcs.Conflict"] = Legible(p.Red, [gutterGround], Mark, dark);
+        t["Vcs.Added"] = L("Vcs.Added", p.Green, [gutterGround], Mark, dark);
+        t["Vcs.Modified"] = L("Vcs.Modified", p.Blue, [gutterGround], Mark, dark);
+        t["Vcs.Deleted"] = L("Vcs.Deleted", Mix(muted, panel, 0.15), [gutterGround], Mark, dark);
+        t["Vcs.Conflict"] = Legible(p.Red, [gutterGround], Mark, dark);
         uint[] files = [panel, row];
-        t["Passenger.Vcs.File.Modified"] = L("Passenger.Vcs.File.Modified", p.Blue, files, Text, dark);
-        t["Passenger.Vcs.File.Added"] = L("Passenger.Vcs.File.Added", p.Green, files, Text, dark);
-        t["Passenger.Vcs.File.Deleted"] = L("Passenger.Vcs.File.Deleted", Mix(muted, panel, 0.25), files, Text, dark);
-        t["Passenger.Vcs.File.Unversioned"] = L("Passenger.Vcs.File.Unversioned", p.Orange, files, Text, dark);
-        t["Passenger.Vcs.File.Conflicted"] = L("Passenger.Vcs.File.Conflicted", p.Red, files, Text, dark);
+        t["Vcs.File.Modified"] = L("Vcs.File.Modified", p.Blue, files, Text, dark);
+        t["Vcs.File.Added"] = L("Vcs.File.Added", p.Green, files, Text, dark);
+        t["Vcs.File.Deleted"] = L("Vcs.File.Deleted", Mix(muted, panel, 0.25), files, Text, dark);
+        t["Vcs.File.Unversioned"] = L("Vcs.File.Unversioned", p.Orange, files, Text, dark);
+        t["Vcs.File.Conflicted"] = L("Vcs.File.Conflicted", p.Red, files, Text, dark);
         uint[] lanes = [p.Blue, p.Green, p.Yellow, p.Purple, p.Red, p.Cyan];
         for (int i = 0; i < lanes.Length; i++)
         {
             t[$"Graph.{i}"] = Legible(lanes[i], [panel], 2.2, dark);
         }
-        t["Passenger.Vcs.Ref"] = Mix(panel, text, 0.1);
-        t["Passenger.Vcs.RefText"] = Legible(Mix(text, muted, 0.5), [t["Passenger.Vcs.Ref"]], Text, dark);
-        t["Passenger.Vcs.Favorite"] = Legible(p.Yellow, [panel], Mark, dark);
-        t["Passenger.Vcs.Signature.Good"] = t["Run"];
-        t["Passenger.Vcs.Signature.Unverified"] = t["Test.Skipped"];
-        t["Passenger.Vcs.Signature.Bad"] = t["Test.Failed"];
-        t["Passenger.Vcs.Signature.Expired"] = t["Passenger.Vcs.Favorite"];
+        t["Vcs.Ref"] = Mix(panel, text, 0.1);
+        t["Vcs.RefText"] = Legible(Mix(text, muted, 0.5), [t["Vcs.Ref"]], Text, dark);
+        t["Vcs.Favorite"] = Legible(p.Yellow, [panel], Mark, dark);
+        t["Vcs.Signature.Good"] = t["Run"];
+        t["Vcs.Signature.Unverified"] = t["Test.Skipped"];
+        t["Vcs.Signature.Bad"] = t["Test.Failed"];
+        t["Vcs.Signature.Expired"] = t["Vcs.Favorite"];
 
         t["Picker.RingInner"] = 0xFFFFFFFF;
         t["Picker.RingOuter"] = 0xFF000000;
         t["Picker.Checker"] = 0xFFCCCCCC;
 
         // The terminal on its own ground (the editor's unless given), its ANSI colours the theme's or the palette's hues.
-        uint terminal = given.TryGetValue("Passenger.Terminal.Background", out uint ownTerminal) && IsDark(ownTerminal) == dark ? Opaque(ownTerminal) : editor;
-        t["Passenger.Terminal.Background"] = terminal;
-        t["Passenger.Terminal.Foreground"] = L("Passenger.Terminal.Foreground", text, [terminal], Text, dark);
-        t["Passenger.Terminal.Cursor"] = L("Passenger.Terminal.Cursor", glance, [terminal], Mark, dark);
-        t["Passenger.Terminal.Selection"] = Legible(Over(G("Passenger.Terminal.Selection", selection), terminal), [t["Passenger.Terminal.Foreground"]], Text, !dark);
+        uint terminal = given.TryGetValue("Terminal.Background", out uint ownTerminal) && IsDark(ownTerminal) == dark ? Opaque(ownTerminal) : editor;
+        t["Terminal.Background"] = terminal;
+        t["Terminal.Foreground"] = L("Terminal.Foreground", text, [terminal], Text, dark);
+        t["Terminal.Cursor"] = L("Terminal.Cursor", glance, [terminal], Mark, dark);
+        t["Terminal.Selection"] = Legible(Over(G("Terminal.Selection", selection), terminal), [t["Terminal.Foreground"]], Text, !dark);
         uint[] ansi = [p.Red, p.Green, p.Yellow, p.Blue, p.Purple, p.Cyan];
         double up = dark ? 0.07 : -0.042;
-        t["Passenger.Terminal.Ansi0"] = G("Passenger.Terminal.Ansi0", dark ? Mix(editor, text, 0.2) : Shift(text, -0.1));
+        t["Terminal.Ansi0"] = G("Terminal.Ansi0", dark ? Mix(editor, text, 0.2) : Shift(text, -0.1));
         for (int i = 1; i <= ansi.Length; i++)
         {
-            t[$"Passenger.Terminal.Ansi{i}"] = G($"Passenger.Terminal.Ansi{i}", dark ? ansi[i - 1] : Legible(ansi[i - 1], [terminal], 3.0, dark));
-            t[$"Passenger.Terminal.Ansi{i + 8}"] = G($"Passenger.Terminal.Ansi{i + 8}", Shift(t[$"Passenger.Terminal.Ansi{i}"], up));
+            t[$"Terminal.Ansi{i}"] = G($"Terminal.Ansi{i}", dark ? ansi[i - 1] : Legible(ansi[i - 1], [terminal], 3.0, dark));
+            t[$"Terminal.Ansi{i + 8}"] = G($"Terminal.Ansi{i + 8}", Shift(t[$"Terminal.Ansi{i}"], up));
         }
-        t["Passenger.Terminal.Ansi7"] = G("Passenger.Terminal.Ansi7", Mix(muted, text, 0.3));
-        t["Passenger.Terminal.Ansi8"] = G("Passenger.Terminal.Ansi8", Mix(editor, text, 0.42));
-        t["Passenger.Terminal.Ansi15"] = G("Passenger.Terminal.Ansi15", dark ? Shift(text, 0.08) : Mix(editor, text, 0.32));
+        t["Terminal.Ansi7"] = G("Terminal.Ansi7", Mix(muted, text, 0.3));
+        t["Terminal.Ansi8"] = G("Terminal.Ansi8", Mix(editor, text, 0.42));
+        t["Terminal.Ansi15"] = G("Terminal.Ansi15", dark ? Shift(text, 0.08) : Mix(editor, text, 0.32));
 
         t["File.Folder"] = Legible(Mix(text, muted, 0.6), [panel], Mark, dark);
         t["File.SolutionFolder"] = Legible(p.Purple, [panel], Mark, dark);

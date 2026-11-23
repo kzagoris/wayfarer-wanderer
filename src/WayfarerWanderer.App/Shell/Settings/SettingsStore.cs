@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Settings/SettingsStore.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Settings/SettingsStore.cs, MIT (notices/Passenger/LICENSE).
 using WayfarerWanderer.App.Shell.State;
 using WayfarerWanderer.App.Shell.Workspace;
 using Passenger.Core;
@@ -34,8 +34,11 @@ public sealed class SettingsStore : IDisposable
         {
             return;
         }
-        watched = new WatchedFile(document.Path, "Settings");
-        watched.Moved += _ => UiThread.Post(ReadAgain);
+        watched = new WatchedFile(document.Path, "Settings", _ =>
+        {
+            UiThread.Post(ReadAgain);
+            return true;
+        });
         document.Wrote += Saw;
     }
 
@@ -204,6 +207,14 @@ public sealed class SettingsStore : IDisposable
         if (Avalonia.Application.Current is { } current && (before is null || before.Look != after.Look || before.ColourScheme != after.ColourScheme))
         {
             Themes.Apply(current, after.Look, after.ColourScheme);
+        }
+        if (Avalonia.Application.Current is { } contrasted && (before is null || before.FollowSystemContrast != after.FollowSystemContrast))
+        {
+            Themes.FollowContrast(contrasted, after.FollowSystemContrast);
+        }
+        if (Avalonia.Application.Current is { } coloured && (before is null || before.StatePalette != after.StatePalette))
+        {
+            Themes.UseStates(coloured, after.StatePalette);
         }
         FontsInForce(after);
         if (Avalonia.Application.Current is { } careted && (before is null || before.CaretWidth != after.CaretWidth))

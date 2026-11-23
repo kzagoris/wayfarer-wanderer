@@ -10,7 +10,7 @@ public sealed class BuildToolWindow : UserControl
 
     public BuildToolWindow()
     {
-        ListBox lines = new() { ItemsSource = Output };
+        ListBox lines = new() { ItemsSource = Output, [Avalonia.Automation.AutomationProperties.NameProperty] = "Build output" };
         // The build's output in the code font in force, as the editor shows code, following each change in Settings.
         CodeFonts.Follow(lines, FontFamilyProperty);
         Content = lines;

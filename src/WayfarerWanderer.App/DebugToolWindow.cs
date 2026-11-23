@@ -33,12 +33,13 @@ public sealed class DebugToolWindow : UserControl
     private readonly ObservableCollection<JvmDebugFrame> frames = [];
     private readonly ObservableCollection<VariableNode> variables = [];
     private readonly List<string> watches = [];
-    private readonly ComboBox threadList = new() { HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new(4, 4, 4, 2) };
-    private readonly ListBox frameList = new();
+    private readonly ComboBox threadList = new() { HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new(4, 4, 4, 2), [Avalonia.Automation.AutomationProperties.NameProperty] = "Threads" };
+    private readonly ListBox frameList = new() { [Avalonia.Automation.AutomationProperties.NameProperty] = "Frames" };
     private readonly VariablesView variableView;
     private readonly TextBox evaluate = new()
     {
         PlaceholderText = "Evaluate expression (Enter) or add a watch (Ctrl+Shift+Enter)",
+        [Avalonia.Automation.AutomationProperties.NameProperty] = "Evaluate expression",
         Margin = new(4, 4, 4, 2),
         AcceptsReturn = true,
         TextWrapping = TextWrapping.NoWrap,

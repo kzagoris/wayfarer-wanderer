@@ -56,6 +56,7 @@ public sealed partial class EditorWindow : Window
         AddDeclarations();
         AddReadAsText();
         AddFindInFiles();
+        AddAccessibility();
         AddToolWindows(new Grid { Children = { EditorWithBar(), Welcome } });
         AddExplorerActions();
         DockPanel.SetDock(TrustBanner, Dock.Top);
@@ -105,6 +106,7 @@ public sealed partial class EditorWindow : Window
         // Git reads the folder while it is imported; the folder is open once both are done.
         Task git = OpenVcsAsync(root);
         FollowDebugSession(Session);
+        BindSoundCues(Session);
         ProjectSession opened = Session;
         // A build file changed and the folder was imported again: the tree shows the new model, or the kept one stale.
         opened.SnapshotChanged += () =>

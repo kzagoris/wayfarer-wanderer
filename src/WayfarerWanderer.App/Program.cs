@@ -62,6 +62,14 @@ public partial class EditorApplication : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        // What the system asks of contrast: the system's own in the person's window, only what stands in for it in a
+        // headless run.
+        SystemContrast.Seen = ApplicationLifetime is IClassicDesktopStyleApplicationLifetime;
+        SystemContrast.LookAgain();
+        if (SystemContrast.Seen)
+        {
+            ScreenReaders.LookAgain();
+        }
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             // Only the person's desktop app reads and writes the state folder; a headless run keeps the defaults.

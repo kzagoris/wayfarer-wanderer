@@ -1,4 +1,5 @@
-// From Passenger 2044e49b src/Passenger.App/Theme/Themes.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Theme/Themes.cs, MIT (notices/Passenger/LICENSE): C#'s brace levels cut; the
+// own theme named for Wayfarer (OwnName, UseChoice), and the application taken in hand where the one laid in is gone.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
@@ -15,7 +16,9 @@ public sealed record NamedTheme(SourcedTheme? Theme);
 /// (<see cref="KeptThemes"/>, or the built-in source's), laid over it in the application's resources, then the scheme's over
 /// either, so the last laid wins. One named but not kept yet is fetched from its source, Passenger's own drawn meanwhile and
 /// said so (<see cref="Said"/>), and laid once kept; one that cannot be fetched is said, never dropped from the settings.
-/// Fluent's palette takes the theme's accent. UI thread only.</summary>
+/// While the system asks for high contrast and the settings follow it (<see cref="InHighContrast"/>), the carried High
+/// Contrast is laid in their place, with no code colour scheme, in the system's dark or light. Fluent's palette takes the
+/// theme's accent. UI thread only.</summary>
 public static class Themes
 {
     /// <summary>The name the theme Wayfarer carries as its own is shown by (the theme kept as no theme at all): Passenger's
@@ -30,6 +33,9 @@ public static class Themes
     private static bool applied;
     private static ThemeVariant chosenVariant = ThemeVariant.Default;
     private static ThemeShows shows;
+    private static ContrastAsked contrast = ContrastAsked.None;
+    private static bool followsContrast = true;
+    private static StatePalette states;
 
     /// <summary>The theme in force, or wanted while it is fetched; null for Passenger's own.</summary>
     public static SourcedTheme? Look { get; private set; }
@@ -55,16 +61,75 @@ public static class Themes
     /// <summary>The variants the theme in force shows in: one alone where it is a VS Code theme's, whatever the setting.</summary>
     public static ThemeShows Shows => shows;
 
-    /// <summary>Puts the dark or light the setting chooses in force, unless the theme in force shows in one alone.</summary>
+    /// <summary>Puts the dark or light the setting chooses in force, unless the theme in force shows in one alone or the
+    /// system's high contrast is in force, whose own dark or light stands.</summary>
     public static void UseVariant(Application app, ThemeVariant chosen)
     {
         chosenVariant = chosen;
-        app.RequestedThemeVariant = shows switch
+        app.RequestedThemeVariant = InHighContrast
+            ? contrast.Dark switch
+            {
+                true => ThemeVariant.Dark,
+                false => ThemeVariant.Light,
+                null => ThemeVariant.Default,
+            }
+            : shows switch
+            {
+                ThemeShows.Dark => ThemeVariant.Dark,
+                ThemeShows.Light => ThemeVariant.Light,
+                _ => chosen,
+            };
+    }
+
+    /// <summary>Whether High Contrast is laid in the chosen theme's place: the system asks for high contrast and the
+    /// settings follow it.</summary>
+    public static bool InHighContrast => contrast.High && followsContrast;
+
+    /// <summary>What the system asks of contrast, put in force where it changes what is laid (<see cref="SystemContrast"/>).</summary>
+    public static void UseContrast(Application app, ContrastAsked asked) => Contrast(app, asked, followsContrast);
+
+    /// <summary>Whether the settings follow the system's high contrast, put in force where it changes what is laid.</summary>
+    public static void FollowContrast(Application app, bool follows) => Contrast(app, contrast, follows);
+
+    /// <summary>The colours of tests', changes' and signatures' states, laid over the theme and the scheme in force, and over
+    /// every one laid after.</summary>
+    public static void UseStates(Application app, StatePalette palette)
+    {
+        if (palette == states)
         {
-            ThemeShows.Dark => ThemeVariant.Dark,
-            ThemeShows.Light => ThemeVariant.Light,
-            _ => chosen,
-        };
+            return;
+        }
+        states = palette;
+        Take(app);
+        if (ReferenceEquals(app, applying))
+        {
+            LayWanted();
+        }
+    }
+
+    private static void Contrast(Application app, ContrastAsked asked, bool follows)
+    {
+        bool was = InHighContrast;
+        ContrastAsked before = contrast;
+        contrast = asked;
+        followsContrast = follows;
+        if (InHighContrast == was && (!was || asked == before))
+        {
+            return;
+        }
+        Take(app);
+        LayWanted();
+        UseVariant(app, chosenVariant);
+    }
+
+    /// <summary>Lays in <paramref name="app"/> even where no theme was put in force yet (Wayfarer's own, a window keeping no
+    /// settings), or where the application one was put in force in is gone (a headless test's, each test its own).</summary>
+    private static void Take(Application app)
+    {
+        if (applying is null || !ReferenceEquals(applying, Application.Current))
+        {
+            applying = app;
+        }
     }
 
     /// <summary>The default layout the theme in force gives, or null for Passenger's own.</summary>
@@ -154,9 +219,10 @@ public static class Themes
         {
             return;
         }
-        ThemeFile? theme = Look is { } look ? Kept(false, look) ?? Fetched(false, look) : null;
-        ThemeFile? scheme = Scheme is { } colours ? Kept(true, colours) ?? Fetched(true, colours) : null;
-        Func<string, byte[]?> images = theme is null || Look is not { From: { } source } shown ? _ => null
+        SourcedTheme? wanted = InHighContrast ? SourcedTheme.BuiltIn(ThemeSource.HighContrast) : Look;
+        ThemeFile? theme = wanted is { } look ? Kept(false, look) ?? Fetched(false, look) : null;
+        ThemeFile? scheme = !InHighContrast && Scheme is { } colours ? Kept(true, colours) ?? Fetched(true, colours) : null;
+        Func<string, byte[]?> images = theme is null || wanted is not { From: { } source } shown ? _ => null
             : source == ThemeSource.BuiltIn ? image => BuiltInThemes.Image(false, shown.Name, image)
             : image => KeptThemes.Image(source, false, shown.Name, image);
         Lay(app, theme, scheme, images);
@@ -191,7 +257,7 @@ public static class Themes
             why = file?.Base is { Id: not null }
                 ? await Passenger.Core.BackgroundWork.Run(() => VsCodeBases.KeepAsync(source, code, theme.Name, file, CancellationToken.None))
                 : source.Kind is ThemeSourceKind.BuiltIn or ThemeSourceKind.Added or ThemeSourceKind.OpenVsx
-                ? $"{theme.Name} is no longer kept: {(source.Kind == ThemeSourceKind.OpenVsx ? "choose it again from VS Code themes" : "add its file again")} in Settings › Appearance"
+                ? $"{theme.Name} is no longer kept: {(source.Kind == ThemeSourceKind.OpenVsx ? "choose it again from VS Code themes" : "add its file again")} in {Settings.SettingsDialog.PlaceOfPage(Settings.SettingsDialog.Appearance)}"
                 : await Passenger.Core.BackgroundWork.Run(() => FetchOnceAsync(source, code, theme.Name, kinds));
         }
         finally
@@ -290,6 +356,11 @@ public static class Themes
             laid.Add(tokens);
             merged.Add(tokens);
         }
+        if (states == StatePalette.ColourBlindSafe && StatesOver(app, theme) is { } palette)
+        {
+            laid.Add(palette);
+            merged.Add(palette);
+        }
         TakeAccentFromTokens(app);
         if ((theme?.Shows ?? ThemeShows.Both) != shows)
         {
@@ -310,6 +381,27 @@ public static class Themes
             Layout = theme?.Layout;
             LayoutChanged?.Invoke(null, EventArgs.Empty);
         }
+    }
+
+    /// <summary>The colour-blind safe palette worked out from the grounds and words the theme and scheme just laid give, in
+    /// dark and light; null where one is no plain colour, so the theme's own stand.</summary>
+    private static ResourceDictionary? StatesOver(Application app, ThemeFile? theme)
+    {
+        bool high = theme?.Name == ThemeSource.HighContrast;
+        Dictionary<string, TokenValue>[] variants = [[], []];
+        ThemeVariant[] both = [ThemeVariant.Dark, ThemeVariant.Light];
+        for (int i = 0; i < both.Length; i++)
+        {
+            if (ThemeResources.Colours(app, both[i], StateColours.Read) is not { } given)
+            {
+                return null;
+            }
+            foreach ((string token, uint colour) in StateColours.Tokens(given, high))
+            {
+                variants[i][token] = new ColourValue(colour, 1);
+            }
+        }
+        return ThemeResources.Dictionary(new ThemeFile(nameof(StatePalette.ColourBlindSafe), string.Empty, new Dictionary<string, TokenValue>(), variants[0], variants[1]));
     }
 
     private static bool Gives(ThemeFile file, string token) => file.Both.ContainsKey(token) || file.Dark.ContainsKey(token) || file.Light.ContainsKey(token);

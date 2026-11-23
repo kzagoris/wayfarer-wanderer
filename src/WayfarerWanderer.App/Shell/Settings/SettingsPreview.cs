@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Settings/SettingsPreview.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Settings/SettingsPreview.cs, MIT (notices/Passenger/LICENSE).
 namespace WayfarerWanderer.App.Shell.Settings;
 
 /// <summary>What an open Settings dialog changes of the look, shown before Apply over the settings in force (<see
@@ -54,6 +54,8 @@ public sealed class SettingsPreview : IDisposable
         MainMenuBar = Shown(from.MainMenuBar, to.MainMenuBar, saved.MainMenuBar),
         MergeMainMenuWithWindowTitle = Shown(from.MergeMainMenuWithWindowTitle, to.MergeMainMenuWithWindowTitle, saved.MergeMainMenuWithWindowTitle),
         ColourScheme = Shown(from.ColourScheme, to.ColourScheme, saved.ColourScheme),
+        FollowSystemContrast = Shown(from.FollowSystemContrast, to.FollowSystemContrast, saved.FollowSystemContrast),
+        StatePalette = Shown(from.StatePalette, to.StatePalette, saved.StatePalette),
         EditorFontFamily = Shown(from.EditorFontFamily, to.EditorFontFamily, saved.EditorFontFamily),
         EditorFontSize = Shown(from.EditorFontSize, to.EditorFontSize, saved.EditorFontSize),
         EditorLineSpacing = Shown(from.EditorLineSpacing, to.EditorLineSpacing, saved.EditorLineSpacing),

@@ -73,6 +73,7 @@ public sealed partial class EditorWindow
     {
         TerminalPanel panel = terminal = new TerminalPanel(() => TerminalFolder);
         panel.ActionRequested += (_, action) => Actions.TryExecute(action);
+        panel.CommandFailed += (_, _) => Cue(SoundCue.TerminalCommandFailed);
         panel.Emptied += (_, _) =>
         {
             ToolDock.Hide(ToolWindowIds.Terminal);
