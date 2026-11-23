@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/IdeWindow.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/IdeWindow.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Platform;
@@ -40,6 +40,12 @@ public abstract class IdeWindow : Window
         {
             FitWithin(screen.WorkingArea, screen.Scaling, keepPlace);
         }
+        // Its template applied before the platform takes its size, so the display scale its content takes grows that first.
+        AddHandler(WindowOpenedEvent, (_, _) =>
+        {
+            ApplyStyling();
+            ApplyTemplate();
+        });
     }
 
     /// <summary>Fits the window inside a screen's working area (in its pixels, at its scaling) before it is shown: centred

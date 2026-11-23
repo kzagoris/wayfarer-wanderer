@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/IdeKeys.cs, MIT (notices/Passenger/LICENSE): its IOwnKeys alone.
+// From Passenger 8a1df7e4 src/Passenger.App/IdeKeys.cs, MIT (notices/Passenger/LICENSE): its IOwnKeys alone.
 using Avalonia.Input;
 
 namespace WayfarerWanderer.App.Shell;

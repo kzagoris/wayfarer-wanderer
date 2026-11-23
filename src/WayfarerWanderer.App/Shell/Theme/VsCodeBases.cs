@@ -1,4 +1,6 @@
-// From Passenger 2044e49b src/Passenger.App/Theme/VsCodeBases.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Theme/VsCodeBases.cs, MIT (notices/Passenger/LICENSE).
+using Passenger.Core;
+
 namespace WayfarerWanderer.App.Shell;
 
 /// <summary>The VS Code colour themes Passenger themes are laid over (<see cref="VsCodeBase"/>): one taken from a
@@ -42,7 +44,7 @@ public static class VsCodeBases
         {
             if (files.ContainsKey(next) || files.Count == VsCodeThemes.MostIncludes)
             {
-                return (KeptThemes.BaseBeside(files), $"{theme.Base!.File} includes more than the {VsCodeThemes.MostIncludes} files {Passenger.Core.Product.Name} reads of one theme");
+                return (KeptThemes.BaseBeside(files), $"{theme.Base!.File} includes more than the {Numbers.Said(VsCodeThemes.MostIncludes)} files {Passenger.Core.Product.Name} reads of one theme");
             }
             (byte[]? bytes, string? why) = await read(next);
             if (bytes is null)

@@ -25,7 +25,7 @@ namespace WayfarerWanderer.App.Shell.Welcome;
 public sealed class FirstStartView : UserControl, IOwnKeys
 {
     /// <summary>The gap between two tiles.</summary>
-    private const double Gap = 24;
+    private const double Gap = Gaps.Page;
 
 
     private readonly Func<AppSettings> now;
@@ -239,7 +239,7 @@ public sealed class FirstStartView : UserControl, IOwnKeys
         PathIcon check = new() { Classes = { StyleClasses.FirstStartCheck }, IsVisible = chosen };
         check.Bind(PathIcon.DataProperty, check.GetResourceObservable(IconKeys.Check));
         TextBlock named = new() { Classes = { StyleClasses.FirstStartName }, Text = name };
-        TextBlock said = new() { Classes = { StyleClasses.FirstStartWords }, Text = words, IsVisible = words is not null, TextTrimming = TextTrimming.CharacterEllipsis };
+        TextBlock said = new() { Classes = { StyleClasses.FirstStartWords }, Text = words, IsVisible = words is not null, TextWrapping = TextWrapping.Wrap };
         Button tile = new()
         {
             Classes = { StyleClasses.FirstStartTile },

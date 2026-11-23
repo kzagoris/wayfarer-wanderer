@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Vcs/ChangePopup.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Vcs/ChangePopup.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
@@ -24,9 +24,10 @@ public sealed class ChangePopup : UserControl
     {
         Before = before;
         this.highlightWords = highlightWords;
-        ToggleButton highlight = new() { Classes = { StyleClasses.Option }, IsChecked = highlightWords, Content = new PathIcon(), Focusable = false, Margin = new Thickness(4, 0, 0, 0) };
-        ((PathIcon)highlight.Content).Bind(PathIcon.DataProperty, highlight.GetResourceObservable(IconKeys.Highlight));
-        ToolButtons.Tip(highlight, "Highlight Words");
+        // A toolbar's toggle among its buttons, a step apart from those that act.
+        ToggleButton highlight = ToolButtons.Toggle(IconKeys.Highlight, "Highlight Words");
+        highlight.IsChecked = highlightWords;
+        highlight.Margin = new Thickness(Gaps.Tight, 0, 0, 0);
         highlight.IsCheckedChanged += (_, _) =>
         {
             this.highlightWords = highlight.IsChecked == true;
@@ -37,7 +38,7 @@ public sealed class ChangePopup : UserControl
         StackPanel tools = new()
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 2,
+            Spacing = Gaps.Hair,
             Children =
             {
                 ToolButtons.Of(IconKeys.ArrowUp, "Previous Change", previous),
@@ -47,16 +48,16 @@ public sealed class ChangePopup : UserControl
                 highlight,
             },
         };
-        StackPanel content = new() { Spacing = 6, Children = { tools } };
+        StackPanel content = new() { Spacing = Gaps.Small, Children = { tools } };
         if (before is { Length: > 0 })
         {
-            old = new TextBlock { FontSize = 12, Padding = new Thickness(8, 6) }.InCodeFont();
+            old = new TextBlock { Classes = { StyleClasses.Code }, Padding = new Thickness(Gaps.Normal, Gaps.Small) };
             ShowText();
-            Border text = new() { Classes = { StyleClasses.Box }, Child = new ScrollViewer { MaxHeight = 260, MaxWidth = 640, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, Content = old } };
+            Border text = new() { Classes = { StyleClasses.Box }, Child = new ScrollViewer { MaxHeight = 260, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, Content = old } };
             text.Bind(Border.BackgroundProperty, text.GetResourceObservable(TokenKeys.Diff_Modified));
             content.Children.Add(text);
         }
-        Content = new Border { Classes = { StyleClasses.Popup }, Padding = new Thickness(6), Child = content };
+        Content = new FittingFrame { Padding = PopupFrame.Inset, Child = content };
     }
 
     /// <summary>The lines the last commit had there, or null for lines that are new.</summary>

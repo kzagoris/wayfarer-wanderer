@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Welcome/RecentSolutions.cs, MIT (notices/Passenger/LICENSE): its recent
+// From Passenger 8a1df7e4 src/Passenger.App/Welcome/RecentSolutions.cs, MIT (notices/Passenger/LICENSE): its recent
 // solutions, kept as the folders Wayfarer opens.
 using System.Text.Json.Nodes;
 using Passenger.Core;
@@ -26,14 +26,21 @@ public sealed record RecentFoldersState : IStateDocument<RecentFoldersState>
     public IReadOnlyList<(string Path, RecentFolder Entry)> StillOpen() => [.. Newest().Where(s => s.Entry.Open).Reverse()];
 
     /// <summary>With a path opened now, newest of all even on a clock that has not moved since the last, and open.</summary>
-    public RecentFoldersState Opened(string path, string name, DateTimeOffset now)
+    public RecentFoldersState Opened(string path, string name, DateTimeOffset at)
     {
-        DateTimeOffset latest = Folders.Values.Select(s => s.Opened).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
         Dictionary<string, RecentFolder> next = new(Folders)
         {
-            [path] = new RecentFolder { Name = name, Opened = now > latest ? now : latest.AddTicks(1), Open = true },
+            [path] = new RecentFolder { Name = name, Opened = at, Open = true },
         };
         return this with { Folders = Kept(next) };
+    }
+
+    /// <summary>When a path asked for <paramref name="now"/> is kept as opened: then, but later than every one kept and than
+    /// <paramref name="after"/>, one asked for before it and not kept yet, even on a clock that has not moved since.</summary>
+    public DateTimeOffset Next(DateTimeOffset now, DateTimeOffset after)
+    {
+        DateTimeOffset latest = Folders.Values.Select(s => s.Opened).Append(after).Max();
+        return now > latest ? now : latest.AddTicks(1);
     }
 
     /// <summary>With a path no window has open any longer (its window closed, or another folder opened in it), so a start

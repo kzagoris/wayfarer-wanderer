@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Welcome/LinuxRecentlyUsed.cs, MIT (notices/Passenger/LICENSE): its recent
+// From Passenger 8a1df7e4 src/Passenger.App/Welcome/LinuxRecentlyUsed.cs, MIT (notices/Passenger/LICENSE): its recent
 // solutions followed, kept as Wayfarer's recent folders, and its install found by Wayfarer's desktop entry.
 using System.Runtime.CompilerServices;
 using System.Xml;
@@ -162,11 +162,10 @@ public static class LinuxRecentlyUsed
     /// else GTK's settings files.</summary>
     private static async Task<RecentlyUsed.Keeping> DesktopKeepingAsync()
     {
-        string config = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME") is { Length: > 0 } set && Path.IsPathRooted(set) ? set
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config");
+        string? config = XdgFolders.Config(XdgFolders.Own);
         if ((Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP") ?? string.Empty).Split(':').Contains("KDE", StringComparer.OrdinalIgnoreCase))
         {
-            return RecentlyUsed.Keeping.OfKde([Text(Path.Combine(config, "kdeglobals")), Text("/etc/xdg/kdeglobals")]);
+            return RecentlyUsed.Keeping.OfKde([config is null ? null : Text(Path.Combine(config, "kdeglobals")), Text("/etc/xdg/kdeglobals")]);
         }
         if (Programs.OnPath("gsettings") is { } gsettings)
         {
@@ -184,7 +183,7 @@ public static class LinuxRecentlyUsed
                 IdeErrors.Write($"Recently used: GNOME's privacy settings could not be read, so GTK's are taken: {error.Message}");
             }
         }
-        string[] folders = [Path.Combine(config, "gtk-4.0"), Path.Combine(config, "gtk-3.0"), "/etc/xdg/gtk-4.0", "/etc/xdg/gtk-3.0", "/etc/gtk-3.0"];
+        string[] folders = [.. config is null ? [] : new[] { Path.Combine(config, "gtk-4.0"), Path.Combine(config, "gtk-3.0") }, "/etc/xdg/gtk-4.0", "/etc/xdg/gtk-3.0", "/etc/gtk-3.0"];
         return RecentlyUsed.Keeping.OfGtk(folders.Select(folder => Text(Path.Combine(folder, "settings.ini"))));
     }
 

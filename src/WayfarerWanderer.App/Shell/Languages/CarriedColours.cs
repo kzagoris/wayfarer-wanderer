@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.Languages/CarriedColours.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.Languages/CarriedColours.cs, MIT (notices/Passenger/LICENSE).
 using Passenger.Core;
 using Passenger.Editor;
 using Passenger.Text;
@@ -53,6 +53,9 @@ public abstract class CarriedColours : IHighlighter, IBraceMatcher, IDisposable
 
     /// <summary>The parser's tag pair, an XML file's.</summary>
     public BracePair? TagPairAt(TextSnapshot snapshot, int caret, bool far = false) => (syntax as IBraceMatcher)?.TagPairAt(snapshot, caret, far);
+
+    /// <summary>The parser's word whether a closer is its code's own (<see cref="IBraceMatcher.ClosesWhole"/>).</summary>
+    public bool ClosesWhole(TextSnapshot snapshot, int offset) => (syntax as IBraceMatcher)?.ClosesWhole(snapshot, offset) == true;
 
     public virtual void Dispose()
     {

@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/RowGlyphs.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/RowGlyphs.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -8,14 +8,14 @@ using Avalonia.Media;
 namespace WayfarerWanderer.App.Shell;
 
 /// <summary>A tree row's chevron and icon as one control, drawn pixel for pixel as RowIcons in their places: the chevron
-/// 10 square in the middle of an 18-wide column, turned down while the row is open, a press on that column being
-/// <see cref="ChevronPressed"/>; then the icon, 16 square midway down, 6 before what follows.</summary>
+/// a glyph in the middle of a <see cref="RowExpander"/>'s column, turned down while the row is open, a press on that column
+/// being <see cref="ChevronPressed"/>; then the icon, a row's icon's size midway down, a small step before what follows.</summary>
 public sealed class RowGlyphs : Control
 {
-    private const double Column = 18;
-    private const double ChevronSize = 10;
-    private const double IconSize = 16;
-    private const double Gap = 6;
+    private const double Column = RowExpander.Column;
+    private const double ChevronSize = RowIcon.GlyphSize;
+    private const double IconSize = RowIcon.Size;
+    private const double Gap = Gaps.Small;
 
     public static readonly StyledProperty<bool> HasChevronProperty = AvaloniaProperty.Register<RowGlyphs, bool>(nameof(HasChevron));
     public static readonly StyledProperty<bool> TurnedProperty = AvaloniaProperty.Register<RowGlyphs, bool>(nameof(Turned));

@@ -130,7 +130,7 @@ public sealed partial class EditorWindow
             recent = recent.Closed(before);
         }
         rememberedRoot = canonical;
-        state.Recent.Set(recent.Opened(canonical, Path.GetFileName(Path.TrimEndingDirectorySeparator(canonical)), DateTimeOffset.UtcNow));
+        state.Recent.Set(recent.Opened(canonical, Path.GetFileName(Path.TrimEndingDirectorySeparator(canonical)), recent.Next(DateTimeOffset.UtcNow, DateTimeOffset.MinValue)));
         Welcome.Show(RecentFolders);
         FollowRecentShortcuts();
     }

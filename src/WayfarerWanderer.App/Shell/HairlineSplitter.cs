@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/HairlineSplitter.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/HairlineSplitter.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 
@@ -18,8 +18,8 @@ public sealed class HairlineSplitter : GridSplitter
 }
 
 /// <summary>The divider between two panes of a grid, in a 1 px row or column of its own: the hairline, and a splitter
-/// reaching 3 px past it on either side. It stands above the panes, since the one after it would otherwise take the
-/// pointer on that side of the line. Between panes of two grounds (a tool window beside the editor) it draws no line,
+/// reaching a tight step past it on either side. It stands above the panes, since the one after it would otherwise take
+/// the pointer on that side of the line. Between panes of two grounds (a tool window beside the editor) it draws no line,
 /// the shades telling them apart, and is only the splitter.</summary>
 public sealed class HairlineDivider : Panel
 {

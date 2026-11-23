@@ -267,9 +267,10 @@ public class WelcomeTests
     public void RecentFoldersKeepTheNewestFirstAndWhichWasOpen()
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        RecentFoldersState kept = new RecentFoldersState()
-            .Opened("/work/one", "one", now)
-            .Opened("/work/two", "two", now)
+        // Two opened on a clock that has not moved: the second is kept as the later one.
+        RecentFoldersState one = new RecentFoldersState().Opened("/work/one", "one", now);
+        RecentFoldersState kept = one
+            .Opened("/work/two", "two", one.Next(now, DateTimeOffset.MinValue))
             .Closed("/work/one");
         Assert.Equal(["/work/two", "/work/one"], kept.Newest().Select(r => r.Path));
         Assert.Equal(["/work/two"], kept.StillOpen().Select(r => r.Path));

@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Docking/DropOverlay.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Docking/DropOverlay.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
@@ -10,8 +10,9 @@ namespace WayfarerWanderer.App.Shell.Docking;
 /// and stands above the hairline dividers, which stand above the panes.</summary>
 public sealed class DropOverlay : Canvas
 {
-    private readonly Border zone = new() { BorderThickness = new Thickness(2), Classes = { StyleClasses.Box } };
-    private readonly TextBlock label = new() { FontWeight = FontWeight.SemiBold, Margin = new Thickness(10, 8) };
+    // Ringed as broad as the focus ring, which marks where the keys go as this marks where the drop would.
+    private readonly Border zone = new() { BorderThickness = new Thickness(FocusRing.RingWidth), Classes = { StyleClasses.Box } };
+    private readonly TextBlock label = new() { Classes = { StyleClasses.Strong }, Margin = new Thickness(Gaps.Wide, Gaps.Normal) };
 
     public DropOverlay()
     {

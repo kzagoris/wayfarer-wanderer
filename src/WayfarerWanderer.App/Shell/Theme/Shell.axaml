@@ -771,8 +771,8 @@
          overhangs its 1 px column so there is something to grab. -->
     <Style Selector="GridSplitter.hairline">
         <Setter Property="MinWidth" Value="0" />
-        <Setter Property="Width" Value="7" />
-        <Setter Property="Margin" Value="-3,0" />
+        <Setter Property="Width" Value="9" />
+        <Setter Property="Margin" Value="-4,0" />
         <Setter Property="Background" Value="Transparent" />
     </Style>
     <Style Selector="GridSplitter.hairline:pointerover">
@@ -836,9 +836,10 @@
         <Setter Property="Foreground" Value="{DynamicResource Passenger.Link}" />
         <Setter Property="TextDecorations" Value="Underline" />
     </Style>
+    <!-- A glyph, a step smaller than an icon, as a row's chevron and a tab's × are. -->
     <Style Selector="PathIcon.small">
-        <Setter Property="Width" Value="10" />
-        <Setter Property="Height" Value="10" />
+        <Setter Property="Width" Value="{x:Static app:RowIcon.GlyphSize}" />
+        <Setter Property="Height" Value="{x:Static app:RowIcon.GlyphSize}" />
     </Style>
 
     <!-- What is chosen, the one way in every list, tree, drop-down, tab strip and stripe: its ground, and beside it the
@@ -1124,8 +1125,8 @@
 
     <Style Selector="GridSplitter.hairlineRows">
         <Setter Property="MinHeight" Value="0" />
-        <Setter Property="Height" Value="7" />
-        <Setter Property="Margin" Value="0,-3" />
+        <Setter Property="Height" Value="9" />
+        <Setter Property="Margin" Value="0,-4" />
         <Setter Property="Background" Value="Transparent" />
     </Style>
     <Style Selector="GridSplitter.hairlineRows:pointerover">

@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Navigation/ActionPopup.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 8a1df7e4 src/Passenger.App/Navigation/ActionPopup.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -44,12 +44,10 @@ public sealed class ActionPopup : SearchPopup<IdeAction>
     protected override Control Row()
     {
         TextBlock title = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-        TextBlock group = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) };
+        TextBlock group = new() { Classes = { StyleClasses.Caption }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(Gaps.Wide, 0, 0, 0) };
         group.Classes.Add(StyleClasses.Muted);
-        TextBlock keys = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 4, 0) };
-        keys.Classes.Add(StyleClasses.Muted);
-        DockPanel row = new() { Height = ListRow.Height, Margin = new Thickness(4, 0) };
-        DockPanel.SetDock(keys, Dock.Right);
+        TextBlock keys = ListRow.DetailText();
+        DockPanel row = new() { Height = ListRow.Height, Margin = ListRow.Inset };
         row.Children.Add(keys);
         row.Children.Add(new StackPanel
         {
