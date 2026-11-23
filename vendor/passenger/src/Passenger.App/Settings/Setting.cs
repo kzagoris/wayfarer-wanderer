@@ -144,11 +144,10 @@ public sealed class SizeSetting(Func<AppSettings, double> get, Func<AppSettings,
     {
         double value = get(now);
         double[] offered = sizes.Contains(value) ? [.. sizes] : [.. sizes.Append(value).Order()];
-        ComboBox box = new()
+        FormDropDown box = new()
         {
             ItemsSource = offered.Select(Percent).ToArray(),
             SelectedIndex = Array.IndexOf(offered, value),
-            Classes = { StyleClasses.Form },
         };
         box.SelectionChanged += (_, _) =>
         {
@@ -192,11 +191,10 @@ public sealed class ChoiceSetting<T> : Setting where T : struct, Enum
     public ComboBox Box(AppSettings now, Action<Func<AppSettings, AppSettings>> change)
     {
         T value = get(now);
-        ComboBox box = new()
+        FormDropDown box = new()
         {
             ItemsSource = choices.Select(c => c.Name).ToArray(),
             SelectedIndex = choices.Select(c => c.Value).ToList().IndexOf(value),
-            Classes = { StyleClasses.Form },
         };
         box.SelectionChanged += (_, _) => change(s => set(s, choices[Math.Max(0, box.SelectedIndex)].Value));
         return box;
@@ -218,11 +216,10 @@ public sealed class ThemedChoiceSetting<T>(Func<AppSettings, T?> own, Func<AppSe
     {
         T themes = inForce(set(now, null));
         string[] names = [$"Theme default ({NameOf(themes)})", .. choices.Select(c => c.Name)];
-        ComboBox box = new()
+        FormDropDown box = new()
         {
             ItemsSource = names,
             SelectedIndex = own(now) is { } chosen ? 1 + choices.Select(c => c.Value).ToList().IndexOf(chosen) : 0,
-            Classes = { StyleClasses.Form },
         };
         box.SelectionChanged += (_, _) => change(s => set(s, box.SelectedIndex > 0 ? choices[box.SelectedIndex - 1].Value : null));
         return box;
@@ -264,24 +261,23 @@ public sealed class VimKeysSetting(string property, Func<AppSettings, string> ge
     /// with it (null to name nothing), for the dialog, which knows that keymap.</summary>
     public StackPanel Box(AppSettings now, Action<Func<AppSettings, AppSettings>> change, Func<Keystroke, string?> keymapDoes)
     {
-        StackPanel rows = new() { Spacing = 4 };
+        StackPanel rows = new() { Spacing = Gaps.Tight };
         IReadOnlySet<string> given = Given(now);
         foreach ((string key, string does) in Vim.CtrlKeys)
         {
             Keystroke stroke = StrokeOf(key);
-            ComboBox choice = new()
+            FormDropDown choice = new()
             {
                 ItemsSource = new[] { $"Vim mode: {does}", keymapDoes(stroke) is { } keymaps ? $"Keymap: {keymaps}" : "Keymap" },
                 SelectedIndex = given.Contains(key) ? 1 : 0,
-                Classes = { StyleClasses.Form },
             };
             choice.SelectionChanged += (_, _) => change(s => set(s, Joined(Given(s), key, choice.SelectedIndex == 1)));
-            Avalonia.Automation.AutomationProperties.SetName(choice, stroke.Display());
+            Avalonia.Automation.AutomationProperties.SetName(choice, KeyWords.Of(stroke));
             rows.Children.Add(new StackPanel
             {
                 Orientation = Orientation.Horizontal,
-                Spacing = 8,
-                Children = { new TextBlock { Text = stroke.Display(), MinWidth = 56, VerticalAlignment = VerticalAlignment.Center }, choice },
+                Spacing = Gaps.Normal,
+                Children = { new TextBlock { Text = KeyWords.Of(stroke), MinWidth = 56, VerticalAlignment = VerticalAlignment.Center }, choice },
             });
         }
         return rows;
@@ -322,7 +318,7 @@ public sealed class ProgramSetting(Func<AppSettings, string?> get, Func<AppSetti
 
     public override Control Editor(AppSettings now, Action<Func<AppSettings, AppSettings>> change)
     {
-        TextBox line = new() { Classes = { StyleClasses.Search }, Text = get(now) ?? string.Empty, PlaceholderText = found() };
+        TextBox line = new() { Text = get(now) ?? string.Empty, PlaceholderText = found() };
         TextBlock problem = new() { TextWrapping = TextWrapping.Wrap, HorizontalAlignment = HorizontalAlignment.Left };
         problem.Classes.Add(StyleClasses.Error);
         TextBlock runs = new() { Classes = { StyleClasses.Muted }, TextWrapping = TextWrapping.Wrap, HorizontalAlignment = HorizontalAlignment.Left, IsVisible = described is not null };
@@ -333,7 +329,7 @@ public sealed class ProgramSetting(Func<AppSettings, string?> get, Func<AppSetti
             change(s => set(s, string.IsNullOrWhiteSpace(line.Text) ? null : line.Text.Trim()));
             Said();
         };
-        return new StackPanel { Spacing = 4, MaxWidth = OptionRow.EditorWidth, Children = { line, problem, runs } };
+        return new StackPanel { Spacing = Gaps.Tight, MaxWidth = OptionRow.EditorWidth, Children = { line, problem, runs } };
 
         // What the line runs, the last asked winning.
         async Task DescribeAsync(string? typed)
@@ -376,7 +372,7 @@ public sealed class LinesSetting(Func<AppSettings, string> get, Func<AppSettings
     {
         TextBox lines = new()
         {
-            Classes = { StyleClasses.Search }, Text = string.Join('\n', Parts(get(now))), AcceptsReturn = true, MaxWidth = OptionRow.EditorWidth, Height = height,
+            Text = string.Join('\n', Parts(get(now))), AcceptsReturn = true, MaxWidth = OptionRow.EditorWidth, Height = height,
         };
         ScrollViewer.SetHorizontalScrollBarVisibility(lines, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
         lines.TextChanged += (_, _) => change(s => set(s, string.Join($"{separator} ", (lines.Text ?? string.Empty).Split('\n', Split))));
@@ -414,7 +410,7 @@ public sealed class FontSetting(string property, Func<AppSettings, string?> get,
     public override Control Editor(AppSettings now, Action<Func<AppSettings, AppSettings>> change)
     {
         string? chosen = Trimmed(get(now));
-        ComboBox box = new() { Classes = { StyleClasses.Form, StyleClasses.Faces }, MaxDropDownHeight = 360 };
+        FormDropDown box = new() { Classes = { StyleClasses.Faces }, MaxDropDownHeight = 360 };
         ReusedRows.Use(box, () =>
         {
             TextBlock shown = new() { VerticalAlignment = VerticalAlignment.Center };

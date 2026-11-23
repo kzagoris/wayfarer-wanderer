@@ -104,7 +104,7 @@ public sealed partial class PassengerTools
             long flags = at[7] is long given ? given : 0;
             return element with
             {
-                Bounds = at[1] is true ? new Box(Number(at[2]), Number(at[3]), Number(at[4]), Number(at[5])) : null,
+                Bounds = at[1] is true ? new Box(GodotVariant.Number(at[2]) ?? 0, GodotVariant.Number(at[3]) ?? 0, GodotVariant.Number(at[4]) ?? 0, GodotVariant.Number(at[5]) ?? 0) : null,
                 Text = at[6] as string,
                 Disabled = (flags & 1) != 0 ? true : null,
                 Focused = (flags & 2) != 0 ? true : null,
@@ -120,13 +120,6 @@ public sealed partial class PassengerTools
             ? Path.GetFileNameWithoutExtension(type)
             : type;
     }
-
-    private static double Number(object? value) => value switch
-    {
-        double real => real,
-        long whole => whole,
-        _ => 0,
-    };
 
     private static long Whole(object? value) => value is long whole ? whole : 0;
 
@@ -155,7 +148,7 @@ public sealed partial class PassengerTools
         List<object?> said = await game.AskAsync("windows");
         IEnumerable<List<object?>> found = said is [List<object?> windows] ? windows.OfType<List<object?>>().Where(w => w.Count >= 10) : [];
         return new AppWindows(game.Name, game.Framework, null, game.ProcessId, [.. found.Select(w => new AppWindowInfo(Id(Whole(w[0])), w[1] as string ?? "Window",
-            w[2] as string, w[3] as string, Math.Round(Number(w[4]), 2), Math.Round(Number(w[5]), 2), Math.Round(Number(w[6]), 2), w[7] is true, w[8] is true,
+            w[2] as string, w[3] as string, Math.Round(GodotVariant.Number(w[4]) ?? 0, 2), Math.Round(GodotVariant.Number(w[5]) ?? 0, 2), Math.Round(GodotVariant.Number(w[6]) ?? 0, 2), w[7] is true, w[8] is true,
             Whole(w[9]) is not 0 and long owner ? Id(owner) : null))]);
     }
 
@@ -201,7 +194,7 @@ public sealed partial class PassengerTools
         {
             throw new ArgumentException(found.Count == 1
                 ? $"{AppQuery.Short(found[0].Element)} runs no script of {game.Name}'s whose code declares a member"
-                : $"None of the {found.Count} nodes {control} finds runs a script of {game.Name}'s whose code declares a member");
+                : $"None of the {Numbers.Said(found.Count)} nodes {control} finds runs a script of {game.Name}'s whose code declares a member");
         }
         IReadOnlyList<GodotScriptRead> answers = await game.ScriptValuesAsync(
             [.. read.Select(r => new GodotScriptAsk(r.Script, (ulong)r.Node.Element.Id, [.. r.Members.Members.Select(m => m.Name)]))]);
@@ -301,7 +294,7 @@ public sealed partial class PassengerTools
     {
         long under = said.Count > 2 ? Whole(said[2]) : 0;
         long focus = said.Count > 3 ? Whole(said[3]) : 0;
-        return new InputDone(said.Count > 5 ? Whole(said[5]) : window.Element.Id, said.Count > 0 ? Number(said[0]) : null, said.Count > 1 ? Number(said[1]) : null, under is 0 ? null : under,
+        return new InputDone(said.Count > 5 ? Whole(said[5]) : window.Element.Id, said.Count > 0 ? GodotVariant.Number(said[0]) ?? 0 : null, said.Count > 1 ? GodotVariant.Number(said[1]) ?? 0 : null, under is 0 ? null : under,
             under is 0 ? null : NameOf(under), said.Count > 4 ? said[4] as string : null, focus is 0 ? null : NameOf(focus));
 
         string NameOf(long id) => nodes.FirstOrDefault(n => n.Element.Id == id) is { } node ? AppQuery.Short(node.Element) : Id(id);
@@ -373,9 +366,9 @@ public sealed partial class PassengerTools
     private async Task<string> GameKeyAsync(GodotGame game, string keys, string? control, string? window)
     {
         using IDisposable asking = GodotGame.Within(GameLimit);
-        IReadOnlyList<Chord> chords = Chords(keys);
+        List<Pressed> chords = Chords(keys);
         (List<AppNode> nodes, AppNode? element, AppNode target) = await GameTarget(game, control, window, needsPoint: false, null, null);
-        List<object?> pressed = [.. chords.Select(c => (object?)new List<object?> { GodotAgent.KeyName(c.Key), GameModifiers(c.Modifiers) })];
+        List<object?> pressed = [.. chords.Select(c => (object?)new List<object?> { GodotAgent.KeyName(c.Key), GameModifiers(c.Held), c.Text ?? string.Empty })];
         List<object?> said = await game.AskAsync("key", element?.Element.Id ?? 0L, target.Element.Id, pressed);
         InputDone done = GameDone(nodes, target, said);
         return $"Pressed {keys.Trim()} in {done.Focused ?? "the window, nothing having the focus"}{KeysHeld(element, done, said)}{Said(done)}";

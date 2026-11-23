@@ -5,6 +5,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Passenger.App.Workspace;
+using Passenger.Core;
 
 namespace Passenger.App.Editors;
 
@@ -20,7 +21,7 @@ public sealed class AssetPreviewControl : DockPanel, IDisposable, IOwnKeys
     private const string Lowercase = "abcdefghijklmnopqrstuvwxyz";
     private const string Digits = "0123456789";
     private const string Symbols = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
-    private const double Gap = 8;
+    private const double Gap = Gaps.Normal;
     private const double SampleSize = 30;
 
     private readonly List<FontSample> samples = [];
@@ -34,8 +35,8 @@ public sealed class AssetPreviewControl : DockPanel, IDisposable, IOwnKeys
         Bind(BackgroundProperty, this.GetResourceObservable(TokenKeys.Editor_Background));
         if (asset.IsPending)
         {
-            TextBlock loading = new() { Text = asset.Kind == AssetKind.Font ? "Loading the font…" : "Loading the image…", Margin = default };
-            loading.Classes.Add(StyleClasses.EmptyText);
+            TextBlock loading = MutedText.Of(asset.Kind == AssetKind.Font ? "Loading the font…" : "Loading the image…");
+            loading.VerticalAlignment = VerticalAlignment.Center;
             StackPanel waiting = new()
             {
                 Orientation = Orientation.Horizontal,
@@ -50,10 +51,9 @@ public sealed class AssetPreviewControl : DockPanel, IDisposable, IOwnKeys
         }
         if (asset.Bitmap is { } bitmap)
         {
-            TextBlock dimensions = MutedText.Of($"{bitmap.PixelSize.Width} × {bitmap.PixelSize.Height} pixels"
-                + (asset.Frames > 1 ? $" · the first of its {asset.Frames} frames" : ""));
-            dimensions.FontSize = 12;
-            dimensions.Margin = new Thickness(8, 0);
+            TextBlock dimensions = MutedText.Caption($"{bitmap.PixelSize.Width} × {bitmap.PixelSize.Height} pixels"
+                + (asset.Frames > 1 ? $" · the first of its {Numbers.Said(asset.Frames)} frames" : ""));
+            dimensions.Margin = new Thickness(Gaps.Normal, 0);
             dimensions.HorizontalAlignment = HorizontalAlignment.Right;
             picture = new ZoomedPicture { Picture = bitmap };
             AutomationProperties.SetName(picture, "Image preview");
@@ -76,7 +76,7 @@ public sealed class AssetPreviewControl : DockPanel, IDisposable, IOwnKeys
         {
             return;
         }
-        StackPanel content = new() { Spacing = 12, Margin = new Thickness(2 * Gap) };
+        StackPanel content = new() { Spacing = Gaps.Wide, Margin = new Thickness(Gaps.Group) };
         content.Children.Add(Label($"{typeface.FamilyName} · Local font"));
         AddSample(content, typeface, "Uppercase A–Z", Uppercase);
         AddSample(content, typeface, "Lowercase a–z", Lowercase);

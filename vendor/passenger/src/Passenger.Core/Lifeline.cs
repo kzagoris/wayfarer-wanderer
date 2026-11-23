@@ -11,7 +11,8 @@ namespace Passenger.Core;
 /// group of its own, and a watchdog shell reading a pipe only Passenger writes kills every group still alive once that
 /// pipe closes, which it does however Passenger's process ends. The watchdog is no process of Passenger's tree, so a kill
 /// of the tree (a test runner's of a hung host) leaves it to end what lives outside it, an app the system started for
-/// Passenger among them. Linux is treated as macOS is.</summary>
+/// Passenger among them. What a child starts apart from its group, which ends it itself, is followed for its runtime's
+/// files alone (<see cref="LineageVariable"/>). Linux is treated as macOS is.</summary>
 internal static partial class Lifeline
 {
     private const int SigKill = 9;
@@ -30,22 +31,38 @@ internal static partial class Lifeline
     /// gone long before, zombies their parents reap included.</summary>
     private static readonly TimeSpan KillAgainFor = TimeSpan.FromSeconds(5);
 
-    /// <summary>The watchdog: "+N" puts group N on its list and "-N" strikes it off; "!C" makes C the command it runs last,
-    /// after every group still listed at the end of its input is killed. It writes nothing, and a terminal's hangup or
-    /// interrupt is not its to obey.</summary>
+    /// <summary>The watchdog: "+N" puts group N on its list and "-N" strikes it off; "@P F" lists file F of process P's
+    /// runtime and "-@P" strikes off all of P's; "!C" makes C the command it runs last. At the end of its input every group
+    /// still listed is killed, then each file listed is removed once its process has gone (for 2 s at most), then C runs.
+    /// It writes nothing, and a terminal's hangup or interrupt is not its to obey.</summary>
     private const string Watch = """
         exec >/dev/null 2>&1
         trap '' HUP INT
+        nl='
+        '
         groups=' '
+        files=''
         last=''
         while IFS= read -r line; do
           case $line in
             +*) groups="$groups${line#+} " ;;
+            -@*) kept=''; set -f; IFS=$nl; for entry in $files; do case $entry in "${line#-@} "*) ;; *) kept="$kept$entry$nl" ;; esac; done; unset IFS; set +f; files=$kept ;;
             -*) case $groups in *" ${line#-} "*) groups="${groups%% ${line#-} *} ${groups#* ${line#-} }" ;; esac ;;
+            @*) files="$files${line#@}$nl" ;;
             !*) last="${line#!}" ;;
           esac
         done
         for group in $groups; do kill -s KILL -- "-$group"; done
+        set -f; IFS=$nl
+        tries=0
+        while [ -n "$files" ] && [ "$tries" -lt 20 ]; do
+          alive=''
+          for entry in $files; do kill -0 "${entry%% *}" && alive=1; done
+          [ -z "$alive" ] && break
+          sleep 0.1; tries=$((tries + 1))
+        done
+        for entry in $files; do kill -0 "${entry%% *}" || rm -f -- "${entry#* }"; done
+        unset IFS; set +f
         if [ -n "$last" ]; then eval "$last"; fi
         """;
 
@@ -72,6 +89,40 @@ internal static partial class Lifeline
     private static bool unavailable;
     private static Timer? pruning;
 
+    /// <summary>The removals of killed programs' runtime files still under way, which Passenger's own end waits for, at
+    /// most <see cref="RemovalsLandFor"/>, as it may come right after its last kills (a window's project host as it closes).</summary>
+    private static readonly HashSet<Task> Removals = [];
+
+    private static readonly TimeSpan RemovalsLandFor = TimeSpan.FromSeconds(1);
+    private static bool endsGroupsAtExit;
+
+    /// <summary>The runtime files of each process the watchdog has been told of, by process: Passenger's own and those of
+    /// the processes in its groups, which a crash or a kill of Passenger leaves to the watchdog's kill.</summary>
+    private static readonly Dictionary<int, RuntimeFiles> Told = [];
+
+    /// <summary>How often the processes of the groups listed are looked through for what the watchdog has not been told of
+    /// (a build's nodes, a debugged program): its count of those is seconds behind at most.</summary>
+    private static readonly TimeSpan FollowEvery = TimeSpan.FromSeconds(1);
+
+    private static Timer? following;
+
+    /// <summary>The variable each child is given naming this process and its start (<see cref="Lineage"/>), which what the
+    /// child starts apart from its group keeps (an orchestrator detached into a session of its own, the programs it runs):
+    /// those of them that are .NET programs have their runtime files followed as a group's processes' are, never killed.</summary>
+    [IdentifierHome]
+    private const string LineageVariable = "PASSENGER_LINEAGE";
+
+    /// <summary>This process's id and start, as <see cref="LineageVariable"/> gives them.</summary>
+    private static readonly Lazy<string> Lineage = new(() => string.Create(System.Globalization.CultureInfo.InvariantCulture,
+        $"{Environment.ProcessId}-{DotnetProcesses.StartKey(Environment.ProcessId)}"));
+
+    /// <summary>Whether each .NET process found outside the groups, by its id and start, is of this process's lineage:
+    /// asked once each, and forgotten once its files are no longer there.</summary>
+    private static readonly Dictionary<(int Id, long Started), bool> Lineages = [];
+
+    /// <summary>Set while the runtime files are looked through, so a look that outlasts the timer's period is not run twice.</summary>
+    private static int looking;
+
     /// <summary>Sets a child up, before it starts, to end with Passenger.</summary>
     public static void Prepare(ProcessStartInfo start)
     {
@@ -81,6 +132,7 @@ internal static partial class Lifeline
             return;
         }
         start.StartDetached = true;
+        start.Environment[LineageVariable] = Lineage.Value;
         lock (Gate)
         {
             Watchdog();
@@ -91,18 +143,30 @@ internal static partial class Lifeline
     public static void Adopt(Process process) => AdoptGroup(process.Id);
 
     /// <summary>Puts a process group that leads itself on the watchdog's list: a child's, or a program the terminal started
-    /// in its pseudo-terminal.</summary>
+    /// in its pseudo-terminal. Its leader's runtime files are followed at once, not at the next look through the groups,
+    /// so a leader killed within a second of its start leaves them no more than one killed later.</summary>
     public static void AdoptGroup(int group)
     {
         if (OperatingSystem.IsWindows())
         {
             return;
         }
+        RuntimeFiles? leader = Followable(group);
         lock (Gate)
         {
             Groups.Add(group);
             Tell($"+{group}");
+            if (leader is not null)
+            {
+                Follow(leader);
+            }
             pruning ??= new Timer(_ => Prune(), null, PruneEvery, PruneEvery);
+            following ??= new Timer(_ => FollowRuntimeFiles(), null, TimeSpan.Zero, FollowEvery);
+            if (!endsGroupsAtExit)
+            {
+                endsGroupsAtExit = true;
+                AppDomain.CurrentDomain.ProcessExit += (_, _) => EndGroupsAtExit();
+            }
         }
     }
 
@@ -197,11 +261,67 @@ internal static partial class Lifeline
             job?.Dispose();
             return;
         }
+        // Taken while they run: a killed program's runtime leaves its socket and pipes, named for its start.
+        RuntimeFiles[] left = Holds(group) && Libc.Signal(-group, 0) == 0
+            ? [.. DotnetProcesses.InGroup(group).Select(id => RuntimeFiles.Of(id)).OfType<RuntimeFiles>()]
+            : [];
         if (Signalled(group))
         {
             UnawaitedWork.Observe(BackgroundWork.Run(() => KillAgainAsync(group)));
+            if (left.Length > 0)
+            {
+                Removing(BackgroundWork.Run(() => RemoveOnceGoneAsync(left)));
+            }
         }
     }
+
+    /// <summary>Kills a process (once <see cref="KillGroup(Process)"/> has killed its group, where Passenger holds one), and
+    /// where no group of Passenger's holds it (a program a debugger started, found by its id), takes what its runtime leaves
+    /// once it has gone, as a group's are taken.</summary>
+    public static void KillAlone(Process process)
+    {
+        RuntimeFiles? left = Holds(process.Id) ? null : RuntimeFiles.Of(process.Id);
+        process.Kill();
+        if (left is not null)
+        {
+            Removing(BackgroundWork.Run(() => RemoveOnceGoneAsync([left])));
+        }
+    }
+
+    private static void Removing(Task removal)
+    {
+        lock (Gate)
+        {
+            Removals.RemoveWhere(ended => ended.IsCompleted);
+            Removals.Add(removal);
+        }
+        UnawaitedWork.Observe(removal);
+    }
+
+    /// <summary>As Passenger's process ends of itself: every group still listed killed here, as the watchdog would kill it a
+    /// moment later, so what their programs' runtimes leave is taken, and those removals waited for. Synchronous, as the
+    /// process's end waits for no task.</summary>
+    private static void EndGroupsAtExit()
+    {
+        int[] listed;
+        lock (Gate)
+        {
+            listed = [.. Groups];
+        }
+        foreach (int group in listed)
+        {
+            KillGroup(group);
+        }
+        Task[] pending;
+        lock (Gate)
+        {
+            pending = [.. Removals.Where(removal => !removal.IsCompleted)];
+        }
+        Blocking.Until(Task.WhenAny(Task.WhenAll(pending), Task.Delay(RemovalsLandFor)));
+    }
+
+    /// <summary>Removes each killed program's runtime files as soon as it has gone, for <see cref="KillAgainFor"/> at most.</summary>
+    private static Task RemoveOnceGoneAsync(RuntimeFiles[] left) => RuntimeFiles.RemoveOnceGoneAsync(left, KillAgainFor);
 
     /// <summary>Whether a child's group is still listed (on Windows, its family still held): not yet found empty.</summary>
     public static bool Holds(int group)
@@ -229,6 +349,123 @@ internal static partial class Lifeline
         while (Signalled(group) && !until.Passed)
         {
             await Task.Delay(KillAgainEvery).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Tells the watchdog the runtime files of each process of a group listed, of Passenger's own and of each of its
+    /// lineage started apart (<see cref="StartedApart"/>), as they come, so a kill of Passenger leaves none of them; and
+    /// takes those of each that has gone (one killed by another, or as it ended), striking it off. Read outside the gate,
+    /// as a process's environment is a call into the system.</summary>
+    private static void FollowRuntimeFiles()
+    {
+        if (Interlocked.Exchange(ref looking, 1) == 1)
+        {
+            return;
+        }
+        try
+        {
+            FollowRuntimeFilesNow();
+        }
+        finally
+        {
+            Volatile.Write(ref looking, 0);
+        }
+    }
+
+    private static void FollowRuntimeFilesNow()
+    {
+        int[] groups;
+        Dictionary<int, long> told;
+        lock (Gate)
+        {
+            groups = [.. Groups];
+            told = Told.ToDictionary(entry => entry.Key, entry => entry.Value.Started);
+        }
+        // Gone, or its id another process's now.
+        HashSet<int> gone = [.. told.Where(entry => DotnetProcesses.StartKey(entry.Key) != entry.Value).Select(entry => entry.Key)];
+        Dictionary<int, RuntimeFiles> come = [];
+        HashSet<int> grouped = [.. groups.SelectMany(DotnetProcesses.InGroup).Prepend(Environment.ProcessId)];
+        foreach (int id in grouped.Concat(StartedApart(grouped, told)))
+        {
+            if ((!told.ContainsKey(id) || gone.Contains(id)) && Followable(id) is { } files)
+            {
+                come[id] = files;
+            }
+        }
+        List<RuntimeFiles> left = [];
+        lock (Gate)
+        {
+            foreach (int id in gone)
+            {
+                if (Told.TryGetValue(id, out RuntimeFiles? files) && files.Started == told[id])
+                {
+                    Told.Remove(id);
+                    Tell(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"-@{id}"));
+                    left.Add(files);
+                }
+            }
+            foreach (RuntimeFiles files in come.Values)
+            {
+                Follow(files);
+            }
+        }
+        foreach (RuntimeFiles files in left)
+        {
+            files.Remove();
+        }
+    }
+
+    /// <summary>The .NET processes with runtime files that no group listed holds but that a child started apart, told by the
+    /// <see cref="LineageVariable"/> each started with: each asked once by its id and start, unless followed already.</summary>
+    private static List<int> StartedApart(HashSet<int> grouped, Dictionary<int, long> told)
+    {
+        List<int> apart = [];
+        HashSet<(int Id, long Started)> found = [];
+        foreach ((int id, long started) in DotnetProcesses.WithRuntimeFiles())
+        {
+            if (grouped.Contains(id) || told.TryGetValue(id, out long followed) && followed == started)
+            {
+                continue;
+            }
+            found.Add((id, started));
+            if (!Lineages.TryGetValue((id, started), out bool ours))
+            {
+                ours = DotnetProcesses.VariableOf(id, LineageVariable) == Lineage.Value;
+                Lineages[(id, started)] = ours;
+            }
+            if (ours)
+            {
+                apart.Add(id);
+            }
+        }
+        foreach ((int, long) forgotten in Lineages.Keys.Where(key => !found.Contains(key)).ToList())
+        {
+            Lineages.Remove(forgotten);
+        }
+        return apart;
+    }
+
+    /// <summary>A process's runtime files, where the watchdog can be told them, a line each; null where they cannot be read.
+    /// Read outside the gate, as a process's environment is a call into the system.</summary>
+    private static RuntimeFiles? Followable(int id) =>
+        RuntimeFiles.Of(id) is { } files && !files.Paths.Any(path => path.Contains('\n', StringComparison.Ordinal)) ? files : null;
+
+    /// <summary>Follows a process's runtime files, told to the watchdog, unless they are followed already: those of an
+    /// earlier process of its id are struck off as it is found gone. Under the gate.</summary>
+    private static void Follow(RuntimeFiles files)
+    {
+        if (Told.TryAdd(files.Id, files))
+        {
+            TellFiles(files);
+        }
+    }
+
+    /// <summary>Lists a process's runtime files with the watchdog. Under the gate.</summary>
+    private static void TellFiles(RuntimeFiles files)
+    {
+        foreach (string path in files.Paths)
+        {
+            Tell(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"@{files.Id} {path}"));
         }
     }
 
@@ -293,6 +530,13 @@ internal static partial class Lifeline
             foreach (int group in Groups)
             {
                 started.StandardInput.Write($"+{group}\n");
+            }
+            foreach (RuntimeFiles files in Told.Values)
+            {
+                foreach (string path in files.Paths)
+                {
+                    started.StandardInput.Write(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"@{files.Id} {path}\n"));
+                }
             }
             if (AtEnds.Count > 0)
             {

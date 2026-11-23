@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Passenger.Core;
 using Passenger.Dap;
 using Passenger.Debugger.Interop;
 
@@ -27,7 +28,7 @@ public partial class ManagedDebugger
     /// <summary>The most bytes one debug register watches.</summary>
     private const int MostWatched = 8;
 
-    private const string NotAMember = "A data breakpoint watches a field or property of an object, or an element of an array, and this is neither";
+    private const string NotAMember = DebuggerWords.NotAMember;
 
     /// <summary>Why no data breakpoint can be set where the debugger runs, or null where one can: Windows on x64, the
     /// one system whose .NET runtime watches memory for a debugger.</summary>
@@ -99,7 +100,7 @@ public partial class ManagedDebugger
         }
         if (_process is null)
         {
-            return new DataBreakpointAnswer(null, "Nothing is being debugged");
+            return new DataBreakpointAnswer(null, DebuggerWords.NothingDebugged);
         }
         if (_process.TryIsRunning(out bool running) == Cor.S_OK && running)
         {
@@ -239,7 +240,7 @@ public partial class ManagedDebugger
         int size = member.Size;
         if (size > MostWatched)
         {
-            return new DataBreakpointAnswer(null, $"The breakpoint cannot be set. The hardware does not support monitoring of the requested number of bytes ({size}). The maximum number of bytes to track is {MostWatched}.");
+            return new DataBreakpointAnswer(null, $"The breakpoint cannot be set. The hardware does not support monitoring of the requested number of bytes ({Numbers.Said(size)}). The maximum number of bytes to track is {Numbers.Said(MostWatched)}.");
         }
         if (size is not (1 or 2 or 4 or 8) || address % (ulong)size != 0)
         {

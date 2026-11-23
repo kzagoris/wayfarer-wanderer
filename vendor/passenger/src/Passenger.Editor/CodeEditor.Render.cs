@@ -17,8 +17,8 @@ namespace Passenger.Editor;
 /// placeholder, annotations) after its last.</summary>
 public sealed partial class CodeEditor
 {
-    private readonly LabelCache<(string Text, int Style)> labels = new();
-    private readonly LabelCache<(int Number, bool Current)> numbers = new();
+    private readonly FrameKept<(string Text, int Style), TextLine> labels = new();
+    private readonly FrameKept<(int Number, bool Current), TextLine> numbers = new();
     private readonly Dictionary<TokenKind, TextRunProperties> runProperties = [];
     private (TextRunProperties Current, TextRunProperties Other) numberRuns;
 
@@ -38,10 +38,15 @@ public sealed partial class CodeEditor
         }
     }
 
+    /// <summary>How many times the editor has drawn its ground: each has the compositor draw the whole editor again, every
+    /// row's text over it.</summary>
+    public long GroundsDrawn { get; private set; }
+
     /// <summary>The editor's own drawing: the ground under the text and the gutter's. The rows draw themselves over it
     /// (<see cref="PrepareFrame"/>), so this is drawn again only for a change, never for a scroll.</summary>
     public override void Render(DrawingContext context)
     {
+        GroundsDrawn++;
         Size size = Bounds.Size;
         context.FillRectangle(palette.Background, new Rect(size));
         context.FillRectangle(palette.Gutter, new Rect(0, 0, GutterWidth, size.Height));
@@ -226,7 +231,7 @@ public sealed partial class CodeEditor
                     path.LineTo(new Point(head - tail - barb, barb));
                     path.EndFigure(false);
                 }
-                DrawShape(context, arrow, shape, tail, shaft);
+                DrawShape(context, null, arrow, shape, tail, shaft);
             }
         }
         finally
@@ -256,11 +261,11 @@ public sealed partial class CodeEditor
             path.LineTo(new Point(barb, size + barb));
             path.EndFigure(false);
         }
-        DrawShape(context, palette.PenOf(palette.SoftWrapSign, 1), sign, left, top);
+        DrawShape(context, null, palette.PenOf(palette.SoftWrapSign, 1), sign, left, top);
     }
 
-    /// <summary>Squiggles under errors, warnings and suggestions; unnecessary code is faded by laying
-    /// the background over it, half see-through.</summary>
+    /// <summary>The line under an error, a warning or a suggestion, each its own shape as well as its colour
+    /// (<see cref="Underlines"/>); unnecessary code is faded by laying the background over it, half see-through.</summary>
     private void DrawMarkers(DrawingContext context, LineView view, Gap[] gaps, double left, double y, double clipLeft, double clipRight)
     {
         RowSpan span = view.Span;
@@ -297,7 +302,7 @@ public sealed partial class CodeEditor
                 MarkerKind.Warning => palette.Warning,
                 _ => palette.Info,
             };
-            DrawWave(context, brush, x1, x2, y + metrics.LineHeight - 3, clipLeft, clipRight);
+            DrawUnderline(context, Underlines.Of(marker.Kind), brush, x1, x2, y + metrics.LineHeight - 3, clipLeft, clipRight);
         }
     }
 
@@ -325,50 +330,44 @@ public sealed partial class CodeEditor
         }
     }
 
-    /// <summary>A squiggle from x1 to x2, drawn only where it can be seen: whole waves off either edge are left out, so
-    /// one under a line of a million characters costs the screen's width. Made at the origin for its length and placed
-    /// there, so a scroll draws again the squiggles it moved without making them.</summary>
-    private void DrawWave(DrawingContext context, IBrush brush, double x1, double x2, double y, double clipLeft, double clipRight)
+    /// <summary>An underline from x1 to x2 in its shape, drawn only where it can be seen: whole repeats of its pattern off
+    /// either edge are left out, so one under a line of a million characters costs the screen's width. Made at the origin
+    /// for its length and placed there, so a scroll draws again the underlines it moved without making them.</summary>
+    private void DrawUnderline(DrawingContext context, Underline shape, IBrush brush, double x1, double x2, double y, double clipLeft, double clipRight)
     {
-        const double Step = 2.5;
-        double skipped = Math.Floor((clipLeft - (Step * 2) - x1) / (Step * 2));
+        double period = Underlines.Period(shape);
+        double skipped = Math.Floor((clipLeft - period - x1) / period);
         if (skipped > 0)
         {
-            x1 += skipped * Step * 2;
+            x1 += skipped * period;
         }
-        x2 = Math.Min(x2, clipRight + (Step * 2));
+        x2 = Math.Min(x2, clipRight + period);
         if (x2 <= x1)
         {
             return;
         }
         double length = x2 - x1;
-        ShapeKey key = new(ShapeKind.Wave, length, 0, 0, 0);
-        if (!shapes.TryGet(key, out StreamGeometry? wave))
+        ShapeKey key = new(ShapeKind.Underline, length, (int)shape, 0, 0);
+        if (!shapes.TryGet(key, out StreamGeometry? line))
         {
-            wave = shapes.Add(key, new StreamGeometry());
-            using StreamGeometryContext path = wave.Open();
-            path.BeginFigure(new Point(0, 0), false);
-            bool up = true;
-            for (double x = Step; x < length + Step; x += Step)
-            {
-                path.LineTo(new Point(Math.Min(x, length), up ? -2 : 0));
-                up = !up;
-            }
-            path.EndFigure(false);
+            line = shapes.Add(key, new StreamGeometry());
+            using StreamGeometryContext path = line.Open();
+            Underlines.Trace(path, shape, length);
         }
-        DrawShape(context, palette.PenOf(brush, 1), wave, x1, y);
+        DrawShape(context, null, palette.PenOf(brush, 1), line, x1, y);
     }
 
-    /// <summary>A shape made at the origin, drawn with its origin at a point.</summary>
-    private static void DrawShape(DrawingContext context, IPen pen, StreamGeometry shape, double x, double y)
+    /// <summary>A shape made at the origin, drawn with its origin at a point: the text's and the gutter columns' alike.</summary>
+    internal static void DrawShape(DrawingContext context, IBrush? brush, IPen? pen, StreamGeometry shape, double x, double y)
     {
         using (context.PushTransform(Matrix.CreateTranslation(x, y)))
         {
-            context.DrawGeometry(null, pen, shape);
+            context.DrawGeometry(brush, pen, shape);
         }
     }
 
-    private readonly ShapeCache shapes = new();
+    /// <summary>The shapes drawn (squiggles, tabs' arrows, wrap signs, fold chevrons), by what they are and how large.</summary>
+    private readonly FrameKept<ShapeKey, StreamGeometry> shapes = new();
 
     /// <summary>How many shapes (squiggles, tabs' arrows, wrap signs, fold chevrons, the gutter columns' marks) the editor
     /// has made to draw: what a frame that moved none should leave as it was.</summary>
@@ -379,58 +378,11 @@ public sealed partial class CodeEditor
 
     private enum ShapeKind
     {
-        Wave,
+        Underline,
         Tab,
         Wrap,
         Open,
         Folded,
-    }
-
-    /// <summary>The shapes drawn (squiggles, tabs' arrows, wrap signs, fold chevrons), by what they are and how large, each
-    /// with the frame that last drew it: a row drawn later draws again those the rows on screen drew without making them,
-    /// and a frame lets go of those no row on screen drew (<see cref="Begin"/>).</summary>
-    private sealed class ShapeCache
-    {
-        private readonly Dictionary<ShapeKey, (StreamGeometry Shape, long Drawn)> kept = [];
-        private long now;
-
-        public bool TryGet(ShapeKey key, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out StreamGeometry? shape)
-        {
-            ref (StreamGeometry Shape, long Drawn) entry = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrNullRef(kept, key);
-            if (System.Runtime.CompilerServices.Unsafe.IsNullRef(ref entry))
-            {
-                shape = null;
-                return false;
-            }
-            entry.Drawn = now;
-            shape = entry.Shape;
-            return true;
-        }
-
-        /// <summary>How many shapes have been made: what drawing them has cost.</summary>
-        public long Made { get; private set; }
-
-        public StreamGeometry Add(ShapeKey key, StreamGeometry shape)
-        {
-            Made++;
-            kept[key] = (shape, now);
-            return shape;
-        }
-
-        /// <summary>Starts a frame, letting go of the shapes last drawn before <paramref name="keepFrom"/>.</summary>
-        public void Begin(long frame, long keepFrom)
-        {
-            now = frame;
-            foreach ((ShapeKey key, (StreamGeometry _, long drawn)) in kept)
-            {
-                if (drawn < keepFrom)
-                {
-                    kept.Remove(key);
-                }
-            }
-        }
-
-        public void Clear() => kept.Clear();
     }
 
     /// <summary>The text's I-beam and a link's hand, made once.</summary>
@@ -520,6 +472,10 @@ public sealed partial class CodeEditor
         }
         if (!runProperties.TryGetValue(kind, out TextRunProperties? props))
         {
+            if (TextLooks.TryGet(kind, out TextLook own))
+            {
+                return runProperties[kind] = OwnRun(own);
+            }
             IBrush brush = palette.Syntax(kind);
             SyntaxStyle? style = palette.Style(kind);
             int set = style is not null ? 0 : kind switch
@@ -540,6 +496,35 @@ public sealed partial class CodeEditor
             runProperties[kind] = props;
         }
         return props;
+    }
+
+    /// <summary>A look a highlighter gave (<see cref="TextLooks"/>): its colours the theme's tokens' or its own, the text's
+    /// where it gives none, its ground drawn behind the text.</summary>
+    private GenericTextRunProperties OwnRun(TextLook look)
+    {
+        IBrush fore = Brush(look.Fore) ?? palette.Text;
+        if (look.Opacity < 1 && fore is ISolidColorBrush solid)
+        {
+            fore = new ImmutableSolidColorBrush(solid.Color, solid.Opacity * look.Opacity);
+        }
+        TextDecorationCollection? lines = null;
+        if (look.Style.HasFlag(LookStyle.Underline))
+        {
+            (lines ??= []).AddRange(TextDecorations.Underline);
+        }
+        if (look.Style.HasFlag(LookStyle.Strike))
+        {
+            (lines ??= []).AddRange(TextDecorations.Strikethrough);
+        }
+        Typeface face = new(FontFamily, look.Style.HasFlag(LookStyle.Italic) ? FontStyle.Italic : FontStyle.Normal,
+            look.Style.HasFlag(LookStyle.Bold) ? FontWeight.Bold : FontWeight.Normal);
+        return new GenericTextRunProperties(face, FontSize, textDecorations: lines, foregroundBrush: fore, backgroundBrush: Brush(look.Back),
+            fontFeatures: ligatures ? null : NoLigatures);
+
+        IBrush? Brush(LookColour colour) =>
+            colour.Token is { } token ? Tokens.Find(this, token)?.ToImmutable()
+            : colour.Argb != 0 ? new ImmutableSolidColorBrush(Color.FromUInt32(colour.Argb))
+            : null;
     }
 
     /// <summary>The run properties made for each look: a brush, the theme's style or none, and the kind's own (plain, italic, bold).</summary>
@@ -574,8 +559,8 @@ public sealed partial class CodeEditor
 
     /// <summary>Every brush the editor paints with, from the look in force's <c>Passenger.Editor.*</c>,
     /// <c>Passenger.Syntax.*</c> and other tokens, never a colour of its own, so the look always draws the editor (a
-    /// token the theme left out draws nothing), each taken as an immutable brush; and the problem counts' icons, the
-    /// theme's <c>Icon.*</c> geometries, or none. Read again as the editor joins a window.</summary>
+    /// token the theme left out draws nothing), each taken as an immutable brush. Read again as the editor joins a
+    /// window.</summary>
     private sealed class Palette
     {
         private static readonly IBrush None = Brushes.Transparent;
@@ -608,7 +593,6 @@ public sealed partial class CodeEditor
         public IBrush Faded { get; private init; } = None;
         public IBrush SearchCurrent { get; private init; } = None;
         public IBrush Annotation { get; private init; } = None;
-        public IBrush Passed { get; private init; } = None;
         public IBrush Bookmark { get; private init; } = None;
         public IBrush DiffAdded { get; private init; } = None;
         public IBrush DiffModified { get; private init; } = None;
@@ -643,9 +627,6 @@ public sealed partial class CodeEditor
         public IBrush SmartStepTarget { get; private init; } = None;
         public IBrush SmartStepChosen { get; private init; } = None;
         public IBrush SmartStepBorder { get; private init; } = None;
-        public Geometry? ErrorIcon { get; private init; }
-        public Geometry? WarningIcon { get; private init; }
-        public Geometry? PassedIcon { get; private init; }
 
         public IBrush Syntax(TokenKind kind) => syntax.TryGetValue(kind, out IBrush? brush) ? brush : Text;
 
@@ -702,7 +683,6 @@ public sealed partial class CodeEditor
                 Faded = Fade(F(TokenKeys.Editor_Background), 0.5) ?? defaults.Faded,
                 SearchCurrent = F(TokenKeys.Editor_SearchCurrent) ?? defaults.SearchCurrent,
                 Annotation = F(TokenKeys.Editor_InlineValue) ?? defaults.Annotation,
-                Passed = F(TokenKeys.Test_Passed) ?? defaults.Passed,
                 Bookmark = F(TokenKeys.Editor_Bookmark) ?? defaults.Bookmark,
                 DiffAdded = F(TokenKeys.Diff_Added) ?? defaults.DiffAdded,
                 DiffModified = F(TokenKeys.Diff_Modified) ?? defaults.DiffModified,
@@ -735,9 +715,6 @@ public sealed partial class CodeEditor
                 SmartStepTarget = F(TokenKeys.Editor_SmartStepTarget) ?? defaults.SmartStepTarget,
                 SmartStepChosen = F(TokenKeys.Editor_SmartStepChosen) ?? defaults.SmartStepChosen,
                 SmartStepBorder = F(TokenKeys.Editor_SmartStepBorder) ?? defaults.SmartStepBorder,
-                ErrorIcon = Icon(control, IconKeys.Error),
-                WarningIcon = Icon(control, IconKeys.Problems),
-                PassedIcon = Icon(control, IconKeys.Check),
             };
             foreach (TokenKind kind in Enum.GetValues<TokenKind>())
             {
@@ -763,8 +740,5 @@ public sealed partial class CodeEditor
 
         private static IBrush? Fade(IBrush? brush, double opacity) =>
             brush is ISolidColorBrush solid ? new SolidColorBrush(solid.Color, opacity).ToImmutable() : null;
-
-        private static Geometry? Icon(Control control, string key) =>
-            control.TryFindResource(key, control.ActualThemeVariant, out object? value) ? value as Geometry : null;
     }
 }

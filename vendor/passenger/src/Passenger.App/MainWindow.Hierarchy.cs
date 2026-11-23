@@ -25,6 +25,7 @@ public partial class MainWindow
             return hierarchy;
         }, Docking.ToolAnchor.RightTop)
         {
+            Serves = ToolWindowServes.EveryFolder,
             ExpandAll = () => IdeErrors.Observe(Hierarchy.ExpandAllAsync()),
             CollapseAll = () => Hierarchy.CollapseAll(),
         });
@@ -82,7 +83,7 @@ public partial class MainWindow
         CSharpDocument? features = csharp.For(active);
         if (!csharp.IsReady || features is { Lsp: null })
         {
-            return (null, Said(csharp.Unready(what)));
+            return (null, Said(csharp.Unready(what, active)));
         }
         try
         {

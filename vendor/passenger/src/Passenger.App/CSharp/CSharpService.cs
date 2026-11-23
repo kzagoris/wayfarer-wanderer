@@ -4,6 +4,7 @@ using System.Threading.Channels;
 using Passenger.App.Run;
 using Passenger.App.Workspace;
 using Passenger.Core;
+using Passenger.Editor;
 using Passenger.Lsp;
 using Passenger.Text;
 using Passenger.Workspace;
@@ -75,6 +76,7 @@ public sealed partial class CSharpService : IAsyncDisposable
         this.warm = warm;
         this.headStart = headStart;
         Generated = new GeneratedCode(() => session);
+        othersPause = new Debounce(Editors.TypingPauses.Diagnostics, PullOthers);
     }
 
     /// <summary>The code source generators made, copied where places lead into it and shown read-only.</summary>
@@ -271,21 +273,22 @@ public sealed partial class CSharpService : IAsyncDisposable
     /// <summary>Whether a restore the server ran as it loaded has ended and the projects it restored are still to load again,
     /// which until then the server answers for as loaded before their restore (with no package's build files, its
     /// generators among them); or have loaded again in a batch still under way, whose end begins the wait for the
-    /// generators' run; or the generators' run that load queued has not yet run, or the server has yet to read what the
-    /// load's builds wrote (<see cref="WaitForGenerators"/>): none for a file of a project the restore failed for.</summary>
-    public bool ReloadingRestored(string path)
+    /// generators' run; or that run, or the server's read of what the load's builds wrote, is still to come (<see
+    /// cref="WaitForGenerators"/>): for a file, none of a project the restore failed for; with none, the solution's.</summary>
+    public bool ReloadingRestored(string? path)
     {
         UiThread.Check();
         if (!reloadingRestored && !restoredLoaded && !RestoredStillToLoad() && !GeneratorsWaited())
         {
             return false;
         }
-        return workspace is not { } opened || ProjectModel.Owning(ProjectsNow?.Invoke() ?? opened.Projects, path) is not { } project || !restoreFailedFor.Contains(project.Path);
+        return path is null || workspace is not { } opened || ProjectModel.Owning(ProjectsNow?.Invoke() ?? opened.Projects, path) is not { } project
+            || !restoreFailedFor.Contains(project.Path);
     }
 
-    /// <summary>What an agent's question of a file waits for while <see cref="ReloadingRestored"/> holds, in words; null when
-    /// it waits for none of it.</summary>
-    public string? ReloadingWhat(string path)
+    /// <summary>What an agent's question of a file, or with none of the whole solution, waits for while <see
+    /// cref="ReloadingRestored"/> holds, in words; null when it waits for none of it.</summary>
+    public string? ReloadingWhat(string? path)
     {
         UiThread.Check();
         if (!ReloadingRestored(path))
@@ -300,9 +303,15 @@ public sealed partial class CSharpService : IAsyncDisposable
         {
             return "the C# language server to load again the projects its restore brought packages to";
         }
-        return unreadInputs.Count > 0 ? $"the C# language server to read {Path.GetFileName(unreadInputs[0])}, which a design-time build wrote again"
-            : "the C# language server's source generators to run again after its load";
+        return unreadInputs.Count > 0 ? Reading(unreadInputs[0]) : "the C# language server's source generators to run again after its load";
     }
+
+    /// <summary>What a question waits for while the server holds a file its builds wrote otherwise than the disk, in words.</summary>
+    private static string Reading(string file) => $"the C# language server to read {Path.GetFileName(file)}, which a design-time build wrote again";
+
+    /// <summary>What the generators' wait last ran out still waiting for (<see cref="Reading"/>), and when, a timestamp of
+    /// Stopwatch's: an agent's question waiting for it then is refused, as the server's answer would be of the text before.</summary>
+    public (string What, long At)? RanOutReading { get; private set; }
 
     /// <summary>How long after a load the generators are waited for, with no extension to say when they have run.</summary>
     private static readonly TimeSpan GeneratorsRerun = TimeSpan.FromSeconds(5);
@@ -373,7 +382,8 @@ public sealed partial class CSharpService : IAsyncDisposable
     /// the server holds as the disk has them the files the load's builds wrote again (<see cref="GeneratorsReadAsync"/>).</summary>
     private void WaitForGenerators()
     {
-        Task? run = session is { Server.ExtensionProblem: null } asked ? GeneratorsReadAsync(asked) : null;
+        int wait = ++generatorsWaits;
+        Task? run = session is { Server.ExtensionProblem: null } asked ? GeneratorsReadAsync(asked, wait) : null;
         if (run is not null)
         {
             // A server gone, or refusing, has nothing left to run: the wait ends either way.
@@ -382,13 +392,18 @@ public sealed partial class CSharpService : IAsyncDisposable
         generatorsRun = (Stopwatch.GetTimestamp(), run);
     }
 
+    /// <summary>How many generators' waits began (<see cref="WaitForGenerators"/>): only the latest says what it waits for.</summary>
+    private int generatorsWaits;
+
     /// <summary>Done once the generators' runs the server has queued have run and it holds as the disk has them the files in
     /// its projects' intermediate output folders: a load keeps the text it read of a file its builds wrote again (the
-    /// settings MAUI's generator reads of a page) until the server hears it changed, a moment later, and a generator run
-    /// before then makes nothing of it. Asked again each moment while one is not, for <see cref="InputsUnheard"/> at most.</summary>
-    private async Task GeneratorsReadAsync(RoslynSession asked)
+    /// settings MAUI's generator reads of a page) until the server hears it changed, and a generator run before then makes
+    /// nothing of it. Each it holds otherwise is told it as changed, once for each time it was written (<see
+    /// cref="TellUnreadAsync"/>), and asked again each moment while one is not, for <see cref="InputsUnheard"/> at most.</summary>
+    private async Task GeneratorsReadAsync(RoslynSession asked, int wait)
     {
         long began = Stopwatch.GetTimestamp();
+        Dictionary<string, FileStamp> told = new(PathNames.Comparer);
         try
         {
             while (true)
@@ -407,28 +422,59 @@ public sealed partial class CSharpService : IAsyncDisposable
                     }
                     return;
                 }
-                unreadInputs = unread;
+                bool latest = wait == generatorsWaits;
+                if (latest)
+                {
+                    unreadInputs = unread;
+                }
                 if (unread.Count == 0)
                 {
                     return;
                 }
                 if (Stopwatch.GetElapsedTime(began) >= InputsUnheard)
                 {
-                    IdeErrors.Write($"C# language server (process {asked.Server.ProcessId}) still held {unread[0]} otherwise than the disk {Durations.Said(InputsUnheard)} after its load: "
-                        + "agents' questions no longer wait for it");
+                    // A later wait, still under way, says what it comes to itself.
+                    if (latest)
+                    {
+                        RanOutReading = (Reading(unread[0]), Stopwatch.GetTimestamp());
+                        IdeErrors.Write($"C# language server (process {asked.Server.ProcessId}) still held {unread[0]} otherwise than the disk {Durations.Said(InputsUnheard)} after its load: "
+                            + "agents' questions waiting for it are refused, and those after no longer wait for it");
+                    }
                     return;
                 }
+                await TellUnreadAsync(asked, unread, told);
                 await Task.Delay(TimeSpan.FromMilliseconds(100));
             }
         }
         finally
         {
-            if (session == asked)
+            if (session == asked && wait == generatorsWaits)
             {
                 unreadInputs = [];
             }
         }
     }
+
+    /// <summary>Tells the server that each file it holds otherwise than the disk changed, off the window's thread, unless it
+    /// was told of the file as it stands already (<paramref name="told"/>, kept by the one wait): its builds' outputs are
+    /// written in place, which a watcher behind the system's may never hear, and the server takes no file's text again
+    /// until told.</summary>
+    private static Task TellUnreadAsync(RoslynSession asked, IReadOnlyList<string> unread, Dictionary<string, FileStamp> told) => BackgroundWork.Run(() =>
+    {
+        List<FileEvent> changed = [];
+        foreach (string path in unread)
+        {
+            if (FileStamp.Of(path) is { } stamp && (!told.TryGetValue(path, out FileStamp was) || was != stamp))
+            {
+                told[path] = stamp;
+                changed.Add(new FileEvent(PathNames.Canonical(path), FileChangeType.Changed));
+            }
+        }
+        if (changed.Count > 0)
+        {
+            asked.Server.WatchedFiles.TellFound(changed);
+        }
+    });
 
     /// <summary>The server's answer once the generators' runs it queued have run; null, said in the log, where it refused
     /// to say (it is waited for no more, so agents' questions go on as of whatever its generators made).</summary>
@@ -482,12 +528,35 @@ public sealed partial class CSharpService : IAsyncDisposable
         {
             return true;
         }
-        if (restoreFailed || workspace is not { } opened || ProjectModel.Owning(ProjectsNow?.Invoke() ?? opened.Projects, path) is not { } project || RestoresNone(project.Path))
+        if (restoreFailed || workspace is not { } opened || ProjectModel.Owning(ProjectsNow?.Invoke() ?? opened.Projects, path) is not { } project)
         {
             return false;
         }
-        return project.Evaluated?.Properties.GetValueOrDefault(Passenger.Host.CarriedProperties.ProjectAssetsFile)?.Value is { Length: > 0 } assets && !File.Exists(assets);
+        return RestoreAhead(project);
     }
+
+    /// <summary>The project the server is still to restore for a question of the whole solution, by name, as <see
+    /// cref="AwaitsRestore"/> holds of a file's: one of the restore under way's (the folder's projects while it names none),
+    /// else the first it has loaded whose assets file is not yet written; null for none. Only those it loaded, as it
+    /// restores no other.</summary>
+    public string? RestoreAwaited()
+    {
+        UiThread.Check();
+        if (restoringTheirs)
+        {
+            return restoring.FirstOrDefault() is { } begun ? Path.GetFileNameWithoutExtension(begun) : "the folder's projects";
+        }
+        if (restoreFailed || workspace is not { } opened || session is not { } running || reported.Server != running.Server)
+        {
+            return null;
+        }
+        return (ProjectsNow?.Invoke() ?? opened.Projects).FirstOrDefault(p => reported.Projects.Contains(p.Path) && RestoreAhead(p))?.Name;
+    }
+
+    /// <summary>Whether the server is still to restore a project, its assets file, as its evaluation names it, not yet
+    /// written, unless its last load or restore has left it to a load to come (<see cref="RestoresNone"/>).</summary>
+    private bool RestoreAhead(ProjectModel project) => !RestoresNone(project.Path)
+        && project.Evaluated?.Properties.GetValueOrDefault(Passenger.Host.CarriedProperties.ProjectAssetsFile)?.Value is { Length: > 0 } assets && !File.Exists(assets);
 
     /// <summary>Whether the server is to restore a project only once it loads it again: its last load failed, taking in
     /// nothing to restore, or its last restore failed, by itself or with the solution's.</summary>
@@ -501,18 +570,24 @@ public sealed partial class CSharpService : IAsyncDisposable
     public ServerWatches? Watching => watching;
 
     /// <summary>Stops watching for the server what is under folders about to go or move, deleted, renamed or moved by the IDE
-    /// (<see cref="ServerWatches.LetGo"/>), in the watches of a server started or taken up meanwhile too, until disposed:
-    /// Windows moves and deletes no folder with a folder inside it watched.</summary>
-    public IDisposable LetGoOf(IReadOnlyList<string> folders)
+    /// (<see cref="ServerWatches.LetGo"/>), in the watches of a server started or taken up meanwhile too, until disposed
+    /// (<c>Held</c>): Windows moves and deletes no folder with a folder inside it watched. <c>Stopped</c> is done once the
+    /// watchers stopped now have stopped reading there.</summary>
+    public (IDisposable Held, Task Stopped) LetGoOf(IReadOnlyList<string> folders)
     {
         UiThread.Check();
         FoldersGoing letting = new(this, folders);
+        Task stopped = Task.CompletedTask;
         lock (goingGate)
         {
-            letting.Watches = watching?.LetGo(folders);
+            if (watching?.LetGo(folders) is ({ } held, Task watchersStopped))
+            {
+                letting.Watches = held;
+                stopped = watchersStopped;
+            }
             going.Add(letting);
         }
-        return letting;
+        return (letting, stopped);
     }
 
     /// <summary>Has a server's new watches let go of every folder still going (<see cref="LetGoOf"/>), as they are made.</summary>
@@ -522,7 +597,7 @@ public sealed partial class CSharpService : IAsyncDisposable
         {
             foreach (FoldersGoing letting in going)
             {
-                letting.Watches = watches.LetGo(letting.Folders);
+                letting.Watches = watches.LetGo(letting.Folders).Held;
             }
         }
     }
@@ -554,6 +629,13 @@ public sealed partial class CSharpService : IAsyncDisposable
     /// (<see cref="Restart"/>).</summary>
     public bool IsStopped { get; private set; }
 
+    /// <summary>Why the server could not start, in the words of what stopped it, until it is started again; null while it
+    /// could.</summary>
+    public string? Unavailable { get; private set; }
+
+    /// <summary>Whether the server could not start, <see cref="Unavailable"/> saying why, until it is started again.</summary>
+    public bool IsUnavailable => Unavailable is not null;
+
     /// <summary>The server ended on its own or stopped answering, with what was done about it: started again, or left stopped
     /// (<see cref="IsStopped"/>), saying why. Raised on the UI thread.</summary>
     public event EventHandler<string>? Stopped;
@@ -567,8 +649,9 @@ public sealed partial class CSharpService : IAsyncDisposable
     /// with it (a warning), or C# was ready after it: what the status bar says of it; raised on the UI thread.</summary>
     public event EventHandler<ServerSaid>? LoadRanLong;
 
-    /// <summary>A request waited past its patience (<see cref="LanguageServer.Patience"/>), the server alive or not: what the
-    /// status bar says of it, a warning with the log, which says where the conversation stood; raised on the UI thread.</summary>
+    /// <summary>A request waited past its patience (<see cref="LanguageServer.Patience"/>), someone waiting on it or the
+    /// server leaving its check unanswered (<see cref="LongWait.Told"/>): what the status bar says of it, a warning with the
+    /// log, which says where the conversation stood; raised on the UI thread.</summary>
     public event EventHandler<ServerSaid>? WaitedLong;
 
     /// <summary>The problems the server met loading the projects changed; raised on the UI thread.</summary>
@@ -1230,6 +1313,7 @@ public sealed partial class CSharpService : IAsyncDisposable
         CancellationTokenSource cancel = new();
         starting = cancel;
         IsStopped = false;
+        Unavailable = null;
         reloadingRestored = restoreFailed = restoringTheirs = restoredLoaded = false;
         restoring.Clear();
         restoredNone.Clear();
@@ -1372,6 +1456,8 @@ public sealed partial class CSharpService : IAsyncDisposable
     {
         UiThread.Check();
         disposed = true;
+        othersPause.Stop();
+        typedIn = null;
         Generated.Stop();
         analysing?.Cancel();
         starting?.Cancel();
@@ -1660,6 +1746,7 @@ public sealed partial class CSharpService : IAsyncDisposable
             string why = error is LanguageServerFailed failed ? failed.Reason : error.Message;
             IdeErrors.Write($"The C# language server could not start for {opening.Folder}: {error}");
             Progress = null;
+            Unavailable = why;
             SetState($"C# unavailable: {why}");
         }
         finally
@@ -2041,7 +2128,7 @@ public sealed partial class CSharpService : IAsyncDisposable
         saidProject = first.Project;
         int more = batch.Distinct().Count() - 1;
         string kind = first.Severity == ProblemSeverity.Error ? "Error" : "Warning";
-        string rest = more == 0 ? string.Empty : $"{(first.Message.EndsWith('.') ? " " : "; ")}Problems lists {more} more";
+        string rest = more == 0 ? string.Empty : $"{(first.Message.EndsWith('.') ? " " : "; ")}Problems lists {Numbers.Said(more)} more";
         Said?.Invoke(this, new ServerSaid($"{kind} while loading {Shown(first.Project)}: {first.Message}{rest}", first.Severity, first));
     }
 
@@ -2198,10 +2285,11 @@ public sealed partial class CSharpService : IAsyncDisposable
         Replace(lost, workspace, "The C# language server ended");
     }
 
-    /// <summary>A request of the session's server waited past its patience: said in the status bar, its words in the log.</summary>
+    /// <summary>A request of the session's server waited past its patience: said in the status bar where the server says
+    /// the person is told of it (<see cref="LongWait.Told"/>), its words in the log however it is.</summary>
     private void OnWaitedLong(RoslynSession slow, LongWait wait)
     {
-        if (disposed || session != slow)
+        if (disposed || session != slow || !wait.Told)
         {
             return;
         }
@@ -2230,13 +2318,14 @@ public sealed partial class CSharpService : IAsyncDisposable
     }
 
     /// <summary>Starts the server again at a person's word, in place of the one running or starting, its restarts counted
-    /// afresh: one left stopped for ending too often runs again once what ended it is gone.</summary>
-    public void Restart()
+    /// afresh: one left stopped for ending too often runs again once what ended it is gone. False where none starts: C# has
+    /// ended with its window, or has no workspace yet.</summary>
+    public bool Restart()
     {
         UiThread.Check();
         if (disposed || workspace is not { } restarting)
         {
-            return;
+            return false;
         }
         restarts.Forget();
         if (session is { } running)
@@ -2245,6 +2334,7 @@ public sealed partial class CSharpService : IAsyncDisposable
         }
         IdeErrors.Write($"The C# language server is started again for {restarting.Folder}, as asked");
         Start(restarting);
+        return true;
     }
 
     /// <summary>A server, as it ran or as it started, gone: started again, unless servers have gone too often to be worth
@@ -2326,6 +2416,47 @@ public sealed partial class CSharpService : IAsyncDisposable
 
     /// <summary>Whether no tab shows an open file, which the server's refresh leaves to be pulled once shown or asked.</summary>
     public Func<OpenDocument, bool> Unseen { get; init; } = _ => false;
+
+    /// <summary>A file's text changed: the server's diagnostics of another file may depend on it (a global using it
+    /// declares, a type or member it holds), of which the server says nothing, so the others are pulled again once typing
+    /// pauses (<see cref="PullOthers"/>).</summary>
+    internal void OthersMayHaveMoved(OpenDocument changed)
+    {
+        typedIn = changed;
+        othersPause.Restart();
+    }
+
+    /// <summary>The pause after an edit that the other files' pull waits for (<see cref="OthersMayHaveMoved"/>).</summary>
+    private readonly Debounce othersPause;
+
+    /// <summary>The file typed in last, which pulls its own diagnostics after the same pause.</summary>
+    private OpenDocument? typedIn;
+
+    /// <summary>Each file shown but the one typed in last pulled again, one no tab shows once shown.</summary>
+    private Task PullOthers()
+    {
+        if (disposed)
+        {
+            return Task.CompletedTask;
+        }
+        foreach ((OpenDocument open, CSharpDocument features) in documents)
+        {
+            if (open == typedIn)
+            {
+                continue;
+            }
+            if (Unseen(open))
+            {
+                features.Stale = true;
+            }
+            else
+            {
+                features.RefreshDiagnostics();
+            }
+        }
+        typedIn = null;
+        return Task.CompletedTask;
+    }
 
     /// <summary>A file shown: one a refresh passed over while unseen is pulled now.</summary>
     public void Shown(OpenDocument? document)
@@ -2508,8 +2639,18 @@ public sealed partial class CSharpService : IAsyncDisposable
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>What the status bar says when a command (<paramref name="what"/>) asks the server before it is ready.</summary>
-    public string Unready(string what) => $"{what} needs the C# language server: {State}";
+    /// <summary>What the status bar says when a command (<paramref name="what"/>) asks the server before it can answer: its
+    /// state while it is not ready; once it is, why it has not taken in the file asked of (<paramref name="document"/>).</summary>
+    public string Unready(string what, OpenDocument? document = null)
+    {
+        if (!IsReady || document is null || For(document) is not { Lsp: null } features)
+        {
+            return $"{what} needs the C# language server: {State}";
+        }
+        return features.TooDeep ? $"{what} cannot run: {Refusals.TooDeep(document.Name)}"
+            : Refusals.NotInServerYet(what, document.Name, arriving.TryGetValue(document.Path, out Arrival? arrival) && !arrival.Decided
+                ? Path.GetFileNameWithoutExtension(arrival.Project) : null);
+    }
 }
 
 /// <summary>One error or warning of the solution's, in its file, where it starts as the editor counts the file's lines.</summary>
@@ -2550,7 +2691,7 @@ public readonly record struct AnalysisStep(long At, AnalysisStepKind Kind, strin
         string source = Source ?? "every source";
         return Kind switch
         {
-            AnalysisStepKind.Asked => $"{source} asked (its pull {Count})",
+            AnalysisStepKind.Asked => $"{source} asked (its pull {Numbers.Said(Count)})",
             AnalysisStepKind.Analysed => $"{source} said every file analysed{(Count > 0 ? ", its first round over" : string.Empty)}",
             AnalysisStepKind.Answered => $"{source} answered, {Plural.Of(Count, "report")} changed",
             AnalysisStepKind.LetGo => $"{source} let go",
@@ -2558,8 +2699,8 @@ public readonly record struct AnalysisStep(long At, AnalysisStepKind Kind, strin
             AnalysisStepKind.Resting => $"{source} answered at once with nothing new: asks again in 2 s",
             AnalysisStepKind.Waiting => $"{source} waits for {Plural.Of(Count, "file pull")}",
             AnalysisStepKind.Refreshed => $"the server's refresh, {Plural.Of(Count, "pull")} let go",
-            AnalysisStepKind.FilePullBegun => $"a file pull begun, {Count} under way",
-            AnalysisStepKind.FilePullEnded => $"a file pull ended, {Count} under way",
+            AnalysisStepKind.FilePullBegun => $"a file pull begun, {Numbers.Said(Count)} under way",
+            AnalysisStepKind.FilePullEnded => $"a file pull ended, {Numbers.Said(Count)} under way",
             _ => Kind.ToString(),
         };
     }

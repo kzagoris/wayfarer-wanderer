@@ -17,7 +17,7 @@ public sealed class TestFramesStrip : Border
     private const double ThumbnailHeight = 96;
     private const double ThumbnailWidth = 160;
 
-    private readonly StackPanel thumbnails = new() { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(8, 6) };
+    private readonly StackPanel thumbnails = new() { Orientation = Orientation.Horizontal, Spacing = Gaps.Normal, Margin = new Thickness(Gaps.Normal, Gaps.Small) };
 
     /// <summary>The results' frames shown, by the result they are of: a run's results are new ones, though a test run
     /// again writes its frame where it wrote the last.</summary>
@@ -26,7 +26,7 @@ public sealed class TestFramesStrip : Border
     public TestFramesStrip()
     {
         IsVisible = false;
-        BorderThickness = new Thickness(0, 0, 0, 1);
+        BorderThickness = Hairlines.Below;
         this.Bind(BorderBrushProperty, this.GetResourceObservable(TokenKeys.Divider));
         // Held to half the room above the details (Fit), the thumbnails draw smaller rather than leaving the details a line.
         Child = new ScrollViewer
@@ -112,11 +112,11 @@ public sealed class TestFramesStrip : Border
             IsEnabled = frame.Picture is not null,
             Content = new StackPanel
             {
-                Spacing = 3,
+                Spacing = Gaps.Tight,
                 Children =
                 {
                     new Border { Height = ThumbnailHeight, Child = picture },
-                    new TextBlock { Text = frame.Name, FontSize = 12, MaxWidth = ThumbnailWidth, TextTrimming = TextTrimming.CharacterEllipsis },
+                    new TextBlock { Classes = { StyleClasses.Caption }, Text = frame.Name, MaxWidth = ThumbnailWidth, TextTrimming = TextTrimming.CharacterEllipsis },
                     Muted(size),
                 },
             },
@@ -149,7 +149,7 @@ public sealed class TestFramesStrip : Border
     /// <summary>A picture with a hairline round it, so a white window stands apart from a light theme.</summary>
     private static Border Outlined(Image picture)
     {
-        Border outline = new() { BorderThickness = new Thickness(1), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, Child = picture };
+        Border outline = new() { BorderThickness = Hairlines.Round, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, Child = picture };
         outline.Bind(Border.BorderBrushProperty, outline.GetResourceObservable(TokenKeys.Divider));
         return outline;
     }
@@ -157,9 +157,7 @@ public sealed class TestFramesStrip : Border
     private static TextBlock Muted(string text)
     {
         // A caption under a picture, smaller than the page's words.
-        TextBlock muted = MutedText.Of(text);
-        muted.FontSize = 11;
-        return muted;
+        return MutedText.Caption(text);
     }
 }
 

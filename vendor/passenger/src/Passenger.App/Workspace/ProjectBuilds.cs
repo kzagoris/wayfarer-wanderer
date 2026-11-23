@@ -59,6 +59,9 @@ public sealed class ProjectBuilds
     /// <summary>The project whose next builds the server asks for are held for a test (<see cref="HoldNextAsked"/>).</summary>
     private (string Project, Task Until, TaskCompletionSource Reached)? asked;
 
+    /// <summary>What the next look at a project's builds for the server runs as it begins, for a test (<see cref="WhileNextLook"/>).</summary>
+    private (string Project, Action What)? meanwhile;
+
     /// <param name="projects">The open workspace's projects to load, those of the file shown (and those it references)
     /// apart, asked on the UI thread as the server is ready for them.</param>
     /// <param name="workspace">The open workspace, whose solution's global properties and build configuration chosen
@@ -243,9 +246,10 @@ public sealed class ProjectBuilds
         Pump();
         if (first.Count > 0)
         {
-            IdeErrors.Write($"C# language server loads {string.Join(", ", first.Select(Path.GetFileNameWithoutExtension))} first, for the file shown ({first.Count(standing.ContainsKey)} of them as built before)");
+            IdeErrors.Write($"C# language server loads {string.Join(", ", first.Select(Path.GetFileNameWithoutExtension))} first, for the file shown ({Numbers.Said(first.Count(standing.ContainsKey))} of them as built before)");
         }
-        return new FedProjects([.. first.Select(Open)], [.. rest.Select(Open)], standing.Count > 0 ? looked : null);
+        return new FedProjects([.. first.Select(Open)], [.. rest.Select(Open)], standing.Count > 0 ? looked : null,
+            standing.Keys.ToDictionary(p => p, p => (IReadOnlyList<InputRead>)AsRead(held[p].Inputs), StringComparer.Ordinal));
 
         ProjectToOpen Open(string path) => standing.GetValueOrDefault(path) ?? new(path, null);
     }
@@ -280,8 +284,14 @@ public sealed class ProjectBuilds
         return reached.Task;
     }
 
+    /// <summary>The next look at what a project's builds read, for the server's answer, runs <paramref name="what"/> as it
+    /// begins, on the window's thread, for a test of what has happened by then.</summary>
+    public void WhileNextLook(string project, Action what) => meanwhile = (project, what);
+
     /// <summary>One project's builds as the server asks for them: those kept when they stand, else built now, with what
-    /// they read that changed as they were made.</summary>
+    /// they read that changed as they were made. A project under a folder about to go or move, or whose builds read files
+    /// under it (its wildcards take them in), is answered once that is done (<see cref="HoldOff"/>): the answer looks at
+    /// what its builds read, and the server then reads its files.</summary>
     private async Task<FedProject> InfoAsync(string path)
     {
         if (asked is { } hold && PathNames.Same(hold.Project, path))
@@ -291,9 +301,10 @@ public sealed class ProjectBuilds
             await hold.Until;
         }
         await TakeCacheAsync();
-        if (!waiting.ContainsKey(path) && known.TryGetValue(path, out KeptBuild? held) && await BackgroundWork.Run(() => held.Inputs.All(Stamps.Holds)))
+        await LetGoneAsync(path, known.GetValueOrDefault(path)?.Inputs);
+        if (!waiting.ContainsKey(path) && known.TryGetValue(path, out KeptBuild? held) && await LookAsync(path, held.Inputs, () => held.Inputs.All(Stamps.Holds)))
         {
-            return new FedProject(new ProjectInfoResult(held.Read(), null, Said(held.Diagnostics)), []);
+            return new FedProject(new ProjectInfoResult(held.Read(), null, Said(held.Diagnostics)), [], AsRead(held.Inputs));
         }
         BuiltProject built;
         Awaited++;
@@ -309,12 +320,53 @@ public sealed class ProjectBuilds
         {
             return new FedProject(new ProjectInfoResult(null, problem), []);
         }
-        // Looked at off the window's thread: a project's inputs are files by the hundred.
-        return new FedProject(new ProjectInfoResult(built.Infos.ToString(), null, Said(built.Diagnostics)), await BackgroundWork.Run(() => Changed(built.Inputs)));
+        await LetGoneAsync(path, built.Inputs);
+        return new FedProject(new ProjectInfoResult(built.Infos.ToString(), null, Said(built.Diagnostics)), await LookAsync(path, built.Inputs, () => Changed(built.Inputs)), AsRead(built.Inputs));
+    }
+
+    /// <summary>The looks under way at what a project's builds read, each with its project and what they read, which a
+    /// folder about to go or move under one or among what it read waits for (<see cref="HoldOff"/>).</summary>
+    private readonly List<(string Project, IReadOnlyList<Stamp> Read, Task Looked)> looking = [];
+
+    /// <summary>Looks at what a project's builds read off the window's thread, as a project's inputs are files by the
+    /// hundred, among the looks under way until done.</summary>
+    private async Task<T> LookAsync<T>(string project, IReadOnlyList<Stamp> read, Func<T> look)
+    {
+        if (meanwhile is { } told && PathNames.Same(told.Project, project))
+        {
+            meanwhile = null;
+            told.What();
+        }
+        Task<T> looked = BackgroundWork.Run(look);
+        (string, IReadOnlyList<Stamp>, Task) entry = (project, read, looked);
+        looking.Add(entry);
+        try
+        {
+            return await looked;
+        }
+        finally
+        {
+            looking.Remove(entry);
+        }
+    }
+
+    /// <summary>Done once no folder about to go or move holds the project, or what its builds <paramref name="read"/>
+    /// (<see cref="HoldOff"/>).</summary>
+    private async Task LetGoneAsync(string project, IReadOnlyList<Stamp>? read)
+    {
+        while (heldOff.FirstOrDefault(h => h.Holds(project, read)) is { } held)
+        {
+            await held.Released;
+        }
     }
 
     /// <summary>The files among a build's inputs that are no longer as it found them, each as made, changed or gone (a
     /// folder's names changing names no file).</summary>
+    /// <summary>The files builds read, as they read them, as the server is given them with the builds.</summary>
+    internal static List<InputRead> AsRead(IReadOnlyList<Stamp> inputs) =>
+        [.. inputs.Where(input => !input.Folder && !input.Head && !input.Presence)
+            .Select(input => new InputRead(input.Path, input.Length < 0 ? null : new FileStamp(input.Length, new DateTime(input.Ticks, DateTimeKind.Utc))))];
+
     internal static List<FileEvent> Changed(IReadOnlyList<Stamp> inputs)
     {
         List<FileEvent> changed = [];
@@ -348,35 +400,41 @@ public sealed class ProjectBuilds
         queued.Add(path);
     }
 
-    /// <summary>The folders about to go (to the Trash) or move whose projects' builds are held off (<see cref="HoldOff"/>).</summary>
-    private readonly List<string> heldOff = [];
+    /// <summary>The holds on folders about to go (to the Trash) or move, whose projects', and those whose builds read under
+    /// them, builds are held off and told to the server only once let go no more (<see cref="HoldOff"/>).</summary>
+    private readonly List<HeldOff> heldOff = [];
 
-    /// <summary>Holds off the design-time builds of the projects under folders about to go or move until disposed, and is
-    /// done (<c>Built</c>) once those already running have ended, each landing as its builds end, and on Windows once the
-    /// round that built one has ended too (<see cref="FolderBuilds"/>): MSBuild writes a build's obj/ as it goes, so one
-    /// still running would make a folder again where it was.</summary>
+    /// <summary>Holds off the design-time builds of the projects reaching folders about to go or move, and the server's
+    /// answers for them (<see cref="FolderBuilds.Reaches"/>), until disposed; done (<c>Built</c>) once the builds under them
+    /// running have landed, on Windows once the round that built one has ended too, and the looks under way at what their
+    /// builds read: a build still writing obj/ would make a folder again where it was, and on Windows a folder with a file
+    /// under it open does not move.</summary>
     public (IDisposable Held, Task Built) HoldOff(IReadOnlyList<string> going)
     {
         UiThread.Check();
-        heldOff.AddRange(going);
+        HeldOff held = new(this, going);
+        heldOff.Add(held);
         List<(string Project, Task Landed)> building = [.. waiting.Where(w => !queued.Contains(w.Key)).Select(w => (w.Key, (Task)w.Value.Task))];
-        Task built = Task.WhenAll(going.Select(folder => FolderBuilds.Awaited(folder, building, running, FolderBuilds.WorkingFoldersHeld)));
-        return (new HeldOff(this, going), built);
+        Task built = Task.WhenAll([.. going.Select(folder => FolderBuilds.Awaited(folder, building, running, FolderBuilds.WorkingFoldersHeld)),
+            .. looking.Where(l => held.Holds(l.Project, l.Read)).Select(l => l.Looked.Ended())]);
+        return (held, built);
     }
 
     private sealed class HeldOff(ProjectBuilds builds, IReadOnlyList<string> going) : IDisposable
     {
-        private bool released;
+        private readonly TaskCompletionSource released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Done once disposed.</summary>
+        public Task Released => released.Task;
+
+        /// <summary>Whether a project reaches a folder it holds, by what its builds <paramref name="read"/> (<see cref="FolderBuilds.Reaches"/>).</summary>
+        public bool Holds(string project, IReadOnlyList<Stamp>? read) => going.Any(folder => FolderBuilds.Reaches(project, read, folder));
 
         public void Dispose()
         {
-            if (!released)
+            if (builds.heldOff.Remove(this))
             {
-                released = true;
-                foreach (string folder in going)
-                {
-                    builds.heldOff.Remove(folder);
-                }
+                released.TrySetResult();
                 // Those it held build now: where their folder went or moved, they fail to load and write nothing.
                 builds.Pump();
             }
@@ -405,15 +463,18 @@ public sealed class ProjectBuilds
         }
     }
 
+    /// <summary>Whether no folder about to go or move holds a project, or what its last builds read (<see cref="HoldOff"/>).</summary>
+    private bool Unheld(string project) => !heldOff.Any(h => h.Holds(project, known.GetValueOrDefault(project)?.Inputs));
+
     /// <summary>Has the host build what is queued, all of it at once, the next round once this one ends.</summary>
     private void Pump()
     {
-        if (building || folder is null || queued.Count(p => !heldOff.Any(h => PathNames.Within(p, h))) is 0)
+        if (building || folder is null || queued.Count(Unheld) is 0)
         {
             return;
         }
         building = true;
-        List<string> round = [.. queued.Where(p => !heldOff.Any(h => PathNames.Within(p, h)))];
+        List<string> round = [.. queued.Where(Unheld)];
         queued.RemoveAll(round.Contains);
         Dictionary<string, string> properties = Properties(solution());
         IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>? each = ProjectModels.Each(workspace());
@@ -434,7 +495,7 @@ public sealed class ProjectBuilds
     private string? Under() => solution().GetValueOrDefault(MSBuildNames.SolutionPath);
 
     /// <summary>Builds a round in the host, <paramref name="over"/> once the host has answered for all of it, which it does
-    /// only once its build session has ended, or once the folder is let go.</summary>
+    /// only once its build session has ended and the processes it started are gone, or once the folder is let go.</summary>
     private async Task RoundAsync(int mine, string following, List<string> round, Dictionary<string, string> properties,
         IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>? each, TaskCompletionSource over, CancellationToken cancel)
     {
@@ -453,7 +514,7 @@ public sealed class ProjectBuilds
             {
                 // Every window shares the host, which another folder's build may have ended: a host started anew builds the rest once.
                 List<string> left = Left();
-                IdeErrors.Write($"Project host (process {host.ProcessId}) building the projects of {following} at design time: {ended.Reason}. The {left.Count} not yet built are asked of a host started anew");
+                IdeErrors.Write($"Project host (process {host.ProcessId}) building the projects of {following} at design time: {ended.Reason}. The {Numbers.Said(left.Count)} not yet built are asked of a host started anew");
                 // A project whose folder has gone holds no host: it finds no project file there, and fails at once.
                 (host, List<string> standing) = await BackgroundWork.Run(async () =>
                     (await ProjectHosts.ForAsync(following), left.Where(p => Directory.Exists(Path.GetDirectoryName(p))).ToList()));
@@ -461,7 +522,7 @@ public sealed class ProjectBuilds
             }
             if (mine == generation)
             {
-                IdeErrors.Write($"Project host (process {host.ProcessId}) built {done.Built} projects of {following} at design time in {Durations.Said(TimeSpan.FromSeconds(done.Seconds))}, {Durations.Said(Stopwatch.GetElapsedTime(began))} after they were asked for");
+                IdeErrors.Write($"Project host (process {host.ProcessId}) built {Numbers.Said(done.Built)} projects of {following} at design time in {Durations.Said(TimeSpan.FromSeconds(done.Seconds))}, {Durations.Said(Stopwatch.GetElapsedTime(began))} after they were asked for");
                 Keep();
             }
         }

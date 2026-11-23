@@ -28,9 +28,16 @@ public static class RuntimeVariables
     /// <summary>"0" turns the runtime's diagnostic port off alone.</summary>
     public const string EnableDiagnosticsIpc = "DOTNET_EnableDiagnostics_IPC";
 
-    /// <summary>"debug" lets a debugger change the program's unoptimized code as it runs (Hot Reload), read by the runtime
-    /// as each module loads.</summary>
+    /// <summary><see cref="ModifiableAssembliesDebug"/> lets a debugger change the program's unoptimized code as it runs (Hot
+    /// Reload), read by the runtime as each module loads.</summary>
     public const string ModifiableAssemblies = "DOTNET_MODIFIABLE_ASSEMBLIES";
+
+    /// <summary>The value of <see cref="ModifiableAssemblies"/> that opens a program's code to Hot Reload.</summary>
+    public const string ModifiableAssembliesDebug = "debug";
+
+    /// <summary>Whether a value of <see cref="ModifiableAssemblies"/> opens a program's code to Hot Reload, in any letter case
+    /// as the runtime reads it; null for a program that sets none.</summary>
+    public static bool HotReloadable(string? value) => string.Equals(value, ModifiableAssembliesDebug, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>"1" lets the runtime load the profiler <see cref="Profiler"/> names as it starts.</summary>
     public const string EnableProfiling = "DOTNET_ENABLE_PROFILING";
@@ -43,6 +50,10 @@ public static class RuntimeVariables
 
     /// <summary>"0" has the runtime collect garbage with the workstation collector, "1" with the server one.</summary>
     public const string GcServer = "DOTNET_gcServer";
+
+    /// <summary>How the host rolls a program forward onto a later framework than it names (Major, LatestPatch), over its
+    /// runtime configuration's rollForward.</summary>
+    public const string RollForward = "DOTNET_ROLL_FORWARD";
 
     /// <summary>"1" lets the host roll a program forward onto a prerelease runtime when no release one will do.</summary>
     public const string RollForwardToPrerelease = "DOTNET_ROLL_FORWARD_TO_PRERELEASE";
@@ -66,6 +77,10 @@ public static class RuntimeVariables
 
     /// <summary>What a 32-bit apphost before .NET 6 reads on 64-bit Windows in <see cref="Root"/>'s place.</summary>
     public const string RootX86 = "DOTNET_ROOT(x86)";
+
+    /// <summary>"1" lets .NET's console write a program's colours (Console.ForegroundColor, the console logger's) into a
+    /// pipe, as it does into a terminal: a console of Passenger's reads them.</summary>
+    public const string AnsiColorRedirection = "DOTNET_SYSTEM_CONSOLE_ALLOW_ANSI_COLOR_REDIRECTION";
 
     /// <summary>"1" has WPF record where in its XAML each object was made (VisualDiagnostics.GetXamlSourceInfo) and
     /// raise BindingDiagnostics.BindingFailed, and .NET MAUI record its XAML's places too (Microsoft.Maui.VisualDiagnostics);

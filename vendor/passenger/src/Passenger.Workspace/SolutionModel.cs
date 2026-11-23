@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Passenger.Core;
 using Passenger.Host;
@@ -11,9 +10,6 @@ namespace Passenger.Workspace;
 /// which <see cref="WithProjects"/> puts in place of the projects read here.</summary>
 public sealed record SolutionModel(string Path, string Name, IReadOnlyList<SolutionEntry> Entries)
 {
-    /// <summary>The solution folder's GUID in a classic .sln, which marks an entry as a folder.</summary>
-    private const string SolutionFolderType = "2150E333-8FDC-42A3-9474-1A3956D46DE8";
-
     /// <summary>How deep folders stand inside one another: past what any solution is written to, and short of what a walk of
     /// them reaches on a thread's stack or their paths take of memory, each holding those above it.</summary>
     private const int DeepestNesting = 256;
@@ -74,15 +70,28 @@ public sealed record SolutionModel(string Path, string Name, IReadOnlyList<Solut
     /// <summary>The solution at a folder's top: the one named for the folder if there are several, and of a .sln and a
     /// .slnx alike the .slnx, which <c>dotnet sln migrate</c> writes beside the .sln it leaves; none in a folder that is
     /// gone (deleted under the window) or cannot be read. The window asks <see cref="WorkspaceModel"/>, never this.</summary>
-    public static string? Find(string folder)
+    public static string? Find(string folder) => Find(folder, out _);
+
+    /// <summary>The solution at a folder's top as <see cref="Find(string)"/> finds it; where there is none, why in
+    /// <paramref name="none"/>, as the listing found it: the folder could not be listed, or it lists no solution (its first
+    /// few files named).</summary>
+    public static string? Find(string folder, out string? none)
     {
-        List<string> found;
+        none = null;
+        List<string> files;
         try
         {
-            found = [.. Directory.EnumerateFiles(folder).Where(f => System.IO.Path.GetExtension(f).ToLowerInvariant() is ".sln" or ".slnx")];
+            files = [.. Directory.EnumerateFiles(folder)];
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
+            none = $"{folder} could not be listed: {error.Message}";
+            return null;
+        }
+        List<string> found = [.. files.Where(f => System.IO.Path.GetExtension(f).ToLowerInvariant() is ".sln" or ".slnx")];
+        if (found.Count == 0)
+        {
+            none = $"{folder} lists no .sln or .slnx at its top, {Listed(files)}";
             return null;
         }
         string name = System.IO.Path.GetFileName(folder);
@@ -91,6 +100,18 @@ public sealed record SolutionModel(string Path, string Name, IReadOnlyList<Solut
             .ThenBy(f => f.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
             .ThenBy(f => f, StringComparer.Ordinal)
             .FirstOrDefault();
+    }
+
+    /// <summary>The files a folder's top lists, by name, the first ten of them in order.</summary>
+    private static string Listed(List<string> files)
+    {
+        const int Named = 10;
+        if (files.Count == 0)
+        {
+            return "where it lists no file";
+        }
+        List<string> names = [.. files.Select(System.IO.Path.GetFileName).OfType<string>().Order(StringComparer.Ordinal).Take(Named)];
+        return $"where it lists {string.Join(", ", names)}{(files.Count > Named ? $" and {files.Count - Named} more" : string.Empty)}";
     }
 
     private static SolutionModel LoadSlnx(string path)
@@ -177,55 +198,16 @@ public sealed record SolutionModel(string Path, string Name, IReadOnlyList<Solut
     private static SolutionModel LoadSln(string path)
     {
         string root = System.IO.Path.GetDirectoryName(path)!;
-        Regex project = new(@"^Project\(""\{(?<type>[^}]+)\}""\)\s*=\s*""(?<name>[^""]*)"",\s*""(?<path>[^""]*)"",\s*""\{(?<id>[^}]+)\}""");
-        Regex nesting = new("""^\s*\{(?<child>[^}]+)\}\s*=\s*\{(?<parent>[^}]+)\}""");
-        Regex item = new(@"^\s*[^=]*?\s*=\s*(?<path>.+?)\s*$");
+        List<string> lines = [.. SharedRead.Lines(path)];
         Dictionary<string, SolutionEntry> byId = new(StringComparer.OrdinalIgnoreCase);
-        Dictionary<string, string> parents = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, string> parents = SlnLines.Parents(lines);
         List<string> order = [];
-        bool inNesting = false;
-        SolutionFolder? inItems = null;
-        SolutionFolder? declaring = null;
-        foreach (string line in SharedRead.Lines(path))
+        foreach (SlnProject project in SlnLines.Projects(lines))
         {
-            if (project.Match(line) is { Success: true } m)
-            {
-                string id = m.Groups["id"].Value;
-                declaring = m.Groups["type"].Value.Equals(SolutionFolderType, StringComparison.OrdinalIgnoreCase)
-                    ? new SolutionFolder(m.Groups["name"].Value, string.Empty, [])
-                    : null;
-                byId[id] = declaring ?? (SolutionEntry)ProjectModel.Unevaluated(System.IO.Path.Combine(root, m.Groups["path"].Value.Replace('\\', '/')));
-                order.Add(id);
-            }
-            else if (declaring is not null && line.Contains("ProjectSection(SolutionItems)", StringComparison.Ordinal))
-            {
-                inItems = declaring;
-            }
-            else if (inItems is not null && line.Contains("EndProjectSection", StringComparison.Ordinal))
-            {
-                inItems = null;
-            }
-            else if (inItems is not null && item.Match(line) is { Success: true } file)
-            {
-                // Visual Studio's Solution Items: "README.md = README.md", the path relative to the solution on each side.
-                inItems.Children.Add(SolutionItem.At(System.IO.Path.Combine(root, file.Groups["path"].Value.Replace('\\', '/'))));
-            }
-            else if (line.StartsWith("EndProject", StringComparison.Ordinal) && !line.StartsWith("EndProjectSection", StringComparison.Ordinal))
-            {
-                declaring = null;
-            }
-            else if (line.Contains("GlobalSection(NestedProjects)", StringComparison.Ordinal))
-            {
-                inNesting = true;
-            }
-            else if (inNesting && line.Contains("EndGlobalSection", StringComparison.Ordinal))
-            {
-                inNesting = false;
-            }
-            else if (inNesting && nesting.Match(line) is { Success: true } n)
-            {
-                parents[n.Groups["child"].Value] = n.Groups["parent"].Value;
-            }
+            byId[project.Id] = project.IsFolder
+                ? new SolutionFolder(project.Name, string.Empty, [.. ItemsOf(lines, project, root)])
+                : ProjectModel.Unevaluated(System.IO.Path.Combine(root, project.Path.Replace('\\', '/')));
+            order.Add(project.Id);
         }
         List<SolutionEntry> top = [];
         foreach (string id in order)
@@ -240,6 +222,22 @@ public sealed record SolutionModel(string Path, string Name, IReadOnlyList<Solut
             }
         }
         return new SolutionModel(path, System.IO.Path.GetFileNameWithoutExtension(path), Placed(top, "/"));
+    }
+
+    /// <summary>A folder's Solution Items ("README.md = README.md"), each path relative to the solution on each side.</summary>
+    private static IEnumerable<SolutionEntry> ItemsOf(List<string> lines, SlnProject folder, string root)
+    {
+        if (SlnLines.ProjectSection(lines, folder, SlnLines.SolutionItems) is not { } items)
+        {
+            yield break;
+        }
+        for (int i = items.Start + 1; i < items.End; i++)
+        {
+            if (SlnLines.ItemPath(lines[i]) is { } file)
+            {
+                yield return SolutionItem.At(System.IO.Path.Combine(root, file.Replace('\\', '/')));
+            }
+        }
     }
 
     private static IEnumerable<ProjectModel> Flatten(SolutionEntry entry) => entry switch
@@ -336,6 +334,11 @@ public sealed record ProjectModel(
     /// <summary>Whether .NET for Android builds an app of it, as evaluated (<see cref="CarriedProperties.AndroidApplication"/>):
     /// its <see cref="OutputType"/> is then Library, turned from the Exe the project gives.</summary>
     public bool IsAndroidApp => string.Equals(Property(CarriedProperties.AndroidApplication), "true", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether Avalonia's XAML compiler compiles its XAML into its assembly, as its evaluation says
+    /// (<see cref="CarriedProperties.EnableAvaloniaXamlCompilation"/>): an Avalonia project that does not turn it off.</summary>
+    public bool CompilesAvaloniaXaml =>
+        Property(CarriedProperties.EnableAvaloniaXamlCompilation) is { Length: > 0 } compiles && !compiles.Equals("false", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Whether it is an Azure Functions app (.NET isolated worker), as its evaluation says
     /// (<see cref="CarriedProperties.AzureFunctionsVersion"/>): a program Azure Functions Core Tools' func runs, never alone.</summary>
@@ -600,7 +603,7 @@ public sealed record ProjectModel(
     /// <summary>Whether a program compiles a file: its own C# file, or one its directives include as its evaluation found
     /// them; for a project, whether its folder holds it.</summary>
     public bool Holds(string path) => !IsProgram ? PathNames.Within(path, Folder)
-        : PathNames.Same(path, Path) || (Evaluated?.Items.Any(i => i.Type == "Compile" && PathNames.Same(i.Path, path)) ?? false);
+        : PathNames.Same(path, Path) || (Evaluated?.Items.Any(i => i.Type == MSBuildNames.Compile && PathNames.Same(i.Path, path)) ?? false);
 
     /// <summary>The lock file its restore writes when it restores with one (<see cref="LockFileOf"/>).</summary>
     public string LockFile => LockFileOf(Path, Property(Host.CarriedProperties.NuGetLockFilePath), File.Exists);

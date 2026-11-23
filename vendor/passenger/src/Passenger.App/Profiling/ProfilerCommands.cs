@@ -83,6 +83,7 @@ public sealed class ProfilerCommands
         this.parts = parts;
         window = new ToolWindow(ToolWindowIds.Profiler, "Performance Profiler", IconKeys.Profile, Make, ToolAnchor.BottomLeft)
         {
+            Serves = ToolWindowServes.EveryFolder,
             Action = AppActions.ShowProfiler,
             Menus = [new MenuPlace("Tools", 0, 1)],
         };
@@ -114,6 +115,13 @@ public sealed class ProfilerCommands
     {
         ProfilerView made = view = new ProfilerView();
         made.StopRequested += (_, _) => IdeErrors.Observe(SnapshotAsync());
+        made.ActionRequested += (_, action) =>
+        {
+            if (parts.Actions.Run(action) is { } why)
+            {
+                parts.Say(why);
+            }
+        };
         made.KillRequested += (_, _) =>
         {
             if (starting is { } start)
@@ -230,7 +238,12 @@ public sealed class ProfilerCommands
         launching = profiled;
         try
         {
-            return await LaunchAsync(profiled, arguments, work, configuration);
+            string? problem = await LaunchAsync(profiled, arguments, work, configuration);
+            if (problem is not null)
+            {
+                work.Tell(false, problem);
+            }
+            return problem;
         }
         finally
         {
@@ -255,8 +268,8 @@ public sealed class ProfilerCommands
         folder.Profiled is { Run.HasExited: false } program ? $"{program.Name} goes on after its snapshot: Kill it first, or Attach Profiler to profile it again" : null;
 
     /// <summary>Why Profile cannot start a program now: the Run console it writes to is another configuration's program's,
-    /// running or about to, whose output it would clear and whose typing it would take. The program Run started for the
-    /// configuration profiled is ended first (<see cref="BuildRunController.EndOwnRunAsync"/>).</summary>
+    /// running or about to, whose output it would clear and whose typing it would take. What runs of the configuration
+    /// profiled is ended first (<see cref="BuildRunController.EndRunningAsync"/>).</summary>
     private string? RunConsoleTaken(ProjectSession folder, RunConfiguration? chosen) =>
         parts.Actions.Work.Of(AppActions.RunProgram) is { } running ? ActionWork.Busy(running)
         : folder.Runner.IsRunning && (chosen is null || !parts.Builds().RunsOwnProgram(chosen.Name)) ? "Run's program uses the Run console: stop it first, or Attach Profiler to profile it"
@@ -285,7 +298,7 @@ public sealed class ProfilerCommands
         {
             return await LaunchInContainersAsync(profiled, chosen, work);
         }
-        if (await builds.EndOwnRunAsync(chosen, work, "profile") is { } left)
+        if (await builds.EndRunningAsync(chosen, work, "profile") is { } left)
         {
             return left;
         }
@@ -391,9 +404,11 @@ public sealed class ProfilerCommands
                 run.Input = input;
             }
             View.Running(chosen.Name, () => running.Elapsed);
-            parts.Say(!running.Samples ? FramesAloneSaid(chosen.Name)
+            string said = !running.Samples ? FramesAloneSaid(chosen.Name)
                 : inTerminal ? string.Join("; ", [$"Profiling {chosen.Name} in a tab of the Terminal window", .. plan!.Notes])
-                : $"Profiling {chosen.Name}");
+                : $"Profiling {chosen.Name}";
+            parts.Say(said);
+            work.Tell(true, said);
             return null;
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested)
@@ -558,8 +573,8 @@ public sealed class ProfilerCommands
     public static string SnapshotSaid(string name, Snapshot snapshot, bool ended = false) => snapshot.FramesAlone
         ? $"Snapshot of {name}: {Plural.Of(snapshot.GameFrames.Count, "frame")} as Godot's profiler measured them, no samples (GDScript alone), kept on the Performance Profiler's Snapshots page"
         : snapshot.CutShort is { } cut
-        ? $"{(ended ? $"{name} ended before its trace was whole" : $"The trace of {name} was cut short ({cut.TrimEnd('.')})")}: its snapshot holds what was written before, {snapshot.Samples:N0} samples, kept on the Performance Profiler's Snapshots page"
-        : $"Snapshot of {name}: {snapshot.Samples:N0} samples, kept on the Performance Profiler's Snapshots page";
+        ? $"{(ended ? $"{name} ended before its trace was whole" : $"The trace of {name} was cut short ({cut.TrimEnd('.')})")}: its snapshot holds what was written before, {Numbers.Said(snapshot.Samples)} samples, kept on the Performance Profiler's Snapshots page"
+        : $"Snapshot of {name}: {Numbers.Said(snapshot.Samples)} samples, kept on the Performance Profiler's Snapshots page";
 
     /// <summary>What Profile says of a Godot game of GDScript alone it runs, whose run is Godot's own frames.</summary>
     public static string FramesAloneSaid(string name) =>
@@ -1169,7 +1184,9 @@ public sealed class ProfilerCommands
             {
                 if (ask && !await parts.Confirm("Get Memory Snapshot", $"{only.Message}. Take it anyway?", "Take Snapshot"))
                 {
-                    parts.Say($"No memory snapshot of {name}: its output would carry createdump's lines");
+                    string declined = $"No memory snapshot of {name}: its output would carry createdump's lines";
+                    parts.Say(declined);
+                    work.Tell(false, declined);
                     return (null, only.Message);
                 }
                 intoOutputAgreed = run;
@@ -1177,7 +1194,9 @@ public sealed class ProfilerCommands
                 heap = await run.TakeMemorySnapshotAsync(intoOutput: true, stopping.Token);
             }
             View.ShowMemory(heap);
-            parts.Say(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{heap.Name} of {name}: {heap.Objects:N0} objects, {Sizes.Said(heap.Bytes)}{(heap.Lacks is null ? string.Empty : ", read from its runtime's GC heap dump")}"));
+            string taken = string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{heap.Name} of {name}: {heap.Objects:N0} objects, {Sizes.Said(heap.Bytes)}{(heap.Lacks is null ? string.Empty : ", read from its runtime's GC heap dump")}");
+            parts.Say(taken);
+            work.Tell(true, taken);
             return (heap, note ?? heap.Lacks);
         }
         catch (Exception error) when (error is HeapUnreadableException or ProfilingException or OperationCanceledException || DiagnosticsFailures.Of(error))
@@ -1186,10 +1205,12 @@ public sealed class ProfilerCommands
             {
                 string ended = $"{name} ended before its memory snapshot";
                 parts.Say(ended);
+                work.Tell(false, ended);
                 return (null, ended);
             }
             string why = error is OperationCanceledException ? "it was stopped" : error.Message;
             parts.Say($"No memory snapshot: {why}");
+            work.Tell(false, $"No memory snapshot: {why}");
             return (null, why);
         }
         finally
@@ -1221,7 +1242,7 @@ public sealed class ProfilerCommands
             shownProcess = null;
             Show(snapshot, Path.GetFileNameWithoutExtension(path));
             ShowKill();
-            parts.Say($"{Path.GetFileName(path)}: {snapshot.Samples:N0} samples{(snapshot.CutShort is { } cut ? $", its trace cut short ({cut.TrimEnd('.')})" : string.Empty)}");
+            parts.Say($"{Path.GetFileName(path)}: {Numbers.Said(snapshot.Samples)} samples{(snapshot.CutShort is { } cut ? $", its trace cut short ({cut.TrimEnd('.')})" : string.Empty)}");
             return snapshot;
         }
         catch (Exception error) when (error is InvalidOperationException || TraceFailures.Of(error))

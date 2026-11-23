@@ -19,6 +19,10 @@ public sealed record FolderChanges(IReadOnlySet<string> Paths, bool Structure, b
     /// as a walk names it, its folder's canonical path and its own name: what Go to File's index puts in or takes out.</summary>
     public IReadOnlySet<string> ComeOrGone { get; init; } = new HashSet<string>();
 
+    /// <summary>The files among <see cref="Paths"/> written in place, or saved by Passenger, neither come nor gone: a change of
+    /// a file's text, which the folder's index, following what comes and goes, never hears.</summary>
+    public IEnumerable<string> Written => Paths.Where(path => !ComeOrGone.Contains(path));
+
     /// <summary>Whether the system lost changes (too many at once, as a large checkout makes) or a watch failed: what they
     /// were is not known, so everything shown from the folder is read again (the open files, the Explorer, the solution,
     /// Go to File's index). <see cref="Paths"/> then holds the folder itself, and what its record held that is gone.</summary>
@@ -45,6 +49,10 @@ public sealed class FolderWatcher : WatchedTree
     /// <summary>How long after a save its file's events are taken for the save's own.</summary>
     private static readonly TimeSpan OwnWriteHeard = TimeSpan.FromSeconds(5);
 
+    /// <summary>How long a save taken in as it landed passes over the system's own word of it, which may come that late
+    /// behind (<see cref="WatchLag"/>).</summary>
+    private static readonly TimeSpan SaveEchoes = TimeSpan.FromMinutes(5);
+
     /// <summary>The file a restore writes in a project's obj (or, with UseArtifactsOutput, in artifacts/obj/Project).</summary>
     private const string Assets = "project.assets.json";
 
@@ -54,6 +62,10 @@ public sealed class FolderWatcher : WatchedTree
     private readonly HashSet<string> comeOrGone = new(StringComparer.Ordinal);
     /// <summary>Until when each file's events are taken for a save's own, by its canonical path.</summary>
     private readonly Dictionary<string, Deadline> ownWrites = new(StringComparer.Ordinal);
+
+    /// <summary>Each file a save wrote, taken in as it landed, by its canonical path: its last write then, and until when a
+    /// change of it seen is passed over while the file still stands as written.</summary>
+    private readonly Dictionary<string, (DateTime Written, Deadline Until)> landed = new(StringComparer.Ordinal);
     private bool structure;
     private bool projects;
     private bool launchProfiles;
@@ -65,6 +77,7 @@ public sealed class FolderWatcher : WatchedTree
     {
         this.folder = folder;
         FileText.Writing += OnWriting;
+        FileText.Wrote += OnWrote;
         Begin();
     }
 
@@ -90,12 +103,54 @@ public sealed class FolderWatcher : WatchedTree
         }
     }
 
+    /// <summary>A save landed: its file under the folder is taken in at once, as written, rather than when the system's
+    /// watcher says so, which may be minutes behind under load (macOS's); what it says of the file later, while the file
+    /// stands as the save left it, is passed over.</summary>
+    private void OnWrote(string path, byte[]? before, byte[] bytes)
+    {
+        string canonical = PathNames.Canonical(path);
+        if (!PathNames.IsUnder(canonical, folder) || IsDisposed)
+        {
+            return;
+        }
+        TakeWritten(canonical);
+        DateTime written = Written(canonical);
+        lock (Gate)
+        {
+            long now = Stopwatch.GetTimestamp();
+            foreach ((string saved, (DateTime _, Deadline until)) in landed)
+            {
+                if (until.PassedAt(now))
+                {
+                    landed.Remove(saved);
+                }
+            }
+            landed[canonical] = (written, Deadline.In(SaveEchoes, now));
+        }
+    }
+
+    /// <summary>Whether a change seen of a file is a save's taken in already, the file standing as the save left it.</summary>
+    private bool Echoes(string canonical)
+    {
+        DateTime written;
+        lock (Gate)
+        {
+            if (!landed.TryGetValue(canonical, out (DateTime Written, Deadline Until) save) || save.Until.Passed)
+            {
+                return false;
+            }
+            written = save.Written;
+        }
+        return Written(canonical) == written;
+    }
+
     /// <summary>Raised on the UI thread with what changed since the last time.</summary>
     public event EventHandler<FolderChanges>? Changed;
 
     public override void Dispose()
     {
         FileText.Writing -= OnWriting;
+        FileText.Wrote -= OnWrote;
         base.Dispose();
     }
 
@@ -241,6 +296,10 @@ public sealed class FolderWatcher : WatchedTree
             return default;
         }
         string canonical = PathNames.Canonical(path);
+        if (Echoes(canonical))
+        {
+            return default;
+        }
         return new Notice(Takes: true, Counts: true, canonical, created ? PathNames.Walked(path, canonical) : null);
     }
 
@@ -270,7 +329,7 @@ public sealed class FolderWatcher : WatchedTree
                 comeOrGone.Add(named);
             }
         }
-        projects |= IsProjectFile(path);
+        projects |= IsReadFor(path);
         launchProfiles |= Path.GetFileName(path.AsSpan()).Equals(Run.LaunchProfile.SettingsFile, StringComparison.OrdinalIgnoreCase)
             || path.EndsWith(".run.json", StringComparison.OrdinalIgnoreCase) || SolutionLaunch.IsFile(path);
     }
@@ -283,8 +342,9 @@ public sealed class FolderWatcher : WatchedTree
     }
 
     /// <summary>Whether a file is a solution, project, props or targets file, or a shared project's or its items file, which
-    /// the solution is read again for.</summary>
-    private static bool IsProjectFile(string path) =>
+    /// the folder is read again for as it is written; come or gone, the folder's index weighs it against what the read found
+    /// (<see cref="ProjectSession.ProjectsCameOrWent"/>).</summary>
+    public static bool IsReadFor(string path) =>
         WorkspaceModel.IsSolution(path) || WorkspaceModel.IsProjectFile(path) || PathNames.HasExtension(path, [".props", ".targets", SharedProjects.Extension, EvaluatedItem.SharedItemsExtension]);
 
     protected override FolderChanges? Gathered(bool lost, bool overflowed)

@@ -7,12 +7,14 @@ namespace Passenger.Editor;
 /// and change case over what a motion or object spans; put, replace, join and toggle case.</summary>
 public sealed partial class Vim
 {
-    /// <summary>The motions whose delete always goes to register 1, however little it takes.</summary>
-    private static readonly HashSet<string> Jumps = ["%", "(", ")", "{", "}"];
+    /// <summary>The motions whose delete or change always goes to register 1, however little it takes: the searches among
+    /// them (n and N standing for / and ? too) as well.</summary>
+    private static readonly HashSet<string> Jumps = ["%", "(", ")", "{", "}", "`", "n", "N", "*", "#", "g*", "g#"];
 
     /// <summary>One caret's stretch for an operator: the text from <see cref="Start"/> to <see cref="End"/>, or the lines
-    /// <see cref="First"/> to <see cref="Last"/> when <see cref="Lines"/>.</summary>
-    private readonly record struct Stretch(int Start, int End, bool Lines, int First, int Last, int Caret, int Landing = 0, bool Inclusive = false);
+    /// <see cref="First"/> to <see cref="Last"/> when <see cref="Lines"/>; <see cref="Reached"/> the line after it an exclusive
+    /// motion ended at the start of, -1 for any other.</summary>
+    private readonly record struct Stretch(int Start, int End, bool Lines, int First, int Last, int Caret, int Landing = 0, bool Inclusive = false, int Reached = -1);
 
     private VimResult Operate(Command command, string op, TextSnapshot text, SelectionSet selections, IVimView view)
     {
@@ -26,8 +28,8 @@ public sealed partial class Vim
                 continue;
             }
             Stretch stretch = span.Linewise
-                ? Whole(text, text.GetLineFromOffset(span.Start), text.GetLineFromOffset(span.End), s.Caret) with { Landing = landing }
-                : new Stretch(span.Start, span.End, false, text.GetLineFromOffset(span.Start), text.GetLineFromOffset(span.End), s.Caret, landing, inclusive);
+                ? Whole(text, text.GetLineFromOffset(span.Start), text.GetLineFromOffset(span.End), s.Caret) with { Landing = landing, Reached = reachedPast ?? -1 }
+                : new Stretch(span.Start, span.End, false, text.GetLineFromOffset(span.Start), text.GetLineFromOffset(span.End), s.Caret, landing, inclusive, reachedPast ?? -1);
             if (op is "g~" or "gu" or "gU" && !stretch.Lines && stretch.End == stretch.Start && stretch.Start == text.GetLineStart(stretch.First)
                 && text.GetLine(stretch.First).Length > 0)
             {
@@ -46,6 +48,11 @@ public sealed partial class Vim
         {
             // Nothing to act on: a count of words cut short leaves each caret where it ran out, as Vim's does.
             SelectionSet left = SelectionSet.Create(ranOut, selections.PrimaryIndex);
+            if (command.Name == "$")
+            {
+                // A $ cut short aims j and k at the line's end all the same.
+                Aimed(left, [.. Enumerable.Repeat(int.MaxValue, left.Count)]);
+            }
             return left.SameAs(selections) ? VimResult.Held : new VimResult(true, left);
         }
         return Act(command, op, stretches, text, selections, view);
@@ -61,9 +68,8 @@ public sealed partial class Vim
         {
             return Refused(why, SelectionSet.Create([.. stretches.Select(t => Selection.At(Settled(text, t.Landing, breakEnds)))], Math.Min(selections.PrimaryIndex, stretches.Count - 1)));
         }
-        VimRegister taken = block && lines is { } over && stretches.All(t => t.First == t.Last)
-            ? BlockTaken(text, stretches, over, view.Indent.TabWidth)
-            : new([.. Merged(stretches, pieces: true).Select(m => Taken(text, m))], stretches[0].Lines) { Blockwise = block };
+        VimRegister taken = TakenBy(text, stretches, block, lines, view.Indent.TabWidth);
+        actedOnNothing = true;
         VimResult result = op switch
         {
             "d" => Delete(text, selections, stretches),
@@ -74,12 +80,16 @@ public sealed partial class Vim
             "gq" or "gw" => Wrap(op == "gw", text, selections, stretches, view),
             _ => Case(command, op, text, selections, stretches, view),
         };
-        // Nothing taken (anything from a text of one empty line) leaves them, but a change of an empty line's place empties one.
-        bool empty = (VimMotions.LastLine(text, breakEnds) == 0 && text.GetLine(0).Length == 0)
-            || stretches.All(t => !t.Lines && t.End == t.Start && !(op == "c" && t.Inclusive && VimMotions.LineOf(text, t.Start).Length == 0));
+        // An emptied text gives the registers nothing, as Vim's empty buffer gives them nothing.
+        bool emptied = text.Length == 0 || intoEmptied;
+        // Nothing taken leaves them, but changing an empty line's place (or one empty line's sentence) empties one; blocks take pieces.
+        bool empty = emptied || !(block && (op == "c" || (lines is { } over && over.Bottom > over.Top)))
+            && stretches.All(t => !t.Lines && t.End == t.Start && !(op == "c" && VimMotions.LineOf(text, t.Start).Length == 0
+                && (t.Inclusive || (command.Name is "i" or "a" && command.Argument == "s" && VimMotions.LastLine(text, breakEnds) == 0))));
         if (op is "d" or "c" && !empty)
         {
             Registers.Delete(command.Register, taken, Jumps.Contains(command.Name));
+            EraseMarks(text, stretches, op == "c", view);
         }
         else if (op == "y")
         {
@@ -91,6 +101,23 @@ public sealed partial class Vim
             Remember(command);
         }
         return VimRegisters.IsClipboard(command.Register) && op is "d" or "c" or "y" ? result with { Clipboard = taken } : result;
+    }
+
+    /// <summary>The marks a mark command sets, which a delete of their line erases.</summary>
+    private const string Marked = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    /// <summary>The marks on lines a delete or change takes out whole erased, as Vim erases them: a stretch of lines its
+    /// own (a change's but its first, which it keeps), any other the lines between its ends.</summary>
+    private static void EraseMarks(TextSnapshot text, List<Stretch> stretches, bool change, IVimView view)
+    {
+        foreach (char name in Marked)
+        {
+            if (view.Mark(name, text) is { } at && text.GetLineFromOffset(at) is int line
+                && stretches.Any(s => s.Lines ? line >= s.First + (change ? 1 : 0) && line <= s.Last : line > s.First && line < s.Last))
+            {
+                view.EraseMark(name);
+            }
+        }
     }
 
     private static Stretch Whole(TextSnapshot text, int first, int last, int caret)
@@ -138,7 +165,13 @@ public sealed partial class Vim
         return merged;
     }
 
-    /// <summary>The text a stretch takes, as a register keeps it: line breaks "\n", whole lines each ending with one.</summary>
+    /// <summary>What an operator over the sorted stretches takes, as a register keeps it: a block's (<paramref name="block"/>)
+    /// as one as wide as its columns (<paramref name="over"/>), else the stretches' text.</summary>
+    private static VimRegister TakenBy(TextSnapshot text, List<Stretch> sorted, bool block, (int Top, int Bottom, int Left, int Right)? over, int tab) =>
+        block && over is { } columns && sorted.All(t => t.First == t.Last)
+            ? BlockTaken(text, sorted, columns, tab)
+            : new([.. Merged(sorted, pieces: true).Select(m => Taken(text, m))], sorted[0].Lines) { Blockwise = block };
+
     /// <summary>A block's text as a register keeps it: a piece for each of its lines, a line ending where the block
     /// begins giving an empty one and a line short of it as many spaces as the block is wide (one more after $), the
     /// block as wide as its columns or after $ its longest piece.</summary>
@@ -150,10 +183,11 @@ public sealed partial class Vim
                 : null)];
         int longest = found.Max(p => p is null ? 0 : TextNavigation.VisualColumn(TextSnapshot.From(p), p.Length, tab));
         bool toEnd = block.Right == int.MaxValue;
-        int width = toEnd ? longest : block.Right - block.Left + 1;
+        int width = toEnd ? Math.Max(1, longest) : block.Right - block.Left + 1;
         return new VimRegister([.. found.Select(p => p ?? new string(' ', toEnd ? longest + 1 : width))], false) { Blockwise = true, Width = width };
     }
 
+    /// <summary>The text a stretch takes, as a register keeps it: line breaks "\n", whole lines each ending with one.</summary>
     private static string Taken(TextSnapshot text, Stretch s)
     {
         if (s.Lines)
@@ -311,7 +345,7 @@ public sealed partial class Vim
     private VimResult Wrap(bool stay, TextSnapshot text, SelectionSet selections, List<Stretch> stretches, IVimView view)
     {
         int width = Options.TextWidth > 0 ? Options.TextWidth : view.LineLength > 0 ? view.LineLength : VimWrapping.DefaultWidth;
-        VimWrapping.Wrapped wrapped = VimWrapping.Wrap(text, LinesOf(stretches), width, view.Indent.TabWidth, view.LineEnding, view.LineComment, Options.JoinSpaces);
+        VimWrapping.Wrapped wrapped = VimWrapping.Wrap(text, LinesOf(stretches), width, view.Indent, view.LineEnding, view.LineComment, Options.JoinSpaces);
         IReadOnlyList<TextEdit> edits = wrapped.Edits;
         TextSnapshot after = text.Apply(edits);
         SelectionSet carets = selections.With(c =>
@@ -320,7 +354,8 @@ public sealed partial class Vim
             {
                 return Selection.At(Settled(after, wrapped.Map(c.Caret, after), breakEnds));
             }
-            int end = TextEditing.MapOffset(text.GetLine(s.Last).End, edits, true);
+            // gq leaves the caret on the line its motion reached, the stretch's last where it took that line in.
+            int end = TextEditing.MapOffset(s.Reached >= 0 ? text.GetLineStart(s.Reached) : text.GetLine(s.Last).End, edits, true);
             return Selection.At(VimMotions.FirstNonBlank(after, after.GetLineFromOffset(Math.Min(end, after.Length)), breakEnds));
         });
         return edits.Count == 0 ? new VimResult(true, carets) : new VimResult(true, Edits: [new EditPlan(edits, carets, EditKind.Other)]);

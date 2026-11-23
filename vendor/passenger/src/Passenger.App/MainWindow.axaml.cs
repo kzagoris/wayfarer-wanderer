@@ -45,6 +45,10 @@ public partial class MainWindow : IdeWindow
     /// <summary>What the last action came to, and the file shown's place and properties.</summary>
     private readonly StatusBar status;
 
+    /// <summary>The status bar's caret and Vim mode words following a key in a frame after its rows', where the frame of
+    /// both would draw every row between the caret and the window's foot again.</summary>
+    private readonly FrameApart caretWords;
+
     /// <summary>What the window tells the person, heard by a screen reader.</summary>
     private readonly Announcer announcer;
 
@@ -69,11 +73,15 @@ public partial class MainWindow : IdeWindow
     {
         UiThread.Own();
         InitializeComponent();
+        GiveToolbarButtons();
         session = ProjectSession.None(Setup());
         announcer = new Announcer(this, Root);
         status = new StatusBar(StatusMessage, StatusText, StatusIcon, StatusWorking, VimModeText, CaretButton, CaretText, IndentButton, IndentText, LanguageText, LineSeparatorButton,
-            LineEndingText, EncodingButton, EncodingText, announcer);
+            LineEndingText, EncodingButton, EncodingText, TargetFrameworkButton, TargetFrameworkText, announcer);
         popups = new PopupHost(Overlay, OverlayHost, Editors, () => session.Debug.Breakpoints);
+        // A search popup (Go to File, Find Action) stands just under the toolbar and the editor tabs, as tall as the theme draws them.
+        OverlayHost.Bind(MarginProperty, OverlayHost.GetResourceObservable(TokenKeys.TabStripHeight,
+            tabs => new Thickness(0, Toolbar.Height + (tabs is double strip ? strip : 0) + Gaps.Small, 0, 0)));
         navigator = new Navigation.Navigator(new Navigation.NavigatorParts(Editors, () => session, popups, status, path => OpenFile(path), Editors.TextOf)
         {
             Declare = () => Request(AppActions.GoToDeclaration),
@@ -105,6 +113,7 @@ public partial class MainWindow : IdeWindow
         AddGodotProject();
         AddGodotExport();
         AddDotnet();
+        AddPassengerCommand();
         AddTrust();
         AddRoutes();
         AddSteps();
@@ -116,6 +125,7 @@ public partial class MainWindow : IdeWindow
         AddRunMarks();
         AddRunHere();
         AddPlaces();
+        AddSwitcher();
         AddHierarchy();
         AddFileOperations();
         AcceptDrops(this);
@@ -178,7 +188,7 @@ public partial class MainWindow : IdeWindow
         Editors.ActiveChanged += (_, _) => UpdateStatus();
         Editors.ActiveChanged += (_, _) => session.CSharp?.FollowIndent(Editors.Active);
         Editors.ActiveChanged += (_, _) => session.CSharp?.Shown(Editors.Active);
-        // The indent widget and the line break follow a file's .editorconfig changed, or its save.
+        // The indent widget and the line break follow a file's .editorconfig changed, or its save; the context widget, its contexts.
         Editors.Opened += (_, document) => document.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName is nameof(OpenDocument.Indentation) or nameof(OpenDocument.LineEnding) && Editors.Active == document)
@@ -186,9 +196,19 @@ public partial class MainWindow : IdeWindow
                 UpdateStatus();
                 session.CSharp?.FollowIndent(document);
             }
+            else if (e.PropertyName is nameof(OpenDocument.ProjectContexts) or nameof(OpenDocument.ProjectContext) && Editors.Active == document)
+            {
+                UpdateStatus();
+            }
         };
-        Editors.CaretMoved += (_, _) => UpdateCaret();
-        Editors.ForEachEditor(editor => editor.VimModeChanged += (_, _) => UpdateCaret());
+        caretWords = new FrameApart(this, UpdateCaret);
+        Editors.CaretMoved += (_, _) => caretWords.Ask();
+        // The command line at once, which the input method's window follows.
+        Editors.ForEachEditor(editor => editor.VimModeChanged += (_, _) =>
+        {
+            status.ShowCommandLine(CaretShown);
+            caretWords.Ask();
+        });
         Editors.ForEachEditor(editor => editor.VimCommandLineEnd = () => status.EndIn(editor));
         Editors.ForEachEditor(editor => editor.VimRegisters = vimRegisters);
         Editors.ForEachEditor(FollowVim);
@@ -197,8 +217,8 @@ public partial class MainWindow : IdeWindow
         Editors.Refused += (_, problem) => status.Text = problem;
         Editors.Opened += (_, document) => session.Attach(document);
         Editors.Opened += (_, document) => document.EnsuresFinalLineBreak = () => settings.EnsureFinalLineBreak;
+        Editors.Opened += (_, document) => document.Decorations.SetAddresses(WrittenLink);
         Editors.Closed += (_, document) => session.Detach(document);
-        Editors.ForEachEditor(editor => editor.ProblemsRequested += (_, _) => ShowToolWindow(ToolWindowIds.Problems));
         // A gesture's action at its press in a file's editor (Cmd+click's Go to Declaration), the keymap's as a key's is.
         Editors.ForEachEditor(editor => editor.ActionRequested += (_, action) =>
         {
@@ -282,6 +302,8 @@ public partial class MainWindow : IdeWindow
         assist.Navigate += (_, target) => NavigateTo(target.Path, target.Position);
         assist.Message += (_, message) => status.Text = message;
         assist.Browse += (_, page) => Browse(page);
+        assist.FollowLink += (_, target) => OpenLink((ToolWindows.LinkTarget)target);
+        assist.FollowKeys = () => actions?.ShortcutsShown(AppActions.GoToDeclaration);
         assist.Play += (_, file) => IdeErrors.Observe(PlaySoundAsync(file));
         assist.FilesChanging = FollowingAsync;
         assist.KeepsPlaces = () => settings.FindResultsIn() == FindResults.FindWindow;
@@ -307,8 +329,10 @@ public partial class MainWindow : IdeWindow
         Bottom.Run.StopClicked += (_, _) => session.Runner.Stop();
         Bottom.Run.HotReloadClicked += (_, _) => Request(AppActions.ApplyHotReloadChanges);
         Bottom.Run.NameKeys(AppActions.Rerun, AppActions.Stop, AppActions.ApplyHotReloadChanges);
-        Bottom.Run.SayWhenEmpty(AppActions.RunProgram, keys => $"{ActionTips.Named("Run", keys)} shows a program's output here");
-        Bottom.Build.SayWhenEmpty(AppActions.Build, keys => $"{ActionTips.Named("Build Solution", keys)} shows the build's output here");
+        Bottom.Run.OfferWhenEmpty("A program's output shows here", AppActions.RunProgram, "Run");
+        Bottom.Build.OfferWhenEmpty("The build's output shows here", AppActions.Build, "Build Solution");
+        Bottom.Run.ActionRequested += (_, action) => Request(action);
+        Bottom.Build.ActionRequested += (_, action) => Request(action);
         AddUnitTests();
         AddLinks();
         AddLocalHistory();
@@ -326,7 +350,7 @@ public partial class MainWindow : IdeWindow
         assist.EditorFixes = (file, offset) => [.. Passenger.App.LiveTree.BindingErrors.Fixes(file, offset, session.FailedBindings.Select(b => b.Failure)),
             .. session.Web?.Checks.Fixes(file, offset) ?? [], .. assist.AspireFixes(file, offset), .. assist.ComposeReadFixes(file, offset), .. MigrationFixes(file, offset),
             .. assist.ConfigurationFixes(file, offset), .. assist.LocalizationFixes(file, offset), .. assist.GodotFixes(file, offset, session.GodotMarks),
-            .. MobileFixes(file, offset)];
+            .. MobileFixes(file, offset), .. PackageFixes(file, offset)];
         assist.AskValue = AskValueAsync;
         assist.ConfirmFix = (title, text, yes) => Confirm(title, text, yes);
         // The session as each call finds it.
@@ -492,14 +516,20 @@ public partial class MainWindow : IdeWindow
         }
         if (EditorWithKeys(window, focused) is not { } editor)
         {
-            if (!shifted && (ExplorerTakes(action) || (focused as Visual)?.FindAncestorOfType<ReleaseNotesView>(includeSelf: true)?.Move(action) == true))
+            if (!shifted && (ExplorerTakes(action) || CommitTakes(action, focused) || (focused as Visual)?.FindAncestorOfType<ReleaseNotesView>(includeSelf: true)?.Move(action) == true))
             {
                 e.Handled = true;
             }
             return;
         }
         bool own = editor == Editors.CodeEditor;
-        if (!shifted && EditorActions.IsChange(action) && editor is { IsReadOnly: true, ReadOnlyWhy: { } readOnly })
+        if (!shifted && action is EditorActions.Undo or EditorActions.Redo && editor.FindAncestorOfType<Passenger.App.Vcs.DiffView>() is { PutsBackOnDisk: not null } copy
+            && editor == copy.Right && UndoCommand(action == EditorActions.Redo, null))
+        {
+            // A diff's copy of a file not open takes back or makes again what was written to the file, as the Explorer does.
+            e.Handled = true;
+        }
+        else if (!shifted && EditorActions.IsChange(action) && editor is { IsReadOnly: true, ReadOnlyWhy: { } readOnly })
         {
             Say(readOnly);
             e.Handled = true;
@@ -703,6 +733,52 @@ public partial class MainWindow : IdeWindow
         ShowHotReloadButtons();
     }
 
+    /// <summary>A program the person debugs stopped: its cue, and the window comes to the front or asks for them, as Settings
+    /// says (<see cref="AppSettings.WhenDebuggerStops"/>); never for an agent's debugging, nor where nobody sees the window.</summary>
+    private void FollowStop(Debugging.DebugSession stopped)
+    {
+        if (AgentsOwn || stopped.AgentDrives)
+        {
+            return;
+        }
+        Cue(SoundCue.DebuggerStopped);
+        if (Unseen || settings.WhenDebuggerStops == DebuggerStop.Nothing)
+        {
+            return;
+        }
+        CallPerson(forward: settings.WhenDebuggerStops == DebuggerStop.ComeForward);
+    }
+
+    /// <summary>The system's request for the person's attention to this window, until it is active (<see cref="Attention"/>);
+    /// null when none stands.</summary>
+    private IDisposable? asked;
+
+    /// <summary>Whether the window asks for the person's attention, until it is active.</summary>
+    public bool AsksAttention => asked is not null;
+
+    /// <summary>Calls the person to the window: brought in front of the rest with <paramref name="forward"/>, and where it
+    /// is still not active (macOS keeps another program in front) their attention asked for it until it is.</summary>
+    public void CallPerson(bool forward)
+    {
+        UiThread.Check();
+        if (forward)
+        {
+            PassengerApp.BringForward(this);
+        }
+        if (IsActive || asked is not null)
+        {
+            return;
+        }
+        asked = Attention.Ask(this);
+        void Came(object? sender, EventArgs e)
+        {
+            Activated -= Came;
+            asked?.Dispose();
+            asked = null;
+        }
+        Activated += Came;
+    }
+
     /// <summary>Opens a tool window in its place (one of <see cref="ToolWindowIds"/>).</summary>
     public void ShowToolWindow(string id) => Dock.Show(id);
 
@@ -752,8 +828,11 @@ public partial class MainWindow : IdeWindow
     /// <summary>The tool windows, each in its first place.</summary>
     private void AddToolWindows()
     {
+        // Each shows only while the open folder holds what it serves, every one added later too.
+        Dock.WhyUnserved = window => window.Serves.WhyNot(session.Folder is null ? null : session.Holds);
         Dock.Add(new Docking.ToolWindow(ToolWindowIds.Explorer, "Explorer", IconKeys.Explorer, Explorer, Docking.ToolAnchor.LeftTop)
         {
+            Serves = ToolWindowServes.EveryFolder,
             Action = AppActions.FocusExplorer,
             HeaderTools = Explorer.TakeHeaderTools(),
             Options = ExplorerOptions,
@@ -764,15 +843,30 @@ public partial class MainWindow : IdeWindow
             OpenAtFirst = true,
         });
         // Shown however it is (its action, its stripe button, a layout), it asks for the file shown then itself.
-        Dock.Add(new Docking.ToolWindow(ToolWindowIds.Structure, "Structure", IconKeys.Structure, MakeStructure, Docking.ToolAnchor.LeftBottom) { Action = AppActions.ShowStructure });
-        Dock.Add(new Docking.ToolWindow(ToolWindowIds.Run, "Run", IconKeys.RunOutline, Bottom.RunWindow, Docking.ToolAnchor.BottomLeft) { Action = AppActions.ShowRun, ActionTitle = "Run Tool Window" });
+        Dock.Add(new Docking.ToolWindow(ToolWindowIds.Structure, "Structure", IconKeys.Structure, MakeStructure, Docking.ToolAnchor.LeftBottom)
+        {
+            Serves = ToolWindowServes.EveryFolder,
+            Action = AppActions.ShowStructure,
+        });
+        Dock.Add(new Docking.ToolWindow(ToolWindowIds.Run, "Run", IconKeys.RunOutline, Bottom.RunWindow, Docking.ToolAnchor.BottomLeft)
+        {
+            Serves = ToolWindowServes.EveryFolder,
+            Action = AppActions.ShowRun,
+            ActionTitle = "Run Tool Window",
+        });
         Dock.Add(new Docking.ToolWindow(ToolWindowIds.Debug, "Debug", IconKeys.Debug, () => debugView = new ToolWindows.DebugView(Bottom.Debug), Docking.ToolAnchor.BottomLeft)
         {
+            Serves = ToolWindowServes.EveryFolder,
             Action = AppActions.ShowDebug,
             ActionTitle = "Debug Tool Window",
             Tools = () => debugView?.HeaderTools,
         });
-        Dock.Add(new Docking.ToolWindow(ToolWindowIds.Aspire, "Aspire", IconKeys.Aspire, MakeAspire, Docking.ToolAnchor.BottomLeft) { Action = AppActions.ShowAspire, ActionTitle = "Aspire Tool Window" });
+        Dock.Add(new Docking.ToolWindow(ToolWindowIds.Aspire, "Aspire", IconKeys.Aspire, MakeAspire, Docking.ToolAnchor.BottomLeft)
+        {
+            Serves = ToolWindowServes.AppHosts,
+            Action = AppActions.ShowAspire,
+            ActionTitle = "Aspire Tool Window",
+        });
         Closed += (_, _) =>
         {
             Bottom.Aspire.Dispose();
@@ -780,15 +874,22 @@ public partial class MainWindow : IdeWindow
         };
         Dock.Add(new Docking.ToolWindow(ToolWindowIds.Tests, "Unit Tests", IconKeys.Tests, Bottom.Tests, Docking.ToolAnchor.BottomLeft)
         {
+            Serves = ToolWindowServes.EveryFolder,
             Action = AppActions.ShowTests,
             Menus = [new MenuPlace("Tests", 2, 0)],
             Chosen = () => Bottom.Tests.Selected,
             ExpandAll = Bottom.TestTree.ExpandAll,
             CollapseAll = Bottom.TestTree.CollapseAll,
         });
-        Dock.Add(new Docking.ToolWindow(ToolWindowIds.Build, "Build", IconKeys.Build, Bottom.Build, Docking.ToolAnchor.BottomLeft) { Action = AppActions.ShowBuild, ActionTitle = "Build Tool Window" });
+        Dock.Add(new Docking.ToolWindow(ToolWindowIds.Build, "Build", IconKeys.Build, Bottom.Build, Docking.ToolAnchor.BottomLeft)
+        {
+            Serves = ToolWindowServes.EveryFolder,
+            Action = AppActions.ShowBuild,
+            ActionTitle = "Build Tool Window",
+        });
         Dock.Add(new Docking.ToolWindow(ToolWindowIds.Problems, "Problems", IconKeys.Problems, () => new ToolWindows.ProblemsView(Bottom.Problems), Docking.ToolAnchor.BottomLeft)
         {
+            Serves = ToolWindowServes.EveryFolder,
             Action = AppActions.ShowProblems,
             ActionTitle = "Problems",
         });
@@ -941,6 +1042,7 @@ public partial class MainWindow : IdeWindow
         UnloadedProjects = [.. session.KeptUnloaded],
         TargetFrameworks = session.Frameworks.Kept,
         MigrationEnvironments = session.MigrationEnvironments.Kept,
+        MigrationFolders = session.MigrationFolders.Kept,
         RunTargets = session.Targets.Kept,
         Build = session.BuildChoices.Kept,
         Folds = session.Folds.Capture(Editors.Documents),
@@ -976,6 +1078,7 @@ public partial class MainWindow : IdeWindow
         session.Tests.Keep(opening.UnitTestResults.Value.Methods);
         branchFavorites = opening.GitBranches.Value;
         session.Vcs.SignOff = opening.Commit.Value.SignOff;
+        session.Vcs.GroupsByDirectory = opening.Commit.Value.GroupsByDirectory;
         if (gitView?.Log.Branches is { } branches)
         {
             branches.Favorites = branchFavorites;
@@ -1076,6 +1179,7 @@ public partial class MainWindow : IdeWindow
         Explorer.ShowProjectAgain(project);
         session.Configurations.Configure(Projects);
         status.Text = $"{Path.GetFileNameWithoutExtension(project)} {(unloaded ? "unloaded" : "reloaded")}";
+        ActionWork.Tell(true, $"{Path.GetFileNameWithoutExtension(project)} {(unloaded ? "unloaded" : "reloaded")}");
         FindTests();
         ShowSolutionProblems();
         KeepWorkspace();
@@ -1131,7 +1235,7 @@ public partial class MainWindow : IdeWindow
             Debugging.LineBreakpoint? inside = session.Debug.OnLambda(document, lambda);
             MenuItem choice = Choice(name, inside is not null, () => session.Debug.ToggleLambda(document, lambda));
             // Its code as the editor draws it.
-            choice.InCodeFont();
+            choice.Classes.Add(StyleClasses.Code);
             choice.FontFeatures = CSharp.Fonts.Features(settings.Ligatures);
             items.Add(choice);
             if (inside is not null)
@@ -1145,18 +1249,11 @@ public partial class MainWindow : IdeWindow
         }
         foreach ((string name, Debugging.LineBreakpoint breakpoint) in set)
         {
-            MenuItem edit = new() { Header = set.Count == 1 ? "Edit Breakpoint…" : $"Edit {name}…" };
-            edit.Click += (_, _) => ShowBreakpointPopup(breakpoint);
-            items.Add(edit);
+            items.Add(ToolWindows.ListMenus.Item(set.Count == 1 ? "Edit Breakpoint…" : $"Edit {name}…", () => ShowBreakpointPopup(breakpoint)));
         }
         return items;
 
-        static MenuItem Choice(string name, bool on, Action toggle)
-        {
-            MenuItem item = new() { Header = name, ToggleType = MenuItemToggleType.CheckBox, IsChecked = on };
-            item.Click += (_, _) => toggle();
-            return item;
-        }
+        static MenuItem Choice(string name, bool on, Action toggle) => ToolWindows.ListMenus.Toggle(name, on, _ => toggle());
     }
 
     /// <summary>A press on an icon of the gutter's marks: a test's menu, a route's or an .http request's, a run
@@ -1263,7 +1360,11 @@ public partial class MainWindow : IdeWindow
         return language;
     }
 
-    private void UpdateCaret() => status.ShowCaret(Editors.Active is { HoldsText: true } ? Editors.CodeEditor : null);
+    /// <summary>The status bar's caret and Vim mode words worded again, as <see cref="caretWords"/> runs it.</summary>
+    private void UpdateCaret() => status.ShowCaret(CaretShown);
+
+    /// <summary>The editor whose caret the status bar words: the one shown, while it shows text.</summary>
+    private CodeEditor? CaretShown => Editors.Active is { HoldsText: true } ? Editors.CodeEditor : null;
 
     private void OnProjectClicked(object? sender, RoutedEventArgs e) => ShowProjectMenu();
 

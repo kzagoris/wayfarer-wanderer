@@ -32,6 +32,9 @@ public sealed class DebugTab(string name, OutputView console) : Observable, IHot
     public Func<HotReloadOutcome, Task<bool>>? RestartFor { get; set; }
 
     internal bool OpeningStopped { get; set; }
+
+    /// <summary>Which of its session's stops the debugger last told the window of (<see cref="DebugSession.Stops"/>).</summary>
+    internal int StopTold { get; set; }
     internal void OnProgramOutput(OutputEvent output) => ProgramOutput?.Invoke(this, output);
     internal void OnStateChanged() => StateChanged?.Invoke(this, EventArgs.Empty);
 
@@ -56,6 +59,10 @@ public sealed class DebugTab(string name, OutputView console) : Observable, IHot
 
     /// <summary>The plan Debug launched its program by, where it serves; null for a program attached to.</summary>
     public Run.LaunchPlan? Plan { get; internal set; }
+
+    /// <summary>Where its program reads its standard input when the debugger attached to it rather than launching it, as a
+    /// clause ("in its container, shop-web-1"): its console types into nothing. Null for one launched.</summary>
+    public string? InputFrom { get; internal set; }
 
     /// <summary>Passenger's hook in its program, told of each update Hot Reload applied so the program's update handlers run;
     /// null for a program launched without it.</summary>

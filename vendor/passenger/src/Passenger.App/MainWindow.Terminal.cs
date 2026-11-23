@@ -17,10 +17,12 @@ public partial class MainWindow
     {
         Dock.Add(new Docking.ToolWindow(ToolWindowIds.Terminal, "Terminal", IconKeys.Terminal, MakeTerminal, Docking.ToolAnchor.BottomLeft)
         {
+            Serves = ToolWindowServes.EveryFolder,
             Action = AppActions.ShowTerminal,
             Tools = () => terminal?.HeaderTools,
             Menus = [new MenuPlace("Tools", 0, 2)],
             Activate = ToggleTerminal,
+            TakesKeysAsShown = true,
         });
         actions!.Add(new IdeAction(AppActions.NewTerminalSession, "New Terminal Session", "Terminal", _ => IdeErrors.Observe(NewTerminalSessionAsync())) { FromTerminal = true });
     }
@@ -38,6 +40,7 @@ public partial class MainWindow
     {
         ToolWindows.TerminalPanel panel = terminal = new ToolWindows.TerminalPanel(() => FolderHeld ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
         panel.ActionRequested += (_, action) => Request(action);
+        panel.CommandFailed += (_, _) => Cue(SoundCue.TerminalCommandFailed);
         panel.Emptied += (_, _) =>
         {
             Dock.Hide(ToolWindowIds.Terminal);

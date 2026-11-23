@@ -8,6 +8,7 @@ using Avalonia.Layout;
 using Passenger.App.Aspire;
 using Passenger.App.Containers;
 using Passenger.App.ToolWindows;
+using Passenger.Core;
 using Passenger.Editor;
 
 namespace Passenger.App.Telemetry;
@@ -140,15 +141,13 @@ public sealed class TelemetryView : IDisposable
         {
             if (both is null)
             {
-                ToggleButton logs = ToolTabs.Tab("Structured logs", Shown == TelemetryPage.Logs);
-                ToggleButton spans = ToolTabs.Tab("Traces", Shown == TelemetryPage.Traces);
-                logs.Name = "telemetryLogs";
-                spans.Name = "telemetryTraces";
+                ToolTabs.Strip<TelemetryPage> strip = new() { Margin = new Thickness(Gaps.Normal, 0) };
+                strip.Add(TelemetryPage.Logs, "Structured logs", name: "telemetryLogs");
+                strip.Add(TelemetryPage.Traces, "Traces", name: "telemetryTraces");
+                strip.Choice = Shown;
                 ContentControl page = new() { Content = Shown == TelemetryPage.Logs ? LogsPage : TracesPage };
-                logs.Click += (_, _) => Choose(TelemetryPage.Logs);
-                spans.Click += (_, _) => Choose(TelemetryPage.Traces);
+                strip.Chosen += (_, chosen) => Choose(chosen);
                 PageWanted += (_, wanted) => Choose(wanted);
-                StackPanel strip = new() { Orientation = Orientation.Horizontal, Spacing = 2, Margin = new Thickness(8, 0), VerticalAlignment = VerticalAlignment.Center, Children = { logs, spans } };
                 Border tabBar = ToolBars.Top(strip);
                 both = WithHeader(tabBar, page);
                 choose = Choose;
@@ -156,8 +155,7 @@ public sealed class TelemetryView : IDisposable
                 void Choose(TelemetryPage chosen)
                 {
                     Shown = chosen;
-                    logs.IsChecked = chosen == TelemetryPage.Logs;
-                    spans.IsChecked = chosen == TelemetryPage.Traces;
+                    strip.Choice = chosen;
                     page.Content = chosen == TelemetryPage.Logs ? LogsPage : TracesPage;
                     ShownChanged?.Invoke(this, chosen);
                 }
@@ -264,7 +262,7 @@ public sealed class TelemetryView : IDisposable
                     {
                         ShowTrace(again: true);
                     }
-                    tracesStatus.Text = $"Live · {traces.Count} retained traces";
+                    tracesStatus.Text = $"Live · {Numbers.Said(traces.Count)} retained traces";
                     if (wantedTrace is { } wanted && traces.FirstOrDefault(trace => trace.TraceId == wanted.TraceId) is { } listed)
                     {
                         wantedTrace = null;
@@ -398,7 +396,7 @@ public sealed class TelemetryView : IDisposable
         {
             return;
         }
-        logsStatus.Text = $"Live · {logItems.Count} retained structured logs";
+        logsStatus.Text = $"Live · {Numbers.Said(logItems.Count)} retained structured logs";
         if (wantedLogs is { } wanted && Correlated(wanted.TraceId, wanted.SpanId) is { } found)
         {
             wantedLogs = null;
@@ -602,12 +600,12 @@ public sealed class TelemetryView : IDisposable
     /// <summary>A page's bar: what it says, its buttons at the right.</summary>
     private static Border PageBar(TextBlock said, params Button[] buttons)
     {
-        StackPanel right = new() { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Right };
+        StackPanel right = new() { Orientation = Orientation.Horizontal, Spacing = Gaps.Hair, VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Right };
         foreach (Button button in buttons)
         {
             right.Children.Add(button);
         }
-        return ToolBars.Top(new DockPanel { Margin = new Thickness(8, 0), Children = { right, said } });
+        return ToolBars.Top(new DockPanel { Margin = new Thickness(Gaps.Normal, 0), Children = { right, said } });
     }
 
     private static ListBox List<T>(ObservableCollection<RunItem<T>> items, Func<T, string> text, string name)

@@ -29,6 +29,10 @@ public sealed record WorkspaceModel(string Folder, SolutionModel? Solution, IRea
     /// null for any other workspace.</summary>
     public UnreadSolution? Unread { get; init; }
 
+    /// <summary>Why the read found no solution, in words for the log: the one named is gone, the folder lists none or could
+    /// not be listed, or the solution did not read; null where it found one, or was opened as a project.</summary>
+    public string? NoSolution { get; init; }
+
     /// <summary>The solution file it was read from and the filter it was read through, each stamped just before it was read:
     /// one whose stamp no longer holds was written since.</summary>
     public IReadOnlyList<Stamp> ReadFrom { get; init; } = [];
@@ -133,15 +137,23 @@ public sealed record WorkspaceModel(string Folder, SolutionModel? Solution, IRea
     /// MSBuild's alone (.proj).</summary>
     private static readonly string[] ProjectExtensions = [".csproj", ".fsproj", ".vbproj", ".proj"];
 
+    /// <summary>The extensions of a file that opens as the workspace (<see cref="Opens"/>): a solution's, a solution
+    /// filter's and a C# project's.</summary>
+    public static IReadOnlyList<string> OpenedExtensions => Opened;
+
+    private static readonly string[] Opened = [.. SolutionExtensions, CSharpProject];
+
     /// <summary>Whether a file opens as the workspace rather than in an editor: a solution (.sln, .slnx), a solution
     /// filter (.slnf) or a C# project (.csproj).</summary>
-    public static bool Opens(string path) => IsSolution(path) || IsProject(path);
+    public static bool Opens(string path) => PathNames.HasExtension(path, Opened);
 
     /// <summary>Whether a file is a solution or a solution filter, either of which opens a solution.</summary>
     public static bool IsSolution(string path) => PathNames.HasExtension(path, SolutionExtensions);
 
     /// <summary>Whether a file is a C# project, the one kind of project that opens as the workspace.</summary>
-    public static bool IsProject(string path) => Path.GetExtension(path).Equals(".csproj", StringComparison.OrdinalIgnoreCase);
+    public static bool IsProject(string path) => Path.GetExtension(path).Equals(CSharpProject, StringComparison.OrdinalIgnoreCase);
+
+    private const string CSharpProject = ".csproj";
 
     /// <summary>Whether a file is a project file of any kind MSBuild evaluates as itself (<see cref="ProjectExtensions"/>),
     /// a C# project's among them.</summary>
@@ -156,9 +168,9 @@ public sealed record WorkspaceModel(string Folder, SolutionModel? Solution, IRea
     public static WorkspaceModel Read(string folder, string? named = null)
     {
         List<string> games = [];
-        return ReadSolution(folder, named, out UnreadSolution? unread) is { } read
+        return ReadSolution(folder, named, out UnreadSolution? unread, out string? none) is { } read
             ? read.WithPrograms(Walk(folder, [.. read.Projects.Where(p => !p.IsProgram).Select(p => p.Folder)], games)) with { GodotGames = games }
-            : new WorkspaceModel(folder, null, [.. Walk(folder, null, games).Select(ProjectModel.Unevaluated)]) { Unread = unread, GodotGames = games };
+            : new WorkspaceModel(folder, null, [.. Walk(folder, null, games).Select(ProjectModel.Unevaluated)]) { Unread = unread, NoSolution = none, GodotGames = games };
     }
 
     /// <summary>The folders of the Godot projects its walk found with no C# project of their own: a project.godot in a
@@ -187,18 +199,28 @@ public sealed record WorkspaceModel(string Folder, SolutionModel? Solution, IRea
 
     /// <summary>A folder read as <see cref="ReadSolution(string, string?)"/> reads it, with why its solution did not read in
     /// <paramref name="unread"/> when that is why there is none.</summary>
-    public static WorkspaceModel? ReadSolution(string folder, string? named, out UnreadSolution? unread)
+    public static WorkspaceModel? ReadSolution(string folder, string? named, out UnreadSolution? unread) => ReadSolution(folder, named, out unread, out _);
+
+    /// <summary>A folder read as <see cref="ReadSolution(string, string?, out UnreadSolution?)"/> reads it, with why it found
+    /// no solution in <paramref name="none"/>, in words for the log, where it found none (<see cref="NoSolution"/>).</summary>
+    public static WorkspaceModel? ReadSolution(string folder, string? named, out UnreadSolution? unread, out string? none)
     {
         unread = null;
+        none = null;
         if (named is not null && IsProject(named) && File.Exists(named))
         {
             return new WorkspaceModel(folder, null, [ProjectModel.Unevaluated(named)]) { ProjectFile = named };
         }
-        string? path = named is not null && IsSolution(named) && File.Exists(named) ? named : SolutionModel.Find(folder);
+        string? path = named is not null && IsSolution(named) && File.Exists(named) ? named : SolutionModel.Find(folder, out none);
+        if (path is null && named is not null && !File.Exists(named))
+        {
+            none = $"{named}, which it was opened by, is not there, and {none}";
+        }
         List<Stamp> stamped = path is null ? [] : [Stamps.File(path)];
         SolutionFilter? filter = path is not null && SolutionFilter.Is(path) ? SolutionFilter.Read(path) : null;
         if (path is not null && SolutionFilter.Is(path))
         {
+            none = filter is null ? $"the solution filter {path} did not read, or names no solution" : null;
             path = filter?.Solution;
             if (path is not null)
             {
@@ -206,13 +228,19 @@ public sealed record WorkspaceModel(string Folder, SolutionModel? Solution, IRea
             }
         }
         // A Docker Compose project is read as XML for its run configurations, a shared project for its files: neither loads.
-        return path is not null && SolutionModel.Load(path, out unread) is { } solution
-            ? new WorkspaceModel(folder, solution, [.. solution.Projects.Where(p => !IsComposeProject(p.Path) && !Workspace.SharedProjects.Is(p.Path))])
+        if (path is not null && SolutionModel.Load(path, out unread) is { } solution)
+        {
+            return new WorkspaceModel(folder, solution, [.. solution.Projects.Where(p => !IsComposeProject(p.Path) && !Workspace.SharedProjects.Is(p.Path))])
             {
                 Filter = filter,
                 ReadFrom = stamped,
-            }
-            : null;
+            };
+        }
+        if (unread is not null)
+        {
+            none = $"{unread.Path} did not read{(unread.Line > 0 ? $" at line {unread.Line}, column {unread.Column}" : string.Empty)}: {unread.Why}";
+        }
+        return null;
     }
 
     /// <summary>The solution's shared projects (.shproj), each the home of the files its items file brings into the projects
@@ -385,7 +413,7 @@ public sealed record WorkspaceModel(string Folder, SolutionModel? Solution, IRea
     /// outside every project's folder, whose files are the project's; in a folder with no project, a file of no directive
     /// that begins with top-level statements is one too (<see cref="TakesPlainPrograms"/>).</summary>
     public static bool IsProgram(string path, IReadOnlyList<string> head) =>
-        ProgramFiles.IsProgram(path) && head.Count > 0 && !head.Any(IsAspireSdk);
+        ProgramFiles.IsProgram(path) && head.Count > 0 && !AspireHosts.IsHead(head);
 
     /// <summary>Whether its C# files of no directive that begin with top-level statements are programs, as <c>dotnet run</c>
     /// runs them: a folder opened with no solution or project in it, nor any found under it.</summary>
@@ -398,6 +426,15 @@ public sealed record WorkspaceModel(string Folder, SolutionModel? Solution, IRea
         List<string> head = ProgramFiles.Head(path);
         return IsProgram(path, head) || head.Count == 0 && ProgramFiles.IsProgram(path) && TakesPlainPrograms && ProgramFiles.BeginsWithStatement(path);
     }
+
+    /// <summary>Whether a C# file is one of its programs now, among the <paramref name="projects"/> loaded: in a folder the
+    /// walk for programs enters, there, compiled by no project nor another program, and a program by its text (<see
+    /// cref="IsProgramFile"/>) or one a program references (<c>#:ref</c>). Its head is read, so more than a few are a worker's.</summary>
+    public bool IsProgramNow(string path, IReadOnlyList<ProjectModel> projects) =>
+        FolderWalk.Enters(Folder, PathNames.Below(Path.GetDirectoryName(path)!, Folder), built: true)
+        && File.Exists(path)
+        && !projects.Any(p => p.IsProgram ? !PathNames.Same(p.Path, path) && p.Holds(path) : PathNames.Within(path, p.Folder))
+        && (IsProgramFile(path) || projects.Any(p => p.IsProgram && p.ProjectReferences.Contains(path, PathNames.Comparer)));
 
     /// <summary>Whether a C# file opened alone opens with its folder, a program of it: its head makes it one, or it has none
     /// and begins with top-level statements in a folder holding no project or solution.</summary>
@@ -421,7 +458,4 @@ public sealed record WorkspaceModel(string Folder, SolutionModel? Solution, IRea
             return false;
         }
     }
-
-    private static bool IsAspireSdk(string directive) =>
-        ProgramFiles.Parse(directive) is ("sdk", { } sdk) && sdk.Split('@')[0].Trim().Equals("Aspire.AppHost.Sdk", StringComparison.OrdinalIgnoreCase);
 }

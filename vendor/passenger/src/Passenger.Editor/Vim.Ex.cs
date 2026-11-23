@@ -29,6 +29,8 @@ public sealed partial class Vim
     private VimResult OneEx(string line, TextSnapshot text, SelectionSet selections, IVimView view)
     {
         VimResult result = ExCommand(line, text, selections, view);
+        // One that changes the text or moves the carets sets the column j and k aim for afresh.
+        wantedFor = result.Edits is { Count: > 0 } || (result.Selections is { } moved && !moved.SameAs(selections)) ? null : wantedFor;
         return view.Refuses is { } why && result.Edits is { Count: > 0 } ? Refused(why) : result;
     }
 
@@ -44,7 +46,7 @@ public sealed partial class Vim
             i++;
         }
         int caretLine = text.GetLineFromOffset(selections.Primary.Caret);
-        if (!ReadRange(line, ref i, text, caretLine, view, out (int First, int Last)? range, out string? problem))
+        if (!ReadRange(line, ref i, text, caretLine, view, out (int First, int Last)? range, out bool bothEnds, out string? problem))
         {
             return Said(problem!);
         }
@@ -82,6 +84,11 @@ public sealed partial class Vim
         }
         string args = line[i..];
         int last = VimMotions.LastLine(text, breakEnds);
+        if (name.Length > 0 && range is { } named && Math.Max(named.First, named.Last) > last)
+        {
+            // A line past the last is a jump's to the last, but no command's to act on.
+            return Said("E16: Invalid range");
+        }
         (int first, int end) = range ?? (caretLine, caretLine);
         (first, end) = (Math.Clamp(Math.Min(first, end), 0, last), Math.Clamp(Math.Max(first, end), 0, last));
         string trimmed = args.Trim();
@@ -92,6 +99,8 @@ public sealed partial class Vim
                 {
                     return VimResult.Held;
                 }
+                // A line's number goes to its first non-blank, the column j and k aim at set afresh even where the caret stays.
+                wantedFor = null;
                 return Jumped(text, selections, view, VimMotions.FirstNonBlank(text, range.Value.Last < 0 ? 0 : Math.Min(range.Value.Last, last), breakEnds));
             case "w" or "write" or "up" or "upd" or "upda" or "updat" or "update":
                 return trimmed.Length > 0 ? Said($"Vim mode saves the file shown: :{name} {trimmed} is not done") : Asked(VimRequestKind.Save);
@@ -123,10 +132,13 @@ public sealed partial class Vim
                 return Set(trimmed);
             case "d" or "de" or "del" or "delete" or "y" or "ya" or "yank":
                 return LinesCommand(name[0] == 'd' ? "d" : "y", trimmed, first, end, selections.Primary.Caret, text, view);
+            case "m" or "mo" or "move" or "t" or "co" or "cop" or "copy":
+                return MovedOrCopied(name[0] == 'm', trimmed, first, end, caretLine, text, view);
             case "j" or "join":
-                return Join(text, SelectionSet.Single(text.GetLineStart(first)), Math.Max(2, end - first + 1), spaced: !bang, Options.JoinSpaces) is { } joined
+                // Equal ends join nothing, nor the last line: the caret goes to the range's line, in its column.
+                return (bothEnds && first == end ? null : Join(text, SelectionSet.Single(text.GetLineStart(first)), Math.Max(2, end - first + 1), spaced: !bang, Options.JoinSpaces)) is { } joined
                     ? new VimResult(true, Edits: [OnFirstNonBlank(text, joined, first)])
-                    : VimResult.Held;
+                    : new VimResult(true, SelectionSet.Single(InColumn(text, first, selections.Primary.Caret)));
             case ">" or ">>" or ">>>" or "<" or "<<" or "<<<":
                 Stretch shifted = Whole(text, first, end, text.GetLineStart(first));
                 VimResult moved = Shift(text, SelectionSet.Single(text.GetLineStart(first)), [shifted], name[0] == '>', view, name.Length);
@@ -261,23 +273,34 @@ public sealed partial class Vim
         return plan with { Selections = SelectionSet.Single(VimMotions.FirstNonBlank(after, Math.Min(line, VimMotions.LastLine(after, breakEnds)), breakEnds)) };
     }
 
+    /// <summary>The place on a line as far along it as the caret stands on its own, settled onto the line's characters.</summary>
+    private int InColumn(TextSnapshot text, int line, int caret)
+    {
+        LineSpan to = text.GetLine(line);
+        int column = caret - VimMotions.LineOf(text, caret).Start;
+        return Settled(text, Math.Min(to.Start + column, to.End), breakEnds);
+    }
+
     /// <summary>A jump to an offset: the place left kept as the mark ' and told to the host for its places.</summary>
     private VimResult Jumped(TextSnapshot text, SelectionSet selections, IVimView view, int to)
     {
         int from = selections.Primary.Caret;
-        view.SetMark('\'', from);
+        view.SetMark('\'', from, text);
         return new VimResult(true, SelectionSet.Single(Settled(text, to, breakEnds))) { JumpedFrom = from };
     }
 
     /// <summary>The lines a command names, from zero; none where it names none; false with why where an address fails.</summary>
-    private bool ReadRange(string line, ref int i, TextSnapshot text, int caretLine, IVimView view, out (int First, int Last)? range, out string? problem)
+    private bool ReadRange(string line, ref int i, TextSnapshot text, int caretLine, IVimView view, out (int First, int Last)? range, out bool bothEnds,
+        out string? problem)
     {
         range = null;
+        bothEnds = false;
         problem = null;
         if (i < line.Length && line[i] == '%')
         {
             i++;
             range = (0, VimMotions.LastLine(text, breakEnds));
+            bothEnds = true;
             return true;
         }
         int current = caretLine;
@@ -297,6 +320,7 @@ public sealed partial class Vim
                 return false;
             }
             range = (first ?? caretLine, second ?? current);
+            bothEnds = true;
             return true;
         }
         range = first is { } only ? (only, only) : null;
@@ -382,7 +406,8 @@ public sealed partial class Vim
             int by = i > start ? int.Parse(line[start..i], CultureInfo.InvariantCulture) : 1;
             address = (address ?? current) + (sign * by);
         }
-        if (address is < 0 && c != '0')
+        // Line 0 stands for the first, as Vim takes it; one before it is no line.
+        if (address is < -1)
         {
             problem = "E16: Invalid range";
             return false;
@@ -515,7 +540,7 @@ public sealed partial class Vim
         }
         catch (RegexMatchTimeoutException)
         {
-            return Said(SearchResult.TookTooLong);
+            return Said(TextSearch.RegexStopped);
         }
         int caretLine = text.GetLineFromOffset(selections.Primary.Caret);
         if (matched == 0)
@@ -618,8 +643,13 @@ public sealed partial class Vim
                     at = run + 1;
                 }
                 ChangeMade? keep = lastChange;
-                VimResult deleted = Act(new Command([], 0, null, "d", "line", null), "d", taken, text, SelectionSet.Single(text.GetLineStart(lines[^1])), view);
+                VimResult deleted = Act(new Command([], 0, '_', "d", "line", null), "d", taken, text, SelectionSet.Single(text.GetLineStart(lines[^1])), view);
                 lastChange = keep;
+                foreach (int line in lines)
+                {
+                    // Each line is deleted in turn, so register 1 holds the last and those before shift down.
+                    Registers.Delete(null, new VimRegister([Taken(text, Whole(text, line, line, 0))], true), false);
+                }
                 // The caret goes to the line after the last one deleted, as Vim's does.
                 return deleted.Edit is { } plan
                     ? new VimResult(true, Edits: [OnFirstNonBlank(text, plan, lines[^1] - (lines.Count - 1))]) { Highlight = SearchShown() }
@@ -641,6 +671,64 @@ public sealed partial class Vim
         VimResult result = Act(new Command([], 0, register, op, "line", null), op, [Whole(text, first, end, at) with { Landing = at }], text, SelectionSet.Single(at), view);
         lastChange = keep;
         return result;
+    }
+
+    /// <summary>:m and :t: the lines named moved, or copied, below the line the address after them names (0 for above the
+    /// first, its + and - counted from the caret's line), the caret on the first non-blank of the last line put; a move
+    /// into its own lines refused. A move takes the lines between round the lines named, so what is in them (a mark, a
+    /// fold) goes with them.</summary>
+    private VimResult MovedOrCopied(bool move, string args, int first, int end, int caretLine, TextSnapshot text, IVimView view)
+    {
+        int at = 0;
+        if (!Address(args, ref at, text, caretLine, view, out int? named, out string? problem))
+        {
+            return Said(problem!);
+        }
+        if (named is not { } below || args[at..].Trim().Length > 0)
+        {
+            return Said("E14: Invalid address");
+        }
+        if (below > VimMotions.LastLine(text, breakEnds))
+        {
+            return Said("E16: Invalid range");
+        }
+        if (move && below >= first && below < end)
+        {
+            return Said("E134: Cannot move a range of lines into itself");
+        }
+        int count = end - first + 1;
+        int landed = move && below >= end ? below : below + count;
+        if (move && (below == end || below == first - 1))
+        {
+            return new VimResult(true, SelectionSet.Single(VimMotions.FirstNonBlank(text, end, breakEnds)));
+        }
+        string eol = view.LineEnding;
+        // A copy puts the lines named below the line named; a move puts the lines between on the other side of them.
+        (int From, int To, int Below) put = !move ? (first, end, below) : below < first ? (below + 1, first - 1, end) : (end + 1, below, first - 1);
+        LineSpan top = text.GetLine(put.From);
+        LineSpan bottom = text.GetLine(put.To);
+        string lines = text.GetText(top.Start, bottom.End - top.Start);
+        LineSpan under = put.Below >= 0 ? text.GetLine(put.Below) : default;
+        // An emptied text is the one empty line its final line break ends.
+        TextEdit added = text.Length == 0 && breakEnds ? new TextEdit(0, 0, eol + eol)
+            : put.Below < 0 ? new TextEdit(0, 0, lines + eol)
+            : new TextEdit(under.End, 0, eol + lines);
+        List<TextEdit> edits = [added];
+        if (move)
+        {
+            Stretch taken = Whole(text, put.From, put.To, top.Start);
+            edits.Add(new TextEdit(taken.Start, taken.End - taken.Start, string.Empty));
+            edits.Sort((a, b) => a.Start.CompareTo(b.Start));
+        }
+        TextSnapshot after = text.Apply(edits);
+        LineSpan moving = text.GetLine(first);
+        EditPlan plan = new(edits, SelectionSet.Single(VimMotions.FirstNonBlank(after, landed, breakEnds)), EditKind.Other)
+        {
+            // The lines named go where they land as much as the lines between go past them.
+            Moved = move ? [new TextMove(top.Start, lines.Length, after.GetLineStart(below < first ? landed + 1 : first)),
+                new TextMove(moving.Start, text.GetLine(end).End - moving.Start, after.GetLineStart(landed - count + 1))] : [],
+        };
+        return new VimResult(true, Edits: [plan]);
     }
 
     /// <summary>:normal: its keys pressed on the caret's line, or at the start of each line named, each line found by

@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
+using Passenger.App.ToolWindows;
 using Passenger.Core;
 
 namespace Passenger.App.History;
@@ -12,16 +13,17 @@ namespace Passenger.App.History;
 public sealed class LocalHistoryView : DockPanel
 {
     private readonly List<(string Path, string Title, HistoryTab Tab)> histories = [];
-    private readonly StackPanel tabs = new() { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
+    private readonly ToolWindows.ToolTabs.Strip<HistoryTab> tabs = new();
     private readonly ContentControl body = new();
-    private readonly TextBlock empty;
+    private readonly EmptyState empty;
 
     public LocalHistoryView()
     {
-        empty = new TextBlock { Classes = { StyleClasses.EmptyText } };
-        ActionTips.SetWords(empty, AppActions.ShowLocalHistory, keys => $"{ActionTips.Named("Show Local History", keys)} on a file or folder lists its versions here");
+        empty = new EmptyState();
+        empty.SayWithKeys(AppActions.ShowLocalHistory, keys => $"{ActionTips.Named("Show Local History", keys)} on a file or folder lists its versions here");
         body.Content = empty;
         Children.Add(body);
+        tabs.Chosen += (_, tab) => Show(tab);
     }
 
     /// <summary>The tabs, for the tool window's header.</summary>
@@ -86,18 +88,14 @@ public sealed class LocalHistoryView : DockPanel
 
     private void DrawTabs()
     {
-        tabs.Children.Clear();
+        tabs.Clear();
         foreach ((string path, string title, HistoryTab tab) in histories)
         {
-            tabs.Children.Add(Tab(title, path, tab));
+            ToolTip.SetTip(tabs.Add(tab, title, () => Close(tab)), path);
         }
-    }
-
-    private ToggleButton Tab(string title, string tip, HistoryTab tab)
-    {
-        ToggleButton button = ToolWindows.ToolTabs.Tab(title, tab == Shown, () => Close(tab));
-        ToolTip.SetTip(button, tip);
-        button.Click += (_, _) => Show(tab);
-        return button;
+        if (Shown is not null)
+        {
+            tabs.Choice = Shown;
+        }
     }
 }

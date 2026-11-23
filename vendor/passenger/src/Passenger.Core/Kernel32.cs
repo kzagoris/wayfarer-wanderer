@@ -30,6 +30,42 @@ public static partial class Kernel32
     /// <summary>NtQueryInformationProcess's ProcessBasicInformation.</summary>
     private const int ProcessBasicInformation = 0;
 
+    /// <summary>TH32CS_SNAPPROCESS.</summary>
+    private const uint SnapProcesses = 0x2;
+
+    /// <summary>Each process running, by its id and the id of the process that started it, as one snapshot of the system's.</summary>
+    public static unsafe List<(int Child, int Parent)> Processes()
+    {
+        List<(int Child, int Parent)> listed = [];
+        using SafeFileHandle snapshot = CreateToolhelp32Snapshot(SnapProcesses, 0);
+        if (snapshot.IsInvalid)
+        {
+            return listed;
+        }
+        ProcessEntry entry = new() { Size = (uint)sizeof(ProcessEntry) };
+        for (bool more = Process32First(snapshot, &entry); more; more = Process32Next(snapshot, &entry))
+        {
+            listed.Add(((int)entry.ProcessId, (int)entry.ParentProcessId));
+        }
+        return listed;
+    }
+
+    /// <summary>PROCESSENTRY32W.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private unsafe struct ProcessEntry
+    {
+        public uint Size;
+        public uint Usage;
+        public uint ProcessId;
+        public nuint DefaultHeapId;
+        public uint ModuleId;
+        public uint Threads;
+        public uint ParentProcessId;
+        public int PriorityBase;
+        public uint Flags;
+        public fixed char ExeFile[260];
+    }
+
     /// <summary>The id a process names as its parent's, from PROCESS_BASIC_INFORMATION, six pointer-sized fields with that
     /// id last; null when Windows will not say.</summary>
     public static unsafe int? ParentOf(SafeProcessHandle process)
@@ -65,6 +101,34 @@ public static partial class Kernel32
     public static long? BeganUnder(SafeProcessHandle process, int parent, long parentBegan) =>
         ParentOf(process) == parent && BeganAt(process) is { } began && began >= parentBegan ? began : null;
 
+    /// <summary>Whether a process runs as a 32-bit program on 64-bit Windows (IsWow64Process2 naming the machine it is
+    /// built for: x86's, run natively on x64 and by emulation on Arm64); null when Windows will not say.</summary>
+    public static bool? Runs32Bit(SafeProcessHandle process) => IsWow64Process2(process, out ushort built, out _) ? built != 0 : null;
+
+    /// <summary>A process's executable, as the system started it (QueryFullProcessImageName): known from the moment the
+    /// process is made, before its loader has listed any module; null when it is gone or Windows will not say.</summary>
+    public static string? ExecutableOf(int process)
+    {
+        using SafeProcessHandle opened = OpenProcess(ProcessQueryLimitedInformation, false, (uint)process);
+        return opened.IsInvalid ? null : ExecutableOf(opened);
+    }
+
+    /// <inheritdoc cref="ExecutableOf(int)"/>
+    public static unsafe string? ExecutableOf(SafeProcessHandle process)
+    {
+        char* buffer = stackalloc char[32768];
+        uint length = 32768;
+        return QueryFullProcessImageName(process, 0, buffer, &length) ? new string(buffer, 0, (int)length) : null;
+    }
+
+    [LibraryImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static unsafe partial bool QueryFullProcessImageName(SafeProcessHandle process, uint flags, char* name, uint* size);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "IsWow64Process2", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool IsWow64Process2(SafeProcessHandle process, out ushort processMachine, out ushort nativeMachine);
+
     [LibraryImport("kernel32.dll", EntryPoint = "OpenProcess", SetLastError = true)]
     public static partial SafeProcessHandle OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint id);
 
@@ -77,6 +141,9 @@ public static partial class Kernel32
 
     [LibraryImport("ntdll.dll", EntryPoint = "NtQueryInformationProcess")]
     public static unsafe partial int NtQueryInformationProcess(SafeProcessHandle process, int kind, byte* information, uint length, uint* returned);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "OpenThread", SetLastError = true)]
+    public static partial nint OpenThread(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint id);
 
     [LibraryImport("kernel32.dll", EntryPoint = "ResumeThread", SetLastError = true)]
     public static partial uint ResumeThread(nint thread);
@@ -102,4 +169,15 @@ public static partial class Kernel32
     [LibraryImport("kernel32.dll", EntryPoint = "GetFileInformationByHandleEx", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static unsafe partial bool GetFileInformationByHandleEx(SafeFileHandle file, int kind, void* information, uint size);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "CreateToolhelp32Snapshot", SetLastError = true)]
+    private static partial SafeFileHandle CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "Process32FirstW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static unsafe partial bool Process32First(SafeFileHandle snapshot, ProcessEntry* entry);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "Process32NextW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static unsafe partial bool Process32Next(SafeFileHandle snapshot, ProcessEntry* entry);
 }

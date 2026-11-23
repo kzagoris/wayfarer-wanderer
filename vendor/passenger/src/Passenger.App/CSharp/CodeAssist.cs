@@ -86,7 +86,7 @@ public sealed class CodeAssist
         CSharpAssist csharp = new(context, popups, completion, parameterInfo, navigation, actions, xaml);
         GDScriptAssist gdscript = new(context, completion, parameterInfo, navigation, actions);
         parameterInfo.Own = gdscript;
-        context.Languages = new LanguageAssists(new HttpAssist(context, navigation), new MSBuildAssist(context, popups, completion), xaml,
+        context.Languages = new LanguageAssists(new LinkAssist(context), new HttpAssist(context, navigation), new MSBuildAssist(context, popups, completion), xaml,
             new ComposeAssist(context, popups, completion, navigation, actions), new SettingsAssist(context, completion, navigation),
             new CssClassAssist(context, completion, navigation), gdscript, new WebAssist(context, popups, completion, parameterInfo, actions),
             new GodotShaderAssist(context, completion, navigation, csharp), new GodotAssist(context, popups, completion, navigation, actions, csharp),
@@ -115,6 +115,22 @@ public sealed class CodeAssist
                 }
             };
             editor.HoverEnded += (_, _) => quickInfo.PointerLeft();
+            editor.ClickReach = (action, offset, cancel) => editor == Editor && action == AppActions.GoToDeclaration ? DeclaredFromAsync(offset, cancel) : NoReach;
+            editor.FormatsTyped = typed => editor == Editor && context.Languages.CSharp.FormatsTyped(typed);
+            editor.LeftBlock += (_, closer) =>
+            {
+                if (editor == Editor)
+                {
+                    context.Languages.CSharp.FormatLeft(closer);
+                }
+            };
+            editor.OpenedBlock += (_, _) =>
+            {
+                if (editor == Editor)
+                {
+                    context.Languages.CSharp.FormatOpened();
+                }
+            };
             editor.Typed += (_, text) =>
             {
                 if (editor == Editor)
@@ -145,6 +161,26 @@ public sealed class CodeAssist
             CloseAll();
             popups.FollowLayer();
         };
+    }
+
+    /// <summary>A diff's side that is an open file's own text answers the pointer resting on it as the file's editor does,
+    /// with the card of what is there and, under Go to Declaration's held gesture, what it would go from underlined, while
+    /// <paramref name="worked"/> says its diff is the one worked in; on <paramref name="layer"/>, over the diff's own window,
+    /// else over the editors. A side of another version is never given: no language server has read it.</summary>
+    public void HoverIn(CodeEditor side, OpenDocument file, Func<bool> worked, Canvas? layer)
+    {
+        side.ClickReach = (action, offset, cancel) => worked() && action == AppActions.GoToDeclaration && ReferenceEquals(side.Document, file.Text)
+            ? DeclaredFromAsync(file, side, offset, cancel) : NoReach;
+        side.Hovered += (_, e) =>
+        {
+            if (worked() && !quickInfo.ValuesInUse && e.Annotation is null && e.Hint is null)
+            {
+                IdeErrors.Observe(quickInfo.ShowIn(side, file, layer, e.Offset, e.Point));
+            }
+        };
+        side.HoverEnded += (_, _) => quickInfo.PointerLeft();
+        side.Typed += (_, _) => quickInfo.LetGo(side, null);
+        side.DetachedFromVisualTree += (_, _) => quickInfo.LetGo(side, layer);
     }
 
     /// <summary>A place to go: a file and a line and column (from zero).</summary>
@@ -195,6 +231,19 @@ public sealed class CodeAssist
         remove => context.Browsed -= value;
     }
 
+    /// <summary>A link to follow, an address written in a file's comment or string: what it opens, its target.</summary>
+    public event EventHandler<object>? FollowLink
+    {
+        add => context.Followed += value;
+        remove => context.Followed -= value;
+    }
+
+    /// <summary>The keys that follow a link (Go to Declaration's), as a tip shows them; null with none.</summary>
+    public Func<string?> FollowKeys
+    {
+        set => context.FollowKeys = value;
+    }
+
     /// <summary>A sound a card's Play asks for.</summary>
     public event EventHandler<string>? Play
     {
@@ -232,6 +281,9 @@ public sealed class CodeAssist
     /// <summary>What the card beside the completion list says about the chosen item while it shows, null otherwise.</summary>
     public string? ItemDocumentation => completion.ItemDocumentation;
 
+    /// <summary>The card beside the completion list while it shows.</summary>
+    public Border? ItemCard => completion.ItemCard;
+
     /// <summary>Where the completion list and the card beside it lie in their window, as last laid out, while the card shows.</summary>
     public (Rect List, Rect Card)? ItemCardPlace => completion.ItemCardPlace;
 
@@ -243,6 +295,15 @@ public sealed class CodeAssist
 
     /// <summary>The completion list's rows, in order, each with the detail it shows on its right, while it shows.</summary>
     public IReadOnlyList<(string Label, string Detail)> CompletionDetails => completion.Details;
+
+    /// <summary>The completion list's rows, in order, each with its badge's letter, while it shows.</summary>
+    public IReadOnlyList<(string Label, string Letter)> CompletionBadges => completion.Badges;
+
+    /// <summary>The completion list's filters by the kind of member, by their names, as shown under its rows while it shows.</summary>
+    public IReadOnlyList<string> CompletionFilters => completion.FilterNames;
+
+    /// <summary>The completion list's filter of the kind of member it names, shown or not.</summary>
+    public Avalonia.Controls.Primitives.ToggleButton CompletionFilter(string named) => completion.Filter(named);
 
     /// <summary>What was typed of the name the completion list shows its rows for, while it shows.</summary>
     public string? CompletionNarrowedBy => completion.NarrowedBy;
@@ -261,6 +322,10 @@ public sealed class CodeAssist
 
     /// <summary>What the hover card says while it shows, null otherwise.</summary>
     public string? HoverText => quickInfo.Text;
+
+    /// <summary>What is at the caret as plain text (Read as Text): the problems on its line and what the file's language
+    /// says of it (<see cref="QuickInfo.WordsAtAsync"/>).</summary>
+    public Task<string> WordsAtCaretAsync(CancellationToken cancel) => quickInfo.WordsAtAsync(context.Caret, cancel);
 
     /// <summary>The rows of a paused program's value the hover card shows, while it shows them.</summary>
     public Debugging.VariablesList? HoverValues => quickInfo.Values;
@@ -462,6 +527,14 @@ public sealed class CodeAssist
         set => completion.CallsMethods = value;
     }
 
+    /// <summary>Whether C# is formatted as it is typed, at a statement's ';', a block's '}' and Enter between a '{' and its
+    /// '}', as Settings leaves it.</summary>
+    public bool FormatOnType
+    {
+        get => context.Languages.CSharp.FormatsOnType;
+        set => context.Languages.CSharp.FormatsOnType = value;
+    }
+
     /// <summary>The XAML code style as Settings leaves it, which a file's .editorconfig overrides.</summary>
     public XamlFormatSettings XamlFormat
     {
@@ -480,11 +553,16 @@ public sealed class CodeAssist
     private CodeEditor Editor => context.Editor;
 
     /// <summary>Keys the open popups take before the editor does: the completion list's Up, Down, Enter,
-    /// Tab and Escape, and Escape for a card.</summary>
+    /// Tab and Escape, Parameter Info's keys for its next and previous overload, and Escape for a card.</summary>
     public bool TakeKey(string action)
     {
         if (completion.TakeKey(action))
         {
+            return true;
+        }
+        if (OverloadStep(action) is { } step)
+        {
+            parameterInfo.Step(step);
             return true;
         }
         if (action == EditorActions.Escape && (parameterInfo.IsVisible || quickInfo.IsVisible))
@@ -495,6 +573,17 @@ public sealed class CodeAssist
         }
         return false;
     }
+
+    /// <summary>Whether Parameter Info shows a call of several overloads, which its keys step through.</summary>
+    public bool StepsOverloads => parameterInfo.Steps;
+
+    /// <summary>The step a key of the editor's takes through Parameter Info's overloads while it shows several (the keys
+    /// of Next and Previous Overload, <see cref="AppActions.KeysIn"/>); null for none.</summary>
+    private int? OverloadStep(string action) =>
+        !parameterInfo.Steps ? null
+        : action == AppActions.KeysIn(AppActions.NextOverload) ? 1
+        : action == AppActions.KeysIn(AppActions.PreviousOverload) ? -1
+        : null;
 
     /// <summary>Closes the list of choices or rename box open in a window, as Escape there does wherever the keys are,
     /// saying whether one was.</summary>
@@ -510,11 +599,28 @@ public sealed class CodeAssist
         Code(AppActions.Complete, "Basic Completion", context => IdeErrors.Observe(completion.Start(null)), new("Code/Code Completion", 0, 0), xaml: true, msbuild: true,
             godot: true, shader: true, writes: true);
         Code(AppActions.CompleteStatement, "Complete Current Statement", _ => completion.CompleteStatement(), new("Code/Code Completion", 1, 0), server: false, syntax: true, writes: true);
+        registry.Add(new IdeAction(AppActions.NextOverload, "Next Overload", "Code", _ => parameterInfo.Step(1))
+        {
+            WhyNot = _ => parameterInfo.Steps ? null : Refusals.NoOverloadsShown,
+        });
+        registry.Add(new IdeAction(AppActions.PreviousOverload, "Previous Overload", "Code", _ => parameterInfo.Step(-1))
+        {
+            WhyNot = _ => parameterInfo.Steps ? null : Refusals.NoOverloadsShown,
+        });
+        foreach (MemberKinds kind in MemberKindsOf.All)
+        {
+            // The list's keys while it shows its filters, the editor's own anywhere else.
+            registry.Add(new IdeAction(MemberKindsOf.ActionOf(kind), $"Completion Filter: {MemberKindsOf.Words(kind)}", "Code", _ => completion.ToggleFilter(kind))
+            {
+                InEditor = true,
+                WhyNot = _ => completion.WhyNotFilter(kind),
+            });
+        }
         // Passenger's own fixes first, which a file the server does not read (a XAML file) may have too.
         registry.Add(new IdeAction(AppActions.QuickFix, "Show Context Actions", "Code", context => IdeErrors.Observe(actions.ShowFixes(AppActions.QuickFix)))
         {
             WhyNot = context => (actions.OwnFixes(context.File, context.Editor.Selections.Primary.Caret).Count > 0 ? null : WhyNot(context, server: true, xaml: true))
-                ?? (context.File is { } shown && context.Editor.IsReadOnly ? Refusals.ReadOnly(shown.Name) : null),
+                ?? context.ReadOnlyWhy,
             Menus = [new("Code", 0, 1)],
         });
         // Generate: the server's actions that write code for the type (constructors, equality, members, overrides).
@@ -525,7 +631,7 @@ public sealed class CodeAssist
         registry.Add(new IdeAction(AppActions.Reformat, "Reformat Code", "Code", context => IdeErrors.Observe(actions.Reformat()))
         {
             WhyNot = context => (context.File is { } file && (web.PrettierReformats(file) || Godot.GodotScriptTypes.IsScript(file.Path) || Passenger.App.Bdd.FeatureChecks.IsFeature(file.Path))
-                ? null : WhyNot(context, server: true, markup: true)) ?? (context.File is { } shown && context.Editor.IsReadOnly ? Refusals.ReadOnly(shown.Name) : null),
+                ? null : WhyNot(context, server: true, markup: true)) ?? context.ReadOnlyWhy,
             Menus = [new("Code", 1, 0)],
         });
         web.AddLintingActions(registry);
@@ -540,45 +646,45 @@ public sealed class CodeAssist
         registry.Add(new IdeAction(AppActions.OrderScriptParts, "Order Script's Parts", "Code", context => IdeErrors.Observe(OrderScriptParts()))
         {
             WhyNot = context => context.File is not { } file ? Refusals.NoFile : !Godot.GodotScriptTypes.IsScript(file.Path) ? "The file is not a GDScript"
-                : context.Editor.IsReadOnly ? Refusals.ReadOnly(file.Name) : null,
+                : context.ReadOnlyWhy,
             Menus = [new("Code", 1, 3)],
         });
         Code(AppActions.RefactorThis, "Refactor This…", context => IdeErrors.Observe(actions.ShowFixes(AppActions.RefactorThis, a => a.Kind?.StartsWith("refactor", StringComparison.Ordinal) == true, "Refactor This")),
             new("Refactor", 0, 0), xaml: true, writes: true);
         // A GDScript's are Passenger's own, over its reading of the project's scripts (CodeActions.GDScriptRefactor).
-        Code(AppActions.ChangeSignature, "Change Signature…", context => IdeErrors.Observe(CodeActions.IsGDScript(context.File) ? actions.GDScriptRefactor(GDScriptRefactoring.ChangeSignature)
-            : actions.ChangeSignature()), new("Refactor", 1, 1), gdscript: true, writes: true);
-        Code(AppActions.ExtractMethod, "Extract Method…", context => IdeErrors.Observe(CodeActions.IsGDScript(context.File) ? actions.GDScriptRefactor(GDScriptRefactoring.ExtractFunction)
+        Code(AppActions.ChangeSignature, "Change Signature…", context => IdeErrors.Observe(CodeActions.IsGDScript(context.File) ? actions.AskingAsync(AppActions.ChangeSignature, () => actions.GDScriptRefactor(GDScriptRefactoring.ChangeSignature))
+            : actions.AskingAsync(AppActions.ChangeSignature, actions.ChangeSignature)), new("Refactor", 1, 1), gdscript: true, writes: true);
+        Code(AppActions.ExtractMethod, "Extract Method…", context => IdeErrors.Observe(CodeActions.IsGDScript(context.File) ? actions.AskingAsync(AppActions.ExtractMethod, () => actions.GDScriptRefactor(GDScriptRefactoring.ExtractFunction))
             : actions.Refactor(a => a.Title == RoslynNames.ExtractMethod, "Extract Method", renameMethod: true, AppActions.ExtractMethod)), new("Refactor", 1, 2), gdscript: true, writes: true);
-        Code(AppActions.IntroduceVariable, "Introduce Variable…", context => IdeErrors.Observe(CodeActions.IsGDScript(context.File) ? actions.GDScriptRefactor(GDScriptRefactoring.ExtractVariable)
+        Code(AppActions.IntroduceVariable, "Introduce Variable…", context => IdeErrors.Observe(CodeActions.IsGDScript(context.File) ? actions.AskingAsync(AppActions.IntroduceVariable, () => actions.GDScriptRefactor(GDScriptRefactoring.ExtractVariable))
             : actions.Refactor(a => a.Title.StartsWith(RoslynNames.IntroduceLocal, StringComparison.Ordinal), "Introduce Variable", renameMethod: false, AppActions.IntroduceVariable)),
             new("Refactor", 1, 3), gdscript: true, writes: true);
         Code(AppActions.IntroduceField, "Introduce Field…", context => IdeErrors.Observe(actions.Refactor(CodeActions.IntroduceField, AppActions.IntroduceField)), new("Refactor", 1, 4), writes: true);
-        Code(AppActions.IntroduceParameter, "Introduce Parameter…", context => IdeErrors.Observe(CodeActions.IsGDScript(context.File) ? actions.GDScriptRefactor(GDScriptRefactoring.IntroduceParameter)
+        Code(AppActions.IntroduceParameter, "Introduce Parameter…", context => IdeErrors.Observe(CodeActions.IsGDScript(context.File) ? actions.AskingAsync(AppActions.IntroduceParameter, () => actions.GDScriptRefactor(GDScriptRefactoring.IntroduceParameter))
             : actions.Refactor(CodeActions.IntroduceParameter, AppActions.IntroduceParameter)), new("Refactor", 1, 5), gdscript: true, writes: true);
-        Code(AppActions.ExtractInterface, "Extract Interface…", context => IdeErrors.Observe(actions.ExtractInterface()), new("Refactor", 1, 6), writes: true);
-        Code(AppActions.Inline, "Inline…", context => IdeErrors.Observe(CodeActions.IsGDScript(context.File) ? actions.GDScriptRefactor(GDScriptRefactoring.Inline)
+        Code(AppActions.ExtractInterface, "Extract Interface…", context => IdeErrors.Observe(actions.AskingAsync(AppActions.ExtractInterface, actions.ExtractInterface)), new("Refactor", 1, 6), writes: true);
+        Code(AppActions.Inline, "Inline…", context => IdeErrors.Observe(CodeActions.IsGDScript(context.File) ? actions.AskingAsync(AppActions.Inline, () => actions.GDScriptRefactor(GDScriptRefactoring.Inline))
             : actions.Refactor(a => a.Kind == RoslynNames.InlineKind || a.Title.StartsWith(RoslynNames.Inline, StringComparison.Ordinal), "Inline", renameMethod: false, AppActions.Inline)),
             new("Refactor", 1, 7), gdscript: true, writes: true);
-        Code(AppActions.Move, "Move…", context => IdeErrors.Observe(CodeActions.IsGDScript(context.File) ? actions.GDScriptRefactor(GDScriptRefactoring.Move) : actions.Move()),
+        Code(AppActions.Move, "Move…", context => IdeErrors.Observe(CodeActions.IsGDScript(context.File) ? actions.AskingAsync(AppActions.Move, () => actions.GDScriptRefactor(GDScriptRefactoring.Move)) : actions.AskingAsync(AppActions.Move, actions.Move)),
             new("Refactor", 2, 0), gdscript: true, writes: true);
-        Code(AppActions.SafeDelete, "Safe Delete…", context => IdeErrors.Observe(CodeActions.IsGDScript(context.File) ? actions.GDScriptRefactor(GDScriptRefactoring.SafeDelete)
+        Code(AppActions.SafeDelete, "Safe Delete…", context => IdeErrors.Observe(CodeActions.IsGDScript(context.File) ? actions.AskingAsync(AppActions.SafeDelete, () => actions.GDScriptRefactor(GDScriptRefactoring.SafeDelete))
             : actions.SafeDelete()), new("Refactor", 2, 1), gdscript: true, writes: true);
-        Code(AppActions.PullMembersUp, "Pull Members Up…", context => IdeErrors.Observe(actions.MoveMembers(up: true)), new("Refactor", 3, 0), writes: true);
-        Code(AppActions.PushMembersDown, "Push Members Down…", context => IdeErrors.Observe(actions.MoveMembers(up: false)), new("Refactor", 3, 1), writes: true);
+        Code(AppActions.PullMembersUp, "Pull Members Up…", context => IdeErrors.Observe(actions.AskingAsync(AppActions.PullMembersUp, () => actions.MoveMembers(up: true))), new("Refactor", 3, 0), writes: true);
+        Code(AppActions.PushMembersDown, "Push Members Down…", context => IdeErrors.Observe(actions.AskingAsync(AppActions.PushMembersDown, () => actions.MoveMembers(up: false))), new("Refactor", 3, 1), writes: true);
         Code(AppActions.EncapsulateField, "Encapsulate Field…", context => IdeErrors.Observe(actions.Refactor(CodeActions.EncapsulateField, AppActions.EncapsulateField)), new("Refactor", 3, 2), writes: true);
-        registry.Add(new IdeAction(AppActions.ExtractResource, "Extract Resource…", "Code", context => IdeErrors.Observe(actions.ExtractResource()))
+        registry.Add(new IdeAction(AppActions.ExtractResource, "Extract Resource…", "Code", context => IdeErrors.Observe(actions.AskingAsync(AppActions.ExtractResource, actions.ExtractResource)))
         {
             WhyNot = context => WhyNotXaml(context),
             Menus = [new("Refactor", 4, 0)],
         });
-        registry.Add(new IdeAction(AppActions.ExtractStyle, "Extract Style…", "Code", context => IdeErrors.Observe(actions.ExtractStyle()))
+        registry.Add(new IdeAction(AppActions.ExtractStyle, "Extract Style…", "Code", context => IdeErrors.Observe(actions.AskingAsync(AppActions.ExtractStyle, actions.ExtractStyle)))
         {
             WhyNot = context => WhyNotXaml(context),
             Menus = [new("Refactor", 4, 1)],
         });
         Code(AppActions.GoToDeclaration, "Go to Declaration", context => IdeErrors.Observe(navigation.GoToDefinition(Caret)), new("Navigate", 2, 0), xaml: true, msbuild: true, http: true,
-            godot: true, shader: true, gherkin: true);
+            godot: true, shader: true, gherkin: true, link: true);
         Code(AppActions.DerivedSymbols, "Derived Symbols", context => IdeErrors.Observe(navigation.GoToDerivedSymbols(Caret)), new("Navigate", 2, 1));
         Code(AppActions.GoToImplementation, "Go to Implementation", context => IdeErrors.Observe(navigation.GoToImplementation(Caret)), new("Navigate", 2, 2));
         Code(AppActions.GoToTypeDeclaration, "Go to Type Declaration", context => IdeErrors.Observe(navigation.GoToTypeDeclaration(Caret)), new("Navigate", 2, 3));
@@ -603,21 +709,36 @@ public sealed class CodeAssist
 
         // One that edits the file shown (writes) greys on a read-only one, a file the language server serves too.
         void Code(string id, string title, Action<ActionContext> run, MenuPlace menu, bool server = true, bool syntax = false, bool xaml = false, bool markup = false, bool msbuild = false,
-            bool http = false, bool godot = false, bool shader = false, bool gdscript = false, bool gherkin = false, bool writes = false) =>
+            bool http = false, bool godot = false, bool shader = false, bool gdscript = false, bool gherkin = false, bool writes = false, bool link = false) =>
             registry.Add(new IdeAction(id, title, "Code", run)
             {
                 // .http requests, Godot scenes' paths, shaders' names and features' steps are read with no language server.
                 WhyNot = action => (http && this.context.Languages.Http.IsHttpFile(action.File) || godot && IsGodotScene(action.File)
-                    || shader && action.File is { } file && Godot.GodotShaderMarks.IsShader(file.Path)
+                    || shader && action.File is { } file && GodotFileKinds.IsShader(file.Path)
                     || gherkin && action.File is { } feature && Passenger.App.Bdd.FeatureChecks.IsFeature(feature.Path) ? null
-                    : gdscript && CodeActions.IsGDScript(action.File) ? (action.Editor.IsReadOnly ? Refusals.ReadOnly(action.File!.Name) : null)
-                    : WhyNot(action, server, syntax, xaml, markup, msbuild))
-                    ?? (writes && action.File is { } shown && action.Editor.IsReadOnly ? Refusals.ReadOnly(shown.Name) : null),
+                    : gdscript && CodeActions.IsGDScript(action.File) ? action.ReadOnlyWhy
+                    : WhyNot(action, server, syntax, xaml, markup, msbuild) is { } why && !(link && action.File is not null && action.Editor.LinkOn(action.Editor.Selections.Primary.Caret) is not null) ? why : null)
+                    ?? (writes ? action.ReadOnlyWhy : null),
                 Menus = [menu],
             });
     }
 
     private int Caret => Editor.Selections.Primary.Caret;
+
+    private static readonly Task<TextRange?> NoReach = Task.FromResult<TextRange?>(null);
+
+    /// <summary>What Go to Declaration would go from at an offset of the file shown, as its editor draws it: the name or link
+    /// the file's language declares somewhere (<see cref="LanguageAssists.DeclaresAsync"/>), else a link there, which it
+    /// follows; null where it goes nowhere, or the pointer moved on before the language answered.</summary>
+    private Task<TextRange?> DeclaredFromAsync(int offset, CancellationToken cancel) =>
+        context.Editors.Active is { } shown && ReferenceEquals(shown.Text, Editor.Document) ? DeclaredFromAsync(shown, Editor, offset, cancel) : NoReach;
+
+    /// <summary>What Go to Declaration would go from at an offset of an open file, as an editor showing its text draws it.</summary>
+    private async Task<TextRange?> DeclaredFromAsync(OpenDocument shown, CodeEditor editor, int offset, CancellationToken cancel)
+    {
+        bool declares = await context.Languages.DeclaresAsync(shown, offset);
+        return !cancel.IsCancellationRequested && (declares || editor.LinkOn(offset) is not null) ? editor.TokenAt(offset) : null;
+    }
 
     /// <summary>Order Script's Parts on the GDScript shown, as one command of Undo, said in the status bar.</summary>
     private async Task OrderScriptParts()
@@ -645,19 +766,18 @@ public sealed class CodeAssist
     /// <summary>Why Rename cannot run at the editor's caret, a file shown read-only included; null when it can.</summary>
     public string? WhyNotRename(ActionContext context) =>
         (IsGodotScene(context.File) || context.File is { } file && Passenger.App.Bdd.FeatureChecks.IsFeature(file.Path) ? null : WhyNot(context, server: true, xaml: true))
-            ?? (context.File is { } shown && context.Editor.IsReadOnly ? Refusals.ReadOnly(shown.Name) : null);
+            ?? context.ReadOnlyWhy;
 
     /// <summary>Whether a file is a text scene or resource of a Godot project, which Passenger reads itself.</summary>
     private bool IsGodotScene(OpenDocument? file) =>
-        file is not null && GodotFile.IsText(file.Path) && context.GodotOf(file.Path) is not null;
+        file is not null && GodotFileKinds.IsText(file.Path) && context.GodotOf(file.Path) is not null;
 
     /// <summary>Why an action of a XAML file's alone cannot run: no file, a file not XAML of a project Passenger reads, or
     /// one that cannot be edited.</summary>
     private string? WhyNotXaml(ActionContext action) =>
         action.File is null ? Refusals.NoFile
         : context.XamlOf(action.File) is not { } markup || (markup.Loaded.IsCompleted && !markup.IsLoaded) ? "The file is not XAML of an Avalonia or WPF project"
-        : action.Editor.IsReadOnly ? Refusals.ReadOnly(action.File.Name)
-        : null;
+        : action.ReadOnlyWhy;
 
     /// <summary>Why an action cannot run: no file; for one that asks the server, none for the file (a source generator's
     /// code copied, which it has not); for one that edits by the file's syntax, a file not C# or one that cannot be edited.
@@ -665,11 +785,11 @@ public sealed class CodeAssist
     /// answer those they say they do.</summary>
     private string? WhyNot(ActionContext action, bool server, bool syntax = false, bool xaml = false, bool markup = false, bool msbuild = false) =>
         action.File is null ? Refusals.NoFile
-        : markup && XamlService.IsXaml(action.File.Path) ? (action.Editor.IsReadOnly ? Refusals.ReadOnly(action.File.Name) : null)
+        : markup && XamlService.IsXaml(action.File.Path) ? action.ReadOnlyWhy
         : xaml && context.XamlOf(action.File) is { } markupFile && (markupFile.IsLoaded || !markupFile.Loaded.IsCompleted) ? null
         : msbuild && context.MSBuildOf(action.File) is not null ? null
         : syntax && action.File.Syntax is null ? "The file is not C#"
-        : syntax && action.Editor.IsReadOnly ? Refusals.ReadOnly(action.File.Name)
+        : syntax && action.ReadOnlyWhy is { } readOnly ? readOnly
         : !server || context.Current is not null ? null
         : context.CSharp is null ? Refusals.NoCSharp
         : GeneratedCode.IsCopy(action.File.Path) ? Refusals.Generated(action.File.Name)

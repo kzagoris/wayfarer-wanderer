@@ -34,7 +34,7 @@ public abstract class SearchPopup<T> : UserControl, IAnswers<T?>
     protected SearchPopup(string title, string placeholder, double width, string? initialQuery = null, (string Label, bool Checked)? option = null)
     {
         Width = width;
-        this.title = new TextBlock { Classes = { StyleClasses.PopupTitle }, Text = title, VerticalAlignment = VerticalAlignment.Center };
+        this.title = new TextBlock { Classes = { ShellClasses.PopupTitle }, Text = title, VerticalAlignment = VerticalAlignment.Center };
         query = new TextBox { Classes = { StyleClasses.Search }, PlaceholderText = placeholder, Text = initialQuery ?? string.Empty };
         results = new ListBox
         {

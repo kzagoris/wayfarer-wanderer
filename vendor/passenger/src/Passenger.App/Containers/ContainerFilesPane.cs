@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Passenger.App.ToolWindows;
 using Passenger.Core;
 
 namespace Passenger.App.Containers;
@@ -23,7 +24,7 @@ public sealed class ContainerFilesPane : DockPanel
     private readonly Func<ContainerEngine> engine;
     private readonly Func<string> stateFolder;
     private readonly ListBox list;
-    private readonly TextBlock said = new() { Classes = { StyleClasses.EmptyText } };
+    private readonly EmptyState said = new();
     private readonly Dictionary<string, IReadOnlyList<ContainerFile>> listed = new(StringComparer.Ordinal);
     private readonly HashSet<string> open = new(StringComparer.Ordinal) { "/" };
     private ContainerInfo? container;
@@ -340,7 +341,7 @@ public sealed class ContainerFilesPane : DockPanel
     /// path on hover.</summary>
     private Control Row()
     {
-        RowIcon icon = new() { Width = 14, Height = 14, Margin = new Thickness(0, 0, 6, 0) };
+        RowIcon icon = new() { Margin = new Thickness(0, 0, Gaps.Small, 0) };
         icon.ForegroundKey = TokenKeys.TextMuted;
         TextBlock name = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
         StackPanel row = new() { Orientation = Orientation.Horizontal, Height = ListRow.Height, Children = { icon, name } };
@@ -349,7 +350,7 @@ public sealed class ContainerFilesPane : DockPanel
             icon.DataKey = file.IsFolder ? open.Contains(file.Path) ? IconKeys.FolderOpen : IconKeys.Explorer : IconKeys.DocumentText;
             name.Text = file.Name;
             ToolTip.SetTip(name, file.Path);
-            row.Margin = new Thickness(8 + (file.Depth * 16), 0, 8, 0);
+            row.Margin = new Thickness(Gaps.Normal + (file.Depth * Gaps.Indent), 0, Gaps.Normal, 0);
         });
     }
 }

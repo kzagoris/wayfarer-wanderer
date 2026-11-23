@@ -13,36 +13,35 @@ using Passenger.Editor;
 
 namespace Passenger.App.CSharp;
 
-/// <summary>A card over the editor: hover information, a diagnostic's message, a signature. Code is
-/// set in the editor's font, prose in the interface's, a problem in its severity's colour. A paused program's value with
-/// members is its row of the stop's values (<see cref="AddValues"/>), which the card then takes the pointer and the keys for.
-/// A screen reader meets it as a tooltip called by what it is for (Parameter Info).</summary>
+/// <summary>A card over the editor, every one alike: hover information, a diagnostic's message, a signature, the
+/// completion list's item. Code is drawn as the editor draws it (<see cref="ColouredCode"/>), a signature too long for the
+/// card a parameter a line, prose in the interface's font, a problem in its severity's colour; as wide as what it holds,
+/// up to the popups' Medium, a width words read well at. A paused program's value with members is its row of the stop's
+/// values (<see cref="AddValues"/>), which the card then takes the pointer and the keys for, up to the popups' Wide. A
+/// screen reader meets it as a tooltip called by what it is for (Parameter Info).</summary>
 internal sealed class InfoCard : Border, IHoverCard, IHeldToEditor, IHeardPopup
 {
-    /// <summary>The most a card of words is wide; one of a value's rows takes a width of the popups' (<see cref="PopupFrame"/>).</summary>
-    private const double WordsWidth = 640;
-
     /// <summary>The most rows of a value the card shows before it scrolls.</summary>
     private const int MostRows = 16;
 
-    private readonly StackPanel parts = new() { Spacing = 6 };
+    private readonly StackPanel parts = new() { Spacing = Gaps.Small };
 
     /// <summary>The width a card of values has taken: it only grows while it shows them, so a row closed never narrows it
     /// under the pointer.</summary>
     private double fitted;
 
-    /// <summary>The most it is wide of itself, a card of words' or of a value's rows', before any narrower room holds it.</summary>
-    private double widest = WordsWidth;
-
     public InfoCard(string called)
     {
         Called = called;
         Classes.Add(StyleClasses.Popup);
-        Padding = new Thickness(10, 8);
-        MaxWidth = WordsWidth;
+        Padding = PopupFrame.CardInset;
+        MaxWidth = PopupFrame.Medium;
         Child = parts;
         IsHitTestVisible = false;
     }
+
+    /// <summary>The most the card is wide: a value's rows the widest of the popups, words and code a width they read at.</summary>
+    private double Widest => Values is null ? PopupFrame.Medium : PopupFrame.Wide;
 
     public AutomationControlType Role => AutomationControlType.ToolTip;
 
@@ -69,6 +68,8 @@ internal sealed class InfoCard : Border, IHoverCard, IHeldToEditor, IHeardPopup
     public string Text => string.Join('\n', parts.Children.Select(part => part switch
     {
         TextBlock words => words.Text,
+        ColouredCode code => code.Code,
+        Border { Child: Panel { Children: [ColouredCode overload, ..] } } => overload.Code,
         Panel row => string.Join(' ', row.Children.OfType<TextBlock>().Select(t => t.Text)),
         Debugging.VariablesList values => string.Join('\n', values.Tree.Rows.Select(r => $"{new string(' ', r.Depth * 2)}{r.Name} = {r.TypeLabel}{r.Shown}")),
         _ => null,
@@ -86,23 +87,24 @@ internal sealed class InfoCard : Border, IHoverCard, IHeldToEditor, IHeardPopup
         Usable = false;
         fitted = 0;
         IsHitTestVisible = false;
-        widest = WordsWidth;
-        MaxWidth = WordsWidth;
+        MaxWidth = PopupFrame.Medium;
     }
 
-    /// <summary>Held to a room narrower than it would be, its words wrapping to it; as wide as it takes of itself in a wider one.</summary>
-    public void Within(double room) => MaxWidth = Math.Min(widest, Math.Max(0, room));
+    /// <summary>Held to a room narrower than it would be, its words wrapping to it; as wide as it takes of itself, up to
+    /// <see cref="Widest"/>, in a wider one.</summary>
+    public void Within(double room) => MaxWidth = Math.Min(Widest, Math.Max(0, room));
 
-    /// <summary>A value's rows, which open in the card: it takes the pointer and the keys, a width of the popups', growing as
-    /// rows open, and scrolls past <see cref="MostRows"/> rows or the room it is given.</summary>
-    public void AddValues(Debugging.VariablesList values, double room)
+    /// <summary>A value's rows, which open in the card: it takes the pointer and the keys, a width of the popups'
+    /// (<see cref="PopupFrame.Fitting"/>), growing as rows open, and scrolls past <see cref="MostRows"/> rows or the room it is given,
+    /// at least four rows but in an editor whose rows hold fewer (<paramref name="whole"/>, its height), as many as they hold.</summary>
+    public void AddValues(Debugging.VariablesList values, double room, double whole)
     {
         Values = values;
-        values.MaxHeight = Math.Max(ListRow.Height * 4, Math.Min(ListRow.Height * MostRows, room - Padding.Top - Padding.Bottom)) + values.Padding.Top + values.Padding.Bottom;
+        double rows = Math.Max(ListRow.Height * 4, Math.Min(ListRow.Height * MostRows, room - Padding.Top - Padding.Bottom));
+        double holds = whole - Padding.Top - Padding.Bottom - BorderThickness.Top - BorderThickness.Bottom - values.Padding.Top - values.Padding.Bottom;
+        values.MaxHeight = Math.Max(ListRow.Height, Math.Min(rows, holds)) + values.Padding.Top + values.Padding.Bottom;
         parts.Children.Add(values);
         IsHitTestVisible = true;
-        widest = PopupFrame.Wide;
-        MaxWidth = PopupFrame.Wide;
         values.Tree.Rows.CollectionChanged += (_, _) =>
         {
             if (Values == values)
@@ -120,26 +122,78 @@ internal sealed class InfoCard : Border, IHoverCard, IHeldToEditor, IHeardPopup
         }
         // The narrowest of the popups' widths holding every row as laid out, else the widest; in a narrower room, the room.
         double natural = base.MeasureOverride(new Size(double.PositiveInfinity, availableSize.Height)).Width;
-        double wanted = PopupFrame.Widths.Where(w => w <= PopupFrame.Wide).FirstOrDefault(w => w >= natural, PopupFrame.Wide);
+        double wanted = PopupFrame.Fitting(natural);
         fitted = Math.Max(fitted, Math.Min(wanted, availableSize.Width));
         double width = Math.Min(fitted, availableSize.Width);
         return new Size(width, base.MeasureOverride(new Size(width, availableSize.Height)).Height);
     }
 
-    public void AddCode(string code) => parts.Children.Add(new TextBlock
+    /// <summary>Code in a language, coloured as its highlighter colours it (<see cref="ColouredCode"/>); plain for none. A
+    /// signature too long for the card is laid out a parameter a line.</summary>
+    public void AddCode(string code, Languages.Language? language = null) => parts.Children.Add(Signed(ColouredCode.Of(code, language)));
+
+    /// <summary>Code a language server shows of a file in <paramref name="language"/>: in the colours of the parts it gives
+    /// where they spell it (C#'s, through Passenger's extension), else as the language's highlighter colours it, but plain
+    /// for C# and Razor, whose server shows display text rather than code to parse.</summary>
+    public void AddServed(string code, IReadOnlyList<Roslyn.Extension.CodePart>? given, Languages.Language? language)
     {
-        Text = code,
-        FontFeatures = Fonts.NoLigatures,
-        FontSize = 12.5,
-        TextWrapping = TextWrapping.Wrap,
-        Foreground = Brush(TokenKeys.Text),
-    }.InCodeFont());
+        if (given is not null && Languages.CSharp.ServerCode.Of(given) is var (shown, spans) && Languages.CSharp.ServerCode.SameCode(shown, code))
+        {
+            parts.Children.Add(Signed(ColouredCode.Of(shown, spans, language)));
+            return;
+        }
+        AddCode(code, language == Languages.Language.CSharp || language == Languages.Language.Razor ? null : language);
+    }
+
+    /// <summary>One of a call's overloads, among the rest: its code as <see cref="AddServed"/> shows it, the parameter the
+    /// caret's argument fills strong (<see cref="ColouredCode.Marked"/>), set back where the call's arguments no longer fit
+    /// it; with <paramref name="chosen"/>, a row of a list stepped through, marked as a chosen row is where it is the one.</summary>
+    public void AddOverload(string code, IReadOnlyList<Roslyn.Extension.CodePart>? given, Languages.Language? language, bool fits, int parameter,
+        bool? chosen = null)
+    {
+        AddServed(code, given, language);
+        ColouredCode shown = (ColouredCode)parts.Children[^1];
+        if (parameter >= 0 && Languages.SignatureLines.Parameters(shown.Code) is { } places && parameter < places.Count)
+        {
+            shown.Marked = places[parameter];
+        }
+        if (!fits)
+        {
+            shown.Classes.Add(StyleClasses.Unfit);
+        }
+        if (chosen is { } isChosen)
+        {
+            // A list stepped through: each a row, the one chosen marked as a chosen row is.
+            parts.Children.RemoveAt(parts.Children.Count - 1);
+            Border row = new();
+            ChosenMark.Hold(row, shown);
+            row.Classes.Set(StyleClasses.Chosen, isChosen);
+            parts.Children.Add(row);
+        }
+    }
+
+    /// <summary>A completion item's overloads, each as <see cref="AddOverload"/> shows it, set back where the arguments of a
+    /// call its name already makes no longer fit it.</summary>
+    public void AddOverloads(IReadOnlyList<IReadOnlyList<Roslyn.Extension.CodePart>> overloads, IReadOnlyList<bool>? fits, Languages.Language? language)
+    {
+        for (int i = 0; i < overloads.Count; i++)
+        {
+            AddOverload(Languages.CSharp.ServerCode.Of(overloads[i]).Text, overloads[i], language, fits is null || i >= fits.Count || fits[i], -1);
+        }
+    }
+
+    /// <summary>A card's code, a signature among it laid out a parameter a line where the card is too narrow for its line.</summary>
+    private static ColouredCode Signed(ColouredCode code)
+    {
+        code.Signature = true;
+        return code;
+    }
 
     public void AddText(string text, IBrush? colour = null) => parts.Children.Add(new TextBlock
     {
         Text = text,
         TextWrapping = TextWrapping.Wrap,
-        FontSize = 12.5,
+        Classes = { StyleClasses.Caption },
         Foreground = colour ?? Brush(TokenKeys.TextMuted),
     });
 
@@ -164,8 +218,8 @@ internal sealed class InfoCard : Border, IHoverCard, IHeldToEditor, IHeardPopup
                 parts.Children.Add(new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
-                    Spacing = 6,
-                    Children = { play, new TextBlock { Text = preview.Named, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center, Foreground = Brush(TokenKeys.TextMuted) } },
+                    Spacing = Gaps.Small,
+                    Children = { play, new TextBlock { Classes = { StyleClasses.Caption }, Text = preview.Named, VerticalAlignment = VerticalAlignment.Center, Foreground = Brush(TokenKeys.TextMuted) } },
                 });
                 Usable = true;
                 IsHitTestVisible = true;
@@ -200,23 +254,51 @@ internal sealed class InfoCard : Border, IHoverCard, IHeldToEditor, IHeardPopup
 
     /// <summary>A language server's hover, read by its kind: plain text as written, Markdown as <see cref="AddMarkdown"/>
     /// shows it.</summary>
-    public void AddHover(Lsp.Hover hover) => AddBlocks(HoverMarkdown.ByKind(Lsp.Shapes.Text(hover.Contents), HoverMarkdown.IsPlain(hover.Contents), words: true));
+    public void AddHover(Lsp.Hover hover) =>
+        AddBlocks(HoverMarkdown.ByKind(Lsp.Shapes.Text(hover.Contents), HoverMarkdown.IsPlain(hover.Contents), words: true), hover.Code);
 
-    /// <summary>A hover's Markdown: its fenced code as code, the prose between as its words (<see cref="HoverMarkdown"/>).</summary>
-    public void AddMarkdown(string markdown) => AddBlocks(HoverMarkdown.ByKind(markdown, plain: false, words: true));
+    /// <summary>A hover's Markdown: its fenced code as code (<see cref="AddServed"/>, by the parts given for it, else as the
+    /// language its fence names), the prose between as its words (<see cref="HoverMarkdown"/>).</summary>
+    /// <param name="overloadsShown">Whether the card lists the overloads above it (<see cref="AddOverloads"/>), which take
+    /// the place of its signature and of what it says of how many more there are.</param>
+    public void AddMarkdown(string markdown, IReadOnlyList<IReadOnlyList<Roslyn.Extension.CodePart>>? code = null, bool overloadsShown = false) =>
+        AddBlocks(HoverMarkdown.ByKind(markdown, plain: false, words: true), code, overloadsShown);
 
-    private void AddBlocks(IEnumerable<(IReadOnlyList<string> Lines, bool Code)> blocks)
+    /// <summary>What a description says after its signature of how many more overloads there are, after the space it may
+    /// begin with.</summary>
+    private static readonly System.Text.RegularExpressions.Regex MoreOverloads =
+        new(@"^\s*\(\+\s*\d+\s+(generic\s+)?overloads?\)\s*", System.Text.RegularExpressions.RegexOptions.NonBacktracking | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private void AddBlocks(IEnumerable<(IReadOnlyList<string> Lines, bool Code, string Info)> blocks, IReadOnlyList<IReadOnlyList<Roslyn.Extension.CodePart>>? given,
+        bool overloadsShown = false)
     {
-        foreach ((IReadOnlyList<string> lines, bool code) in blocks)
+        List<IReadOnlyList<Roslyn.Extension.CodePart>> unused = [.. given ?? []];
+        bool signature = overloadsShown;
+        foreach ((IReadOnlyList<string> lines, bool code, string info) in blocks)
         {
             string text = string.Join('\n', lines).Trim('\n', ' ');
+            if (overloadsShown)
+            {
+                text = MoreOverloads.Replace(text, string.Empty);
+            }
             if (text.Length == 0)
             {
                 continue;
             }
+            if (code && signature)
+            {
+                // The signature the overloads listed include.
+                signature = false;
+                continue;
+            }
             if (code)
             {
-                AddCode(text);
+                int at = unused.FindIndex(p => Languages.CSharp.ServerCode.SameCode(Languages.CSharp.ServerCode.Of(p).Text, text));
+                AddServed(text, at < 0 ? null : unused[at], ColouredCode.LanguageOf(info));
+                if (at >= 0)
+                {
+                    unused.RemoveAt(at);
+                }
             }
             else
             {
@@ -292,22 +374,18 @@ internal sealed class CompletionPopup : Border, IHeardPopup
     /// <summary>What the wheel has turned short of a whole row.</summary>
     private double turned;
 
-    /// <summary>The item the selection was last said to be on, so a filter that leaves it there says nothing.</summary>
+    /// <summary>The item the selection was last said to be on, so a filter or an answer that leaves it there says nothing.</summary>
     private Lsp.CompletionItem? told;
 
     /// <summary>Whether the list is being laid out ahead (<see cref="LayOutAhead"/>), its choice no one's to hear of.</summary>
     private bool ahead;
 
-    /// <summary>The least and the most a list is wide of itself, as its rows make it, in an editor that has the room.</summary>
-    private const double LeastWidth = 280;
-    private const double MostWidth = 620;
-
     public CompletionPopup()
     {
         Classes.Add(StyleClasses.Popup);
-        MinWidth = LeastWidth;
-        MaxWidth = MostWidth;
-        Padding = new Thickness(0, 4);
+        MinWidth = PopupFrame.Narrow;
+        MaxWidth = PopupFrame.Wide;
+        Padding = ListRow.PopupList;
         // Its places stand in a plain panel, which lets go of none it hides; its own scrolling never moves them.
         List = new ListBox
         {
@@ -349,24 +427,33 @@ internal sealed class CompletionPopup : Border, IHeardPopup
         };
         // Heard on its way in, before the list's own view, which a fraction of a pixel's rounding lets take it.
         AddHandler(PointerWheelChangedEvent, OnWheel, RoutingStrategies.Tunnel);
-        Child = new Panel { Children = { List, bar } };
+        Filters.Margin = new Thickness(Gaps.Normal, Gaps.Hair, Gaps.Normal, 0);
+        DockPanel.SetDock(Filters, Dock.Bottom);
+        Child = new DockPanel { Children = { Filters, new Panel { Children = { List, bar } } } };
     }
 
     public ListBox List { get; }
+
+    /// <summary>The filters by the kind of member under the rows, shown for a list of members of more than one kind.</summary>
+    public CompletionFilters Filters { get; } = new();
 
     public AutomationControlType Role => AutomationControlType.List;
 
     public string Called => "Completion";
 
     /// <summary>Held to a room narrower than it would be, even than its least width, its names and details ending in an
-    /// ellipsis rather than past the editor's edge; as wide as its rows make it in a wider one.</summary>
+    /// ellipsis rather than past the editor's edge; as wide as its rows make it, from the popups' Narrow to their Wide
+    /// (<see cref="PopupFrame"/>), in a wider one: it hugs its rows rather than taking a width of the scale, measured once
+    /// as a key changes them. Its least gives way in a room too narrow for it and a card beside it, so the list against
+    /// either edge of the editor leaves its item's card room on the other side (<see cref="PopupPlacement.BesideRoom"/>).</summary>
     public void Within(double room)
     {
-        MinWidth = Math.Min(LeastWidth, Math.Max(0, room));
-        MaxWidth = Math.Min(MostWidth, Math.Max(0, room));
+        MinWidth = Math.Clamp(room - PopupPlacement.BesideRoom, 0, PopupFrame.Narrow);
+        MaxWidth = Math.Min(PopupFrame.Wide, Math.Max(0, room));
     }
 
-    /// <summary>The selection moved to another item: another row chosen, or the row chosen showing another item.</summary>
+    /// <summary>The selection moved to another item (<see cref="Lsp.CompletionItem.Same"/>): another row chosen, or the row
+    /// chosen showing another item; never the same item a list answered again lists anew.</summary>
     public event EventHandler? SelectedChanged;
 
     /// <summary>A XAML colour's own swatch for its badge, null for an item badged by its kind.</summary>
@@ -379,37 +466,42 @@ internal sealed class CompletionPopup : Border, IHeardPopup
 
     public IReadOnlyList<CompletionRow> Rows => rows;
 
-    /// <summary>The list's rows, the first chosen, or the row of <paramref name="stays"/> where it is among them, scrolled
-    /// only as far as shows the one chosen; rows of the name already shown (<paramref name="sameName"/>: a list grown by
-    /// items as they came, or answered again) that the person had scrolled away from the row chosen keep showing the rows
-    /// scrolled to, wherever they now stand.</summary>
-    public void Show(IReadOnlyList<CompletionRow> rows, Lsp.CompletionItem? stays = null, bool sameName = false)
+    /// <summary>The list's rows, the first chosen, scrolled only as far as shows the one chosen. Rows of the name already
+    /// shown (<paramref name="sameName"/>: a list grown by items as they came, or answered again) keep the item chosen where
+    /// it is among them, and, where the person had scrolled away from it, the rows scrolled to, wherever they now stand.</summary>
+    public void Show(IReadOnlyList<CompletionRow> rows, bool sameName = false)
     {
+        Lsp.CompletionItem? stays = sameName ? Selected?.Item : null;
         Lsp.CompletionItem? first = sameName && chosen >= 0 && (chosen < top || chosen >= top + Shown) && top < this.rows.Count ? this.rows[top].Item : null;
         this.rows = rows;
         chosen = rows.Count > 0 ? 0 : -1;
-        for (int i = 0; stays is not null && i < rows.Count; i++)
+        if (stays is not null && IndexOf(stays) is >= 0 and int kept)
         {
-            if (ReferenceEquals(rows[i].Item, stays))
-            {
-                chosen = i;
-                break;
-            }
+            chosen = kept;
         }
         if (first is null)
         {
             Place();
             return;
         }
-        for (int i = 0; i < rows.Count; i++)
+        if (IndexOf(first) is >= 0 and int scrolled)
         {
-            if (ReferenceEquals(rows[i].Item, first))
-            {
-                top = i;
-                break;
-            }
+            top = scrolled;
         }
         ScrollTo(top, fromBar: false);
+    }
+
+    /// <summary>Where an item stands among the rows, however many answers ago it was listed; -1 where it is not.</summary>
+    private int IndexOf(Lsp.CompletionItem item)
+    {
+        for (int i = 0; i < rows.Count; i++)
+        {
+            if (Lsp.CompletionItem.Same(rows[i].Item, item))
+            {
+                return i;
+            }
+        }
+        return -1;
     }
 
     /// <summary>The list laid out once before it is first shown, so its first list costs what any other does: the rows'
@@ -518,9 +610,10 @@ internal sealed class CompletionPopup : Border, IHeardPopup
             return;
         }
         Lsp.CompletionItem? now = Selected?.Item;
-        if (!ReferenceEquals(now, told))
+        bool same = Lsp.CompletionItem.Same(now, told);
+        told = now;
+        if (!same)
         {
-            told = now;
             SelectedChanged?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -540,42 +633,21 @@ internal sealed class CompletionRowView : DockPanel
     {
         this.popup = popup;
         Height = ListRow.Height;
-        letter = new TextBlock
-        {
-            FontSize = 10,
-            FontWeight = FontWeight.Bold,
-            Foreground = InfoCard.Brush(TokenKeys.BadgeText),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        badge = new Border
-        {
-            Width = 16,
-            Height = 16,
-            Classes = { StyleClasses.KindBadge },
-            Margin = new Thickness(0, 0, 8, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            Child = letter,
-        };
+        badge = Tags.Kind(out letter);
+        badge.Margin = new Thickness(0, 0, Gaps.Normal, 0);
         // The name first, the detail at the row's end in what it leaves: a list narrowed to its room cuts the detail first.
         label = new TextBlock
         {
             [DockPanel.DockProperty] = Dock.Left,
             FontFeatures = Fonts.NoLigatures,
-            FontSize = 12.5,
+            Classes = { StyleClasses.Code },
             TextTrimming = TextTrimming.CharacterEllipsis,
-            VerticalAlignment = VerticalAlignment.Center,
-        }.InCodeFont();
-        detail = new TextBlock
-        {
-            Foreground = InfoCard.Brush(TokenKeys.TextMuted),
-            FontSize = 12,
-            Margin = new Thickness(12, 0, 4, 0),
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxWidth = 200,
-            HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center,
         };
+        detail = ListRow.DetailText();
+        detail.Foreground = InfoCard.Brush(TokenKeys.TextMuted);
+        detail.MaxWidth = 200;
+        detail.HorizontalAlignment = HorizontalAlignment.Right;
         Children.Add(badge);
         Children.Add(label);
         Children.Add(detail);
@@ -601,7 +673,7 @@ internal sealed class CompletionRowView : DockPanel
 
 /// <summary>A titled list to choose from (fixes, definitions, usages, surround templates): Up and Down, Enter or a double
 /// click to choose, a choice's digit to choose it at once.</summary>
-internal sealed class ChoicePopup : Border, IHeardPopup
+public sealed class ChoicePopup : FittingFrame, IHeardPopup, IHeldToEditor
 {
     private readonly ListBox list;
 
@@ -620,10 +692,7 @@ internal sealed class ChoicePopup : Border, IHeardPopup
         Titles = [.. choices.Select(c => c.Text)];
         Details = [.. choices.Select(c => c.Detail)];
         bool numbered = choices.Any(c => c.Mnemonic is not null);
-        Classes.Add(StyleClasses.Popup);
-        MinWidth = 320;
-        MaxWidth = 760;
-        Padding = new Thickness(0, 6);
+        Padding = ListRow.PopupList;
         list = new ListBox
         {
             Classes = { StyleClasses.Tree },
@@ -636,28 +705,24 @@ internal sealed class ChoicePopup : Border, IHeardPopup
         ReusedRows.Use(list, () => ChoiceRow(numbered));
         Child = new StackPanel
         {
-            Spacing = 4,
+            Spacing = Gaps.Tight,
             Children =
             {
-                new TextBlock { Text = title, Classes = { StyleClasses.PopupTitle }, Margin = new Thickness(12, 2, 12, 2) },
+                new TextBlock { Text = title, Classes = { StyleClasses.PaneTitle }, Margin = new Thickness(Gaps.Wide, Gaps.Hair) },
                 list,
             },
         };
         ListKeys.Act(list, new ListActs { Open = Choose, Keys = TakeDigit });
         list.SelectionChanged += (_, _) => Moved?.Invoke(this, list.SelectedItem as Choice);
-        Dispatcher.UIThread.Post(() =>
-        {
-            list.Focus();
-            if (list.ContainerFromIndex(Math.Max(0, list.SelectedIndex)) is Control first)
-            {
-                first.Focus();
-            }
-        }, DispatcherPriority.Loaded);
+        Dispatcher.UIThread.Post(() => ListKeys.Hold(list, chooseFirst: true), DispatcherPriority.Loaded);
     }
 
     public AutomationControlType Role => AutomationControlType.List;
 
     public string Called => Title;
+
+    /// <summary>Held to a room narrower than the width it takes, its words then ending in an ellipsis.</summary>
+    public void Within(double room) => MaxWidth = Math.Max(0, room);
 
     /// <summary>Where the choice selected stands among <see cref="Titles"/>; -1 with none.</summary>
     public int ChosenAt => list.SelectedIndex;
@@ -679,13 +744,15 @@ internal sealed class ChoicePopup : Border, IHeardPopup
         return true;
     }
 
-    /// <summary>A choice's row: its digit when the list has them, its words, and its detail muted, in code's font for code.</summary>
+    /// <summary>A choice's row: its digit when the list has them, its words, and its detail muted at the row's end, in code's
+    /// font for code.</summary>
     private static Control ChoiceRow(bool numbered)
     {
-        TextBlock digit = new TextBlock { Width = 10, IsVisible = numbered, VerticalAlignment = VerticalAlignment.Center }.InCodeFont();
-        TextBlock text = new() { VerticalAlignment = VerticalAlignment.Center };
-        TextBlock detail = new() { FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 460, VerticalAlignment = VerticalAlignment.Center };
-        StackPanel row = new() { Orientation = Orientation.Horizontal, Spacing = 10, Height = ListRow.Height, Children = { digit, text, detail } };
+        TextBlock digit = new() { Classes = { StyleClasses.Code }, Width = 10, IsVisible = numbered, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, Gaps.Normal, 0), [DockPanel.DockProperty] = Dock.Left };
+        TextBlock text = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+        TextBlock detail = ListRow.DetailText();
+        detail.MaxWidth = 460;
+        DockPanel row = new() { Height = ListRow.Height, Children = { digit, detail, text } };
         AutomationProperties.SetLabeledBy(row, text);
         string? detailFont = null;
         return row.Showing<Choice>(choice =>
@@ -717,13 +784,13 @@ internal sealed class ChoicePopup : Border, IHeardPopup
 
 /// <summary>One thing to choose: what it says, a quieter detail beside it, what it stands for, and the digit that
 /// chooses it, if it has one.</summary>
-internal sealed record Choice(string Text, string Detail, object Value, bool DetailIsCode = false, char? Mnemonic = null);
+public sealed record Choice(string Text, string Detail, object Value, bool DetailIsCode = false, char? Mnemonic = null);
 
 /// <summary>Inline rename: the name in a box over itself, all of it selected; Enter renames (a new name's box, under its
 /// own caption, names what a refactoring makes). For a
 /// type declared in files named after it, Also rename files to reflect this change is a check box under it, with the
 /// files it would rename, clicked while the keys stay with the name.</summary>
-internal sealed class RenameBox : Border, IHeardPopup
+public sealed class RenameBox : Border, IHeardPopup, IHeldToEditor
 {
     private readonly TextBox name;
     private readonly StackPanel body;
@@ -733,13 +800,14 @@ internal sealed class RenameBox : Border, IHeardPopup
     {
         Called = caption;
         Classes.Add(StyleClasses.Popup);
-        Padding = new Thickness(8, 6);
-        name = new TextBox { Text = current, Classes = { StyleClasses.Search }, MinWidth = 220 }.InCodeFont();
-        TextBlock captioned = new() { Text = caption, Classes = { StyleClasses.Muted }, FontSize = 11 };
+        Width = PopupFrame.Narrow;
+        Padding = PopupFrame.Inset;
+        name = new TextBox { Classes = { StyleClasses.Code }, Text = current };
+        TextBlock captioned = new() { Text = caption, Classes = { StyleClasses.PaneTitle } };
         AutomationProperties.SetLabeledBy(name, captioned);
         body = new StackPanel
         {
-            Spacing = 4,
+            Spacing = Gaps.Tight,
             Children =
             {
                 captioned,
@@ -756,6 +824,9 @@ internal sealed class RenameBox : Border, IHeardPopup
     }
 
     public AutomationControlType Role => AutomationControlType.Group;
+
+    /// <summary>Held to a room narrower than a name's popup is wide.</summary>
+    public void Within(double room) => Width = Math.Min(PopupFrame.Narrow, Math.Max(0, room));
 
     /// <summary>What the box asks for, its caption.</summary>
     public string Called { get; }
@@ -779,16 +850,14 @@ internal sealed class RenameBox : Border, IHeardPopup
     public void OfferFiles(IReadOnlyList<string> files, bool on)
     {
         Files = files;
-        renameFiles = new CheckBox { Content = "Also rename files to reflect this change", IsChecked = on, Focusable = false, FontSize = 12, MinHeight = 0 };
+        renameFiles = PopupFrame.Option("Also rename files to reflect this change", on);
         renameFiles.IsCheckedChanged += (_, _) => RenamesFilesChanged?.Invoke(this, RenamesFiles);
         body.Children.Add(renameFiles);
         body.Children.Add(new TextBlock
         {
             Text = $"Corresponding files to be renamed: {string.Join(", ", files.Select(Path.GetFileName))}",
-            Classes = { StyleClasses.Muted },
-            FontSize = 11,
+            Classes = { StyleClasses.Muted, StyleClasses.Caption },
             TextWrapping = TextWrapping.Wrap,
-            MaxWidth = 360,
         });
         // Measured again now, as it grew, so it is placed for its new size before the next layout.
         InvalidateMeasure();

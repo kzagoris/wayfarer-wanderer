@@ -67,9 +67,9 @@ public sealed class HierarchyView : DockPanel
     private readonly TreeRows<HierarchyRow> rows = [];
     private readonly TreeList list;
     private readonly TextBlock title;
-    private readonly ToggleButton first;
-    private readonly ToggleButton second;
-    private readonly TextBlock placeholder;
+    /// <summary>The two directions, the first's key true.</summary>
+    private readonly Segments<bool> ways = new() { Margin = new Thickness(Gaps.Normal, 0) };
+    private readonly EmptyState placeholder;
 
     /// <summary>The symbol's name and the toggles, shown only once there is a hierarchy: an empty bar says nothing.</summary>
     private readonly Border bar;
@@ -79,15 +79,13 @@ public sealed class HierarchyView : DockPanel
 
     public HierarchyView()
     {
-        title = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0), FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis };
-        first = Toggle();
-        second = Toggle();
-        first.Click += (_, _) => IdeErrors.Observe(ChooseAsync(first: true));
-        second.Click += (_, _) => IdeErrors.Observe(ChooseAsync(first: false));
+        title = new TextBlock { Classes = { StyleClasses.PaneTitle }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(Gaps.Normal, 0), TextTrimming = TextTrimming.CharacterEllipsis };
+        ways.Add(true, string.Empty);
+        ways.Add(false, string.Empty);
+        ways.Chosen += (_, first) => IdeErrors.Observe(ChooseAsync(first));
         DockPanel top = new();
-        StackPanel toggles = new() { Orientation = Orientation.Horizontal, Spacing = 2, Margin = new Thickness(8, 0), VerticalAlignment = VerticalAlignment.Center, Children = { first, second } };
-        DockPanel.SetDock(toggles, Dock.Right);
-        top.Children.Add(toggles);
+        DockPanel.SetDock(ways, Dock.Right);
+        top.Children.Add(ways);
         top.Children.Add(title);
         bar = ToolBars.Top(top);
         bar.IsVisible = false;
@@ -105,12 +103,12 @@ public sealed class HierarchyView : DockPanel
         });
         ListMenus.Attach(list, () => list.SelectedItem is not HierarchyRow chosen ? [] :
         [
-            ListMenus.Item("Go to", "F4", () => GoToRequested?.Invoke(this, chosen.Node)),
-            ListMenus.Item("Copy Name", null, () => IdeErrors.Observe(ListMenus.CopyAsync(this, chosen.Node.Item.Name))),
-            ListMenus.Item("Copy Path", null, () => IdeErrors.Observe(ListMenus.CopyAsync(this, chosen.Node.Path))),
+            ListMenus.Source(() => GoToRequested?.Invoke(this, chosen.Node)),
+            ListMenus.Item("Copy Name", () => IdeErrors.Observe(ListMenus.CopyAsync(this, chosen.Node.Item.Name))),
+            ListMenus.Item("Copy Path", () => IdeErrors.Observe(ListMenus.CopyAsync(this, chosen.Node.Path))),
         ]);
-        placeholder = new TextBlock { Classes = { StyleClasses.EmptyText } };
-        ActionTips.SetWords(placeholder, keys =>
+        placeholder = new EmptyState();
+        placeholder.SayWithKeys(keys =>
             $"{ActionTips.Named("Call Hierarchy", keys(AppActions.CallHierarchy))} and {ActionTips.Named("Type Hierarchy", keys(AppActions.TypeHierarchy))} show the symbol at the caret here");
         Children.Add(new Panel { Children = { list, placeholder } });
     }
@@ -126,7 +124,7 @@ public sealed class HierarchyView : DockPanel
     public string Title => title.Text ?? string.Empty;
 
     /// <summary>Which direction the tree goes: the first toggle's or the second's.</summary>
-    public bool IsFirst => first.IsChecked == true;
+    public bool IsFirst => ways.Choice;
 
     /// <summary>Shows a symbol's hierarchy, the first direction open from the top.</summary>
     public Task ShowAsync(string heading, HierarchyNode top, HierarchyDirection one, HierarchyDirection other)
@@ -136,8 +134,8 @@ public sealed class HierarchyView : DockPanel
         ToolTip.SetTip(title, heading);
         root = top;
         directions = (one, other);
-        first.Content = one.Label;
-        second.Content = other.Label;
+        ways[true].Content = one.Label;
+        ways[false].Content = other.Label;
         bar.IsVisible = true;
         placeholder.IsVisible = false;
         return ChooseAsync(first: true);
@@ -146,8 +144,7 @@ public sealed class HierarchyView : DockPanel
     /// <summary>Switches the tree's direction, opening it again from the top.</summary>
     public async Task ChooseAsync(bool first)
     {
-        this.first.IsChecked = first;
-        second.IsChecked = !first;
+        ways.Choice = first;
         if (root is null)
         {
             return;
@@ -271,36 +268,25 @@ public sealed class HierarchyView : DockPanel
     /// <summary>A row for whichever symbol the list hands its container: its chevron, name, and what and where it is.</summary>
     private Control Row()
     {
-        RowIcon chevron = new() { Width = 10, Height = 10, Margin = new Thickness(0, 0, 4, 0) };
+        RowExpander chevron = RowExpander.Of<HierarchyRow>(Toggle);
         TextBlock name = new() { VerticalAlignment = VerticalAlignment.Center };
         TextBlock detail = new()
         {
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(10, 0, 0, 0),
-            FontSize = 12,
+            Margin = new Thickness(Gaps.Wide, 0, 0, 0),
+            Classes = { StyleClasses.Caption },
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
         detail.Classes.Add(StyleClasses.Muted);
         StackPanel line = new() { Orientation = Orientation.Horizontal, Height = ListRow.Height, Children = { chevron, name, detail } };
-        chevron.PointerPressed += (_, e) =>
-        {
-            if (line.DataContext is HierarchyRow row)
-            {
-                Toggle(row);
-                e.Handled = true;
-            }
-        };
         return line.Showing<HierarchyRow>(row =>
         {
-            line.Margin = new Thickness(8 + (row.Depth * 16), 0, 8, 0);
-            chevron.IsVisible = row.Expands;
-            chevron.DataKey = row.IsExpanded ? IconKeys.ChevronDown : IconKeys.ChevronRight;
+            line.Margin = new Thickness(Gaps.Normal + (row.Depth * Gaps.Indent), 0, Gaps.Normal, 0);
+            chevron.Expands = row.Expands;
+            chevron.IsOpen = row.IsExpanded;
             name.Text = row.Node.Item.Name;
-            name.FontWeight = row.Depth == 0 ? FontWeight.SemiBold : FontWeight.Normal;
+            name.Classes.Set(StyleClasses.Strong, row.Depth == 0);
             detail.Text = $"{row.Node.Item.Detail}  {System.IO.Path.GetFileName(row.Node.Path)}:{row.Node.Where.Line + 1}";
         });
     }
-
-    // As wide as its words: an option toggle is otherwise an icon's square.
-    private static ToggleButton Toggle() => new() { Classes = { StyleClasses.Option }, FontSize = 12, Width = double.NaN, Padding = new Thickness(8, 2) };
 }

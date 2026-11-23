@@ -208,12 +208,8 @@ public partial class MainWindow
             IReadOnlyList<Passenger.Workspace.Gherkin.ExampleRow> rows = testGutter.RowsOf(document);
             string shown = $"{outline.Method} [{row.Shown}]";
             MenuFlyout rowMenu = new();
-            MenuItem runRow = new() { Header = $"Run '{shown}'" };
-            runRow.Click += (_, _) => RunRowAt(outline, row, rows, document.Path, debug: false);
-            MenuItem debugRow = new() { Header = $"Debug '{shown}'" };
-            debugRow.Click += (_, _) => RunRowAt(outline, row, rows, document.Path, debug: true);
-            rowMenu.Items.Add(runRow);
-            rowMenu.Items.Add(debugRow);
+            rowMenu.Items.Add(ToolWindows.ListMenus.Item($"Run '{shown}'", () => RunRowAt(outline, row, rows, document.Path, debug: false)));
+            rowMenu.Items.Add(ToolWindows.ListMenus.Item($"Debug '{shown}'", () => RunRowAt(outline, row, rows, document.Path, debug: true)));
             TestMarkMenu = rowMenu;
             rowMenu.Placement = Avalonia.Controls.PlacementMode.Pointer;
             rowMenu.ShowAt(editor, showAtPointer: true);
@@ -225,15 +221,9 @@ public partial class MainWindow
         }
         string name = chosen.Method ?? TypeNames.Short(chosen.Type);
         MenuFlyout menu = new();
-        MenuItem run = new() { Header = $"Run '{name}'" };
-        run.Click += (_, _) => RunTestsAt(chosen, document.Path, debug: false);
-        MenuItem debugIt = new() { Header = $"Debug '{name}'" };
-        debugIt.Click += (_, _) => RunTestsAt(chosen, document.Path, debug: true);
-        MenuItem untilFailure = new() { Header = $"Run '{name}' Until Failure" };
-        untilFailure.Click += (_, _) => RunTestsAt(chosen, document.Path, debug: false, untilFailure: true);
-        menu.Items.Add(run);
-        menu.Items.Add(debugIt);
-        menu.Items.Add(untilFailure);
+        menu.Items.Add(ToolWindows.ListMenus.Item($"Run '{name}'", () => RunTestsAt(chosen, document.Path, debug: false)));
+        menu.Items.Add(ToolWindows.ListMenus.Item($"Debug '{name}'", () => RunTestsAt(chosen, document.Path, debug: true)));
+        menu.Items.Add(ToolWindows.ListMenus.Item($"Run '{name}' Until Failure", () => RunTestsAt(chosen, document.Path, debug: false, untilFailure: true)));
         TestMarkMenu = menu;
         menu.Placement = Avalonia.Controls.PlacementMode.Pointer;
         menu.ShowAt(editor, showAtPointer: true);
@@ -380,10 +370,17 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>A test host a runner started itself, attached to: true once the debugger has hold of it.</summary>
+    /// <summary>A test host a runner started itself, attached to: true once the debugger has hold of it; a 32-bit one, which
+    /// the debugger cannot follow, refused saying why.</summary>
     private async Task<bool> AttachTestHost(ProjectSession running, int processId, Testing.TestHostReload? reload, HashSet<DebugTab> testHosts)
     {
         CheckTestSession(running);
+        if (DotnetProcesses.Runs32Bit(processId))
+        {
+            reload?.Hook.Dispose();
+            Say(Refusals.X86Unattached("Tests"));
+            return false;
+        }
         CancellationToken cancel = running.Tests.RunCancellation;
         ShowToolWindow(ToolWindowIds.Debug);
         Debugging.DebugLaunch? attached = null;

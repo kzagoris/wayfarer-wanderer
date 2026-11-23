@@ -32,6 +32,10 @@ public sealed class DebugAdapter
     /// <summary>The longest the client may take to start a program in its terminal.</summary>
     private static readonly TimeSpan RunInTerminalLimit = TimeSpan.FromSeconds(30);
 
+    /// <summary>How long a Hot Reload update waits for a program let go at its start to load its CoreLib, longer on a slower
+    /// machine as <see cref="Waits"/> says.</summary>
+    private static readonly TimeSpan CoreLibLimit = TimeSpan.FromSeconds(10);
+
     /// <summary>The engine's lock as configurationDone leaves it, held until its answer has been written.</summary>
     private IDisposable? configuring;
 
@@ -221,20 +225,25 @@ public sealed class DebugAdapter
             };
         });
         // Hot Reload: what the language's Edit and Continue needs of the program (a running one held for it), and its updates applied.
-        connection.Handle<HotReloadStateArguments, HotReloadStateResponse>(DapCommands.HotReloadState, async arguments => await Locked(() =>
+        connection.Handle<HotReloadStateArguments, HotReloadStateResponse>(DapCommands.HotReloadState, async arguments =>
         {
-            bool held = arguments.Hold == true && debugger.HoldForHotReload();
-            (IReadOnlyList<string>? capabilities, string? unknown) = debugger.HotReloadCapabilities();
-            return new HotReloadStateResponse
+            // Outside the engine's lock, which the CoreLib's load takes.
+            await debugger.CoreLibLoadedAsync(Waits.Of(CoreLibLimit));
+            return await Locked(() =>
             {
-                Held = held,
-                Capabilities = capabilities,
-                CapabilitiesUnknown = unknown,
-                Modules = [.. debugger.HotReloadModules().Select(m => new DapHotReloadModule(m.Mvid, m.Name, m.Path, m.Editable, m.WhyNot))],
-                ActiveStatements = [.. debugger.ActiveStatements().Select(s => new DapActiveStatement(s.Module, s.Token, s.Version, s.ILOffset, s.Document,
-                    s.StartLine, s.StartColumn, s.EndLine, s.EndColumn, s.Flags))],
-            };
-        }));
+                bool held = arguments.Hold == true && debugger.HoldForHotReload();
+                (IReadOnlyList<string>? capabilities, string? unknown) = debugger.HotReloadCapabilities();
+                return new HotReloadStateResponse
+                {
+                    Held = held,
+                    Capabilities = capabilities,
+                    CapabilitiesUnknown = unknown,
+                    Modules = [.. debugger.HotReloadModules().Select(m => new DapHotReloadModule(m.Mvid, m.Name, m.Path, m.Editable, m.WhyNot))],
+                    ActiveStatements = [.. debugger.ActiveStatements().Select(s => new DapActiveStatement(s.Module, s.Token, s.Version, s.ILOffset, s.Document,
+                        s.StartLine, s.StartColumn, s.EndLine, s.EndColumn, s.Flags))],
+                };
+            });
+        });
         connection.Handle<ApplyChangesArguments, ApplyChangesResponse>(DapCommands.ApplyChanges, async arguments =>
         {
             List<ModuleUpdate> updates = [.. arguments.Updates.Select(u => new ModuleUpdate(u.Module, u.Name, u.Metadata, u.IL, u.Pdb, u.UpdatedMethods, u.UpdatedTypes,
@@ -348,14 +357,14 @@ public sealed class DebugAdapter
             List<string> args = [.. arguments.Args ?? []];
             LaunchRequestConsoleType console = arguments.Console switch
             {
-                "integratedTerminal" => LaunchRequestConsoleType.IntegratedTerminal,
-                "externalTerminal" => LaunchRequestConsoleType.ExternalTerminal,
-                "internalConsole" or null => LaunchRequestConsoleType.InternalConsole,
+                ConsoleKinds.IntegratedTerminal => LaunchRequestConsoleType.IntegratedTerminal,
+                ConsoleKinds.ExternalTerminal => LaunchRequestConsoleType.ExternalTerminal,
+                ConsoleKinds.InternalConsole or null => LaunchRequestConsoleType.InternalConsole,
                 _ => throw new InvalidOperationException($"Invalid console type: '{arguments.Console}'"),
             };
             if (console != LaunchRequestConsoleType.InternalConsole && !runsInTerminal)
             {
-                throw new InvalidOperationException($"the client cannot start a program in a terminal ({arguments.Console}); use internalConsole");
+                throw new InvalidOperationException($"the client cannot start a program in a terminal ({arguments.Console}); use {ConsoleKinds.InternalConsole}");
             }
             // A .dll runs under the host; an apphost or another executable runs itself.
             if (Path.GetExtension(program).Equals(".dll", StringComparison.OrdinalIgnoreCase))
@@ -368,7 +377,7 @@ public sealed class DebugAdapter
             if (hotReload)
             {
                 // The runtime's switch for code that may change (Hot Reload); a launch's own is kept.
-                environment.TryAdd(RuntimeVariables.ModifiableAssemblies, "debug");
+                environment.TryAdd(RuntimeVariables.ModifiableAssemblies, RuntimeVariables.ModifiableAssembliesDebug);
             }
             LaunchInfo launch = new()
             {
@@ -382,6 +391,8 @@ public sealed class DebugAdapter
                 Unseen = arguments.Unseen ?? false,
             };
             debugger.Present(arguments.Presentations ?? []);
+            debugger.Carry(arguments.Carried ?? []);
+            debugger.Own(arguments.Own ?? []);
             await Locked(() => debugger.Launch(launch, arguments.JustMyCode ?? true));
         }
         catch (Exception error)
@@ -396,6 +407,8 @@ public sealed class DebugAdapter
         {
             bool justMyCode = arguments.JustMyCode ?? true;
             debugger.Present(arguments.Presentations ?? []);
+            debugger.Carry(arguments.Carried ?? []);
+            debugger.Own(arguments.Own ?? []);
             if (arguments.Relay is { } relay)
             {
                 await Locked(() => debugger.AttachThroughRelay(relay, arguments.RelayModules, arguments.RelayToken, justMyCode, arguments.HotReload ?? false));
@@ -558,8 +571,8 @@ public sealed class DebugAdapter
         RunInTerminalArguments arguments = new(
             launch.LaunchRequestConsoleType switch
             {
-                LaunchRequestConsoleType.IntegratedTerminal => "integrated",
-                LaunchRequestConsoleType.ExternalTerminal => "external",
+                LaunchRequestConsoleType.IntegratedTerminal => RunInTerminalKinds.Integrated,
+                LaunchRequestConsoleType.ExternalTerminal => RunInTerminalKinds.External,
                 _ => throw new ArgumentOutOfRangeException(nameof(launch), $"Invalid console type for runInTerminal: '{launch.LaunchRequestConsoleType}'"),
             },
             $"{Path.GetFileName(programForTitle)} [DEBUG]",
@@ -712,7 +725,7 @@ public sealed class DebugAdapter
         Column = ColumnOut(frame.Column),
         EndColumn = frame.EndColumn is int endColumn ? ColumnOut(endColumn) : null,
         Source = frame.Source is not null ? new DapSource { Path = frame.Source, Name = Path.GetFileName(frame.Source), SourceReference = 0 } : null,
-        PresentationHint = frame.IsUserCode ? null : "subtle",
+        PresentationHint = frame.IsUserCode ? null : FrameHints.Subtle,
         IsResolved = frame.IsResolved,
         DecompiledSourceInfo = frame.DecompiledSourceInfo is { } decompiled
             ? new DapDecompiledSource(decompiled.TypeFullName, new DapAssembly(decompiled.Assembly.AssemblyPath, decompiled.Assembly.Mvid), decompiled.CallingUserCodeAssemblyPath)
@@ -728,20 +741,20 @@ public sealed class DebugAdapter
         string? kind = h.Kind switch
         {
             null => null,
-            PresentationHintKind.Property => "property",
-            PresentationHintKind.Method => "method",
-            PresentationHintKind.Event => "event",
-            PresentationHintKind.Class => "class",
-            PresentationHintKind.Data => "data",
-            PresentationHintKind.Virtual => "virtual",
+            PresentationHintKind.Property => PresentationHintKinds.Property,
+            PresentationHintKind.Method => PresentationHintKinds.Method,
+            PresentationHintKind.Event => PresentationHintKinds.Event,
+            PresentationHintKind.Class => PresentationHintKinds.Class,
+            PresentationHintKind.Data => PresentationHintKinds.Data,
+            PresentationHintKind.Virtual => PresentationHintKinds.Virtual,
             _ => throw new ArgumentOutOfRangeException(nameof(hint), h.Kind, null),
         };
         IReadOnlyList<string>? attributes = h.Attributes switch
         {
             null or AttributesValue.None => null,
-            AttributesValue.FailedEvaluation => ["failedEvaluation"],
-            AttributesValue.FailedNeedingThreads => ["failedEvaluation", DapAttributes.NeedsThreads],
-            AttributesValue.ReadOnly => ["readOnly"],
+            AttributesValue.FailedEvaluation => [DapAttributes.FailedEvaluation],
+            AttributesValue.FailedNeedingThreads => [DapAttributes.FailedEvaluation, DapAttributes.NeedsThreads],
+            AttributesValue.ReadOnly => [DapAttributes.ReadOnly],
             _ => throw new ArgumentOutOfRangeException(nameof(hint), h.Attributes, null),
         };
         return new DapPresentationHint(kind, attributes, Lazy: h.Lazy);

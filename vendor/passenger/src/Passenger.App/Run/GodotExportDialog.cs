@@ -37,15 +37,15 @@ public sealed class GodotExportDialog : IdeWindow
     private readonly Func<Task<GodotExportGodot>> read;
     private readonly Func<IReadOnlyList<GodotPreset>, Task<bool>> install;
     private readonly Action<Uri> browse;
-    private readonly ComboBox presetBox = new() { HorizontalAlignment = HorizontalAlignment.Stretch };
-    private readonly ComboBox kindBox = new() { HorizontalAlignment = HorizontalAlignment.Stretch, ItemsSource = new[] { Release, Debug }, SelectedIndex = 0 };
-    private readonly TextBox pathBox = new() { Classes = { StyleClasses.Search } };
-    private readonly TextBlock destination = new() { Classes = { StyleClasses.Muted }, FontSize = 12, TextTrimming = TextTrimming.PathSegmentEllipsis, Margin = new Thickness(0, 4, 0, 0) };
+    private readonly ComboBox presetBox = new FormDropDown();
+    private readonly ComboBox kindBox = new FormDropDown { ItemsSource = new[] { Release, Debug }, SelectedIndex = 0 };
+    private readonly TextBox pathBox = new();
+    private readonly TextBlock destination = FormRows.Note(path: true);
     private readonly TextBlock platform = new() { VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock templates = new() { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
     private readonly Button installButton = new() { Content = InstallWords };
-    private readonly Button download = new() { Classes = { StyleClasses.Link }, Content = "Godot's download of them", Margin = new Thickness(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-    private readonly TextBlock command = new() { Classes = { StyleClasses.Muted }, TextWrapping = TextWrapping.Wrap, FontSize = 12 };
+    private readonly Button download = new() { Classes = { StyleClasses.Link }, Content = "Godot's download of them", Margin = new Thickness(Gaps.Wide, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock command = FormRows.Note();
     private readonly TextBlock problem = new() { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
     private readonly Button export = DialogFooter.Default("Export");
     private GodotExportGodot? godot;
@@ -63,7 +63,7 @@ public sealed class GodotExportDialog : IdeWindow
         this.install = install;
         this.browse = browse;
         Title = $"Export {name}";
-        Width = 600;
+        Width = DialogWidths.Form;
         SizeToContent = SizeToContent.Height;
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -83,14 +83,14 @@ public sealed class GodotExportDialog : IdeWindow
         pathBox.Text = Preset?.ExportPath ?? string.Empty;
         StackPanel fields = new()
         {
-            Spacing = 10,
+            Spacing = FormRows.Between,
             Children =
             {
-                FormRows.Of("Preset:", presetBox),
-                FormRows.Of("Platform:", platform),
-                FormRows.Of("Export:", kindBox),
-                new StackPanel { Children = { FormRows.Of("Path:", pathBox), FormRows.Of(null, destination) } },
-                FormRows.Of("Templates:", templates),
+                FormRows.Of("Preset", presetBox),
+                FormRows.Of("Platform", platform),
+                FormRows.Of("Export", kindBox),
+                FormRows.Of("Path", pathBox, [destination]),
+                FormRows.Of("Templates", templates),
                 FormRows.Of(null, new StackPanel { Orientation = Orientation.Horizontal, Children = { installButton, download } }),
             },
         };

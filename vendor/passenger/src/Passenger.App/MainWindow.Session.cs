@@ -23,6 +23,9 @@ public partial class MainWindow
     private string? opening;
     private int openingAt;
 
+    /// <summary>When the open <see cref="opens"/> counts last was asked for, as the recent ones keep it (<see cref="AskedAt"/>).</summary>
+    private DateTimeOffset openAsked;
+
     /// <summary>The folder open in the window and what it has and runs; one with no folder before any opens.</summary>
     public ProjectSession Session => session;
 
@@ -100,6 +103,7 @@ public partial class MainWindow
         DevCertificates = DevCertificates,
         AskCertificate = AskCertificateAsync,
         AskReplace = AskReplaceAsync,
+        AskRunAgain = AskRunAgainAsync,
         AsksNoOne = AgentsOwn,
         Unseen = Unseen,
         SdkChosen = ChosenSdk,
@@ -108,6 +112,7 @@ public partial class MainWindow
         ShowFolder = ShowInFileManager,
         Trimmed = OfferWhole,
         NeedsTerminal = OfferTerminal,
+        OfferRebuild = OfferRebuild,
         LandFiles = LandFilesAsync,
         InGodotEditor = PlayInGodotEditorAsync,
         StopInGodotEditor = StopInGodotEditorAsync,
@@ -157,6 +162,7 @@ public partial class MainWindow
         // The folder's documents read off the window's thread meanwhile, so its restore takes them in with no read.
         Task reading = keepsWorkspace ? Task.WhenAll(Hold(opening).ReadAsync(), TakeKeptTrustAsync()) : Task.CompletedTask;
         int open = ++opens;
+        openAsked = AskedAt();
         if (ending.IsCompleted && reading.IsCompleted)
         {
             Begin(opening, fileNamed ? named : null);
@@ -171,18 +177,18 @@ public partial class MainWindow
     /// named), read with that one, its files and what it runs kept.</summary>
     private void ReadAgain(string folder, string? named)
     {
-        WorkspaceModel? withSolution = WorkspaceModel.ReadSolution(folder, named ?? session.NamedSolution, out UnreadSolution? unread);
+        WorkspaceModel? withSolution = WorkspaceModel.ReadSolution(folder, named ?? session.NamedSolution, out UnreadSolution? unread, out string? none);
         if ((withSolution?.OpenedAs ?? folder) == session.Workspace?.OpenedAs)
         {
-            session.Reopen(session.NamedSolution, withSolution, unread);
+            session.Reopen(session.NamedSolution, withSolution, unread, none);
             return;
         }
         Autosave();
-        session.Reopen(named, withSolution, unread);
+        session.Reopen(named, withSolution, unread, none);
         Explorer.Load(session.Workspace!, explorerView);
         ShowWorkspaceName();
         UpdateStatus();
-        Remember();
+        Remember(AskedAt());
     }
 
     private async Task BeginOnceEndedAsync(int open, string folder, string? named, Task reading, Action? opened)
@@ -229,7 +235,7 @@ public partial class MainWindow
         ShowWorkspaceName();
         UpdateStatus();
         ShowUnreadSolution();
-        Remember();
+        Remember(openAsked);
         IdeErrors.Observe(KeepSnapshotsAsync());
         // Untrusted, the folder is asked of once the window has it, nothing of its code begun meanwhile.
         if (!opened.Trusted)
@@ -278,12 +284,22 @@ public partial class MainWindow
     private void Bind(ProjectSession next)
     {
         session = next;
+        // The tool windows follow what the folder holds, before anything of the session shows one.
+        Dock.Serve();
+        next.HoldsChanged += (_, _) =>
+        {
+            if (session == next)
+            {
+                Dock.Serve();
+            }
+        };
         ForgetRunMarks();
         buildRun = new BuildRunController(next, BuildRunParts());
         BuildRunController runs = buildRun;
         // Detach acts on the container run under way: whole from the Run window or with nothing chosen, else the chosen service alone.
         next.Debug.RunDetach = new(runs.DetachesContainers, runs.WhyNotDetachContainers, runs.DetachContainersAsync);
         BindAspire(next);
+        BindSoundCues(next);
         buildRun.RunningChanged += (_, _) =>
         {
             if (session == next)
@@ -335,7 +351,7 @@ public partial class MainWindow
         // A scene's tree takes in the scenes it instances and the scripts it names, written on disk or typed.
         next.GodotScenes.Changed += (_, _) =>
         {
-            if (session == next && Editors.Active is { } shown && Passenger.Workspace.GodotFile.IsText(shown.Path) && next.GodotOf(shown.Path) is not null)
+            if (session == next && Editors.Active is { } shown && Passenger.Workspace.GodotFileKinds.IsText(shown.Path) && next.GodotOf(shown.Path) is not null)
             {
                 structure?.Invalidate();
             }
@@ -389,6 +405,7 @@ public partial class MainWindow
                 {
                     status.ShowLanguage(LanguageLabel());
                     structure?.FollowServer();
+                    Editors.OutlinesMayHaveCome();
                 }
             };
             // Each stop is logged with why, so the log is where to see more; one left stopped is started again from its words.
@@ -459,6 +476,7 @@ public partial class MainWindow
                 FindTests();
                 // A Godot project of GDScript alone the walk found outlines its open scene from now on.
                 structure?.FollowServer();
+                Editors.OutlinesMayHaveCome();
                 // Each Godot project the walk found has its editors taken from now on.
                 ListenForGodotEditors();
                 // Each file's project, which Problems lists the solution's under, as the projects now are.
@@ -584,6 +602,13 @@ public partial class MainWindow
                 OnDebugStateChanged();
             }
         };
+        debugger.Stopped += (_, stopped) =>
+        {
+            if (session == next && next.Debug == debugger)
+            {
+                FollowStop(stopped);
+            }
+        };
     }
 
     /// <summary>A new language server (or none) for the open folder: the status bar, the usages and Problems follow it.</summary>
@@ -595,8 +620,10 @@ public partial class MainWindow
             service.StateChanged += (_, _) => usages.Refresh();
             service.StateChanged += (_, _) => OutlineWhenUnseen();
             service.StateChanged += (_, _) => structure?.FollowServer();
+            service.StateChanged += (_, _) => Editors.OutlinesMayHaveCome();
             service.Connected += (_, _) => OutlineWhenUnseen();
             service.Connected += (_, _) => structure?.FollowServer();
+            service.Connected += (_, _) => Editors.OutlinesMayHaveCome();
             service.StateChanged += (_, _) => RoutesServerChanged(service);
             service.ProjectsLoaded += (_, _) => RoutesProjectsLoaded(service);
             service.StateChanged += (_, _) => StepsServerChanged(service);

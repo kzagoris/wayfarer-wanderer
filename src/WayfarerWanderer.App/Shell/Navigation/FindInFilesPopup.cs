@@ -99,7 +99,7 @@ public sealed class FindInFilesPopup : UserControl, IAnswers<SearchMatch?>
         DockPanel header = new() { Margin = new Thickness(12, 8, 10, 6) };
         DockPanel.SetDock(mask, Dock.Right);
         header.Children.Add(mask);
-        header.Children.Add(new TextBlock { Classes = { StyleClasses.PopupTitle }, Text = replace ? "Replace in Files" : "Find in Files", VerticalAlignment = VerticalAlignment.Center });
+        header.Children.Add(new TextBlock { Classes = { ShellClasses.PopupTitle }, Text = replace ? "Replace in Files" : "Find in Files", VerticalAlignment = VerticalAlignment.Center });
         StackPanel top = new() { Children = { header, find } };
         if (replace)
         {

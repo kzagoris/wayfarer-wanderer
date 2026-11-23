@@ -6,6 +6,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Passenger.App.ToolWindows;
 using Passenger.Core;
 
 namespace Passenger.App.Debugging;
@@ -69,12 +70,12 @@ public sealed class AttachToProcessDialog : IdeWindow
     private const string Columns = "220,90,110,*";
 
     /// <summary>Where a cell's words start in its column.</summary>
-    private const double CellInset = 4;
+    private const double CellInset = Gaps.Tight;
 
     private readonly Func<Task<IReadOnlyList<DotnetProcess>>> list;
     private readonly Func<DotnetProcess, bool> recent;
     private readonly ListBox rows;
-    private readonly TextBlock empty;
+    private readonly EmptyState empty;
     private readonly Button attach;
     private IReadOnlyList<DotnetProcess>? listed;
     private AttachScope scope;
@@ -88,33 +89,33 @@ public sealed class AttachToProcessDialog : IdeWindow
         this.scope = scope ?? AttachScope.Anywhere;
         Purpose = purpose;
         Title = purpose == AttachPurpose.Profiler ? "Attach Profiler" : "Attach to Process";
-        Width = 900;
+        Width = DialogWidths.Workspace;
         Height = 520;
         MinWidth = 560;
         MinHeight = 300;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
-        Search = new TextBox { Classes = { StyleClasses.Search }, Text = search, PlaceholderText = "Search by name, process ID, user, command line or container" };
+        Search = SearchBox.Of("Search processes", "Search processes by name, ID, user, command line or container");
+        Search.Text = search;
         Search.TextChanged += (_, _) => ShowRows();
         Search.AddHandler(KeyDownEvent, OnKey, RoutingStrategies.Tunnel);
         Button refresh = ToolButtons.Of(IconKeys.Rerun, "Refresh", () => IdeErrors.Observe(RefreshAsync()));
-        refresh.Margin = new Thickness(6, 0, 0, 0);
+        refresh.Margin = new Thickness(Gaps.Small, 0, 0, 0);
         refresh.VerticalAlignment = VerticalAlignment.Center;
         DockPanel.SetDock(refresh, Dock.Right);
         Places = new ToolWindows.FilterMenu("Show Processes Running…", PlaceItems);
         Places.Narrowed = this.scope.Where != AttachWhere.Anywhere;
         Places.Inside(Search);
-        DockPanel top = new() { [DockPanel.DockProperty] = Dock.Top, Margin = new Thickness(0, 0, 0, 10), Children = { refresh, Search } };
+        DockPanel top = new() { [DockPanel.DockProperty] = Dock.Top, Margin = new Thickness(0, 0, 0, Gaps.Wide), Children = { refresh, Search } };
 
         ColumnTitles titles = ColumnTitles.Of(Columns, ["Executable", "Process ID", "User", "Command Line"], ColumnTitles.OverList, CellInset);
 
         rows = new ListBox { Classes = { StyleClasses.Tree } };
         ReusedRows.Use(rows, Row);
-        // A heading is never chosen; a container shows a heading and a program in turn as the list is filled again.
-        rows.ContainerPrepared += (_, e) => e.Container.IsEnabled = e.Container.DataContext is not AttachRow { Process: null };
+        ListRow.Headings(rows, item => item is AttachRow { Process: null });
         ListKeys.Act(rows, new ListActs { Open = Attach, Keys = e => ListKeys.Move(rows, e, i => Rows[i].Process is not null) });
         rows.SelectionChanged += (_, _) => attach!.IsEnabled = Chosen is { WhyNot: null };
-        empty = new TextBlock { Classes = { StyleClasses.EmptyText }, Text = "Looking for .NET processes…" };
+        empty = new EmptyState { Text = "Looking for .NET processes…" };
         Border table = new()
         {
             Classes = { StyleClasses.Framed },
@@ -124,7 +125,7 @@ public sealed class AttachToProcessDialog : IdeWindow
 
         attach = new Button { Content = purpose == AttachPurpose.Profiler ? "Attach Profiler" : "Attach with .NET Debugger", Classes = { StyleClasses.Primary }, IsEnabled = false };
         attach.Click += (_, _) => Attach();
-        Content = DialogFooter.Page(new DockPanel { Margin = new Thickness(16), Children = { top, table } }, DialogFooter.OkCancel(attach, () => Close(null)));
+        Content = DialogFooter.Page(new DockPanel { [DialogFooter.InsetProperty] = true, Children = { top, table } }, DialogFooter.OkCancel(attach, () => Close(null)));
         Opened += (_, _) => Dispatcher.UIThread.Post(() =>
         {
             Search.Focus();
@@ -297,7 +298,7 @@ public sealed class AttachToProcessDialog : IdeWindow
     /// and in its tip).</summary>
     private static Control Row()
     {
-        TextBlock heading = new() { Classes = { StyleClasses.Muted }, FontSize = 11, FontWeight = FontWeight.SemiBold, Margin = new Thickness(4, 6, 0, 2) };
+        TextBlock heading = ListRow.Heading();
         TextBlock name = Cell(0, muted: false);
         TextBlock id = Cell(1, muted: false);
         TextBlock user = Cell(2, muted: true);
@@ -329,7 +330,7 @@ public sealed class AttachToProcessDialog : IdeWindow
         TextBlock cell = new()
         {
             [Grid.ColumnProperty] = column,
-            Margin = new Thickness(CellInset, 0, 10, 0),
+            Margin = new Thickness(CellInset, 0, Gaps.Wide, 0),
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
         };

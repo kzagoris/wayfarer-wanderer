@@ -8,15 +8,15 @@ using Passenger.Packages;
 namespace Passenger.App;
 
 /// <summary>The check for updates, and the update: the person's window asks for the latest release as it starts and a
-/// day after each answer by the wall clock (an hour after a check that failed) while Check for updates is on. A copy
-/// its installer, disk image or archive put in place downloads a newer one in the background, saying so in the status
-/// bar, checks it, offers Restart to Update and installs it as Passenger ends (or says the command that installs it);
-/// any other copy says once per version that one is out, linking this system's download, or, for a package manager's
-/// copy, that the package manager updates it. Help, Check for Updates asks when a person wants. The window watching
-/// does it all once for the process, and every window shows its notice and offers Restart to Update, one opened later
-/// too. Every answer is logged; only one a person asked for, or a download that did not land, is said. A security release
-/// (<see cref="ReleaseNotes.SecurityOf"/>) is named one in the notice, in the warning colour, saying what it fixes and asking
-/// to be put in soon; the status bar says so once, and once it is ready offers to restart into it now.</summary>
+/// day after each answer by the wall clock (an hour after a check that failed) while Check for updates is on. A copy its
+/// installer, disk image or archive put in place downloads a newer one in the background, saying so in the status bar,
+/// checks it, offers Restart to Update and installs it as Passenger ends (or says the command that installs it); any
+/// other copy says once per version that one is out, linking this system's download, or, for a package manager's copy,
+/// that the package manager updates it. Help, Check for Updates asks when a person wants. The window watching does it
+/// all once for the process, and every window shows its notice and offers Restart to Update, one opened later too. Every
+/// answer is logged; only one a person asked for, or a download that did not land, is said. A release past a security
+/// release this version lacks (<see cref="ReleaseNotes.SecurityOf"/>) is a security update in the notice, in the warning
+/// colour, saying what it fixes, and the status bar says so once, offering a restart when it is ready.</summary>
 public partial class MainWindow
 {
     /// <summary>The words when there is nothing newer.</summary>
@@ -98,7 +98,7 @@ public partial class MainWindow
     private void AddUpdates()
     {
         actions!.Add(new IdeAction(AppActions.CheckForUpdates, "Check for Updates…", "Help",
-            context => IdeErrors.Observe(UpdatesOwner.CheckForUpdatesAsync(asker: this)))
+            context => IdeErrors.Observe(CheckForUpdatesAskedAsync()))
         {
             Menus = OperatingSystem.IsMacOS() ? [] : [new MenuPlace("Help", 3, 1)],
         });
@@ -258,16 +258,32 @@ public partial class MainWindow
         IdeErrors.Observe(ownCheck);
     }
 
+    /// <summary>Check for Updates…: the check held as this window's work from its first moment until it has found what there
+    /// is, telling it; a download it begins goes on as the window's own.</summary>
+    private async Task CheckForUpdatesAskedAsync()
+    {
+        using Working? checking = BeginWork(AppActions.CheckForUpdates, "Checking for updates…");
+        if (checking is not null)
+        {
+            await UpdatesOwner.CheckForUpdatesAsync(asker: this, checking);
+        }
+    }
+
     /// <summary>Asks for the latest release, off the UI thread. A newer one downloads when this copy installs updates
     /// and the setting is on; otherwise it is shown when a person asked or it is newer than the one announced last. A
-    /// person who asked is told the rest too, in the window they asked in, while a check of the window's own only logs
-    /// it.</summary>
-    private async Task CheckForUpdatesAsync(MainWindow? asker)
+    /// person who asked is told the rest too, in the window they asked in, and by the work they asked with, while a check of
+    /// the window's own only logs it.</summary>
+    private async Task CheckForUpdatesAsync(MainWindow? asker, Working? checking = null)
     {
         bool asked = asker is not null;
         if (asker is not null)
         {
             asker.status.Text = "Checking for updates…";
+        }
+        void Found(bool succeeded, string said)
+        {
+            asker!.status.Text = said;
+            checking?.Tell(succeeded, said);
         }
         ReleaseFeed feed = Releases;
         CancellationToken end = updatesEnd.Token;
@@ -307,15 +323,16 @@ public partial class MainWindow
                     ShowReady(release);
                     if (asker is not null)
                     {
-                        asker.status.Text = $"Passenger {release.Version} is ready: restart to update";
+                        Found(true, $"Passenger {release.Version} is ready: restart to update");
                     }
                 }
                 else
                 {
                     if (asker is not null)
                     {
-                        asker.status.Text = release.Security is null ? $"Passenger {release.Version} is available, and downloading" : $"{SecurityWords(release)}, and downloading";
+                        Found(true, release.Security is null ? $"Passenger {release.Version} is available, and downloading" : $"{SecurityWords(release)}, and downloading");
                     }
+                    checking?.Dispose();
                     if (downloadingRelease?.Version != release.Version)
                     {
                         await DownloadAsync(updater, release);
@@ -338,14 +355,14 @@ public partial class MainWindow
                 }
                 if (asker is not null)
                 {
-                    asker.status.Text = release.Security is null ? $"Passenger {release.Version} is available" : $"{SecurityWords(release)}. Install it soon";
+                    Found(true, release.Security is null ? $"Passenger {release.Version} is available" : $"{SecurityWords(release)}. Install it soon");
                 }
                 break;
             case ReleaseAnswer.Failed { Reason: var reason } when asker is not null:
-                asker.status.Text = $"Could not check for updates: {reason}";
+                Found(false, $"Could not check for updates: {reason}");
                 break;
             case ReleaseAnswer.Current when asker is not null:
-                asker.status.Text = UpToDate;
+                Found(true, UpToDate);
                 break;
         }
     }

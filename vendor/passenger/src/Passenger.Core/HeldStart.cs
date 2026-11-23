@@ -22,7 +22,7 @@ public static class HeldStart
         yield return new(RuntimeVariables.DefaultDiagnosticPortSuspend, "1");
         if (changeable)
         {
-            yield return new(RuntimeVariables.ModifiableAssemblies, "debug");
+            yield return new(RuntimeVariables.ModifiableAssemblies, RuntimeVariables.ModifiableAssembliesDebug);
         }
     }
 
@@ -158,7 +158,7 @@ public static class HeldStart
             {
                 try
                 {
-                    await ask(new DiagnosticsClient(process.Id)).ConfigureAwait(false);
+                    await ask(await DiagnosticPorts.ClientAsync(process.Id).ConfigureAwait(false)).ConfigureAwait(false);
                     return PortWait.Reached;
                 }
                 catch (ServerNotAvailableException)

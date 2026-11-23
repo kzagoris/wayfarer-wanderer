@@ -49,6 +49,9 @@ public static class PassengerApp
     /// <summary>What a quit a window's question holds tells if the person keeps that window open (<see cref="Quit"/>).</summary>
     private static Action? quitGivenUp;
 
+    /// <summary>The window asking the person whether to quit while it asks (<see cref="QuitAskedAsync"/>).</summary>
+    private static MainWindow? askingQuit;
+
     /// <summary>The project windows open, in the order they opened: the Window menu's list, which Next and Previous
     /// Solution Window step through.</summary>
     public static IReadOnlyList<MainWindow> Windows => Open;
@@ -237,6 +240,45 @@ public static class PassengerApp
         }
     }
 
+    /// <summary>A quit the person asked for from <paramref name="from"/> (Exit, the system's Quit) where its Confirm before
+    /// closing asks: asked once, over the window in front, however many windows are open or times it is asked meanwhile (the
+    /// system's Quit closes each window in turn), then quits as they agree (<see cref="Quit"/>). Nothing is asked where the
+    /// window the quit closes first asks whether to stop programs Hot Reload changed, a question that confirms it.</summary>
+    internal static async Task QuitAskedAsync(MainWindow from)
+    {
+        UiThread.Check();
+        if (askingQuit is { } asking)
+        {
+            asking.OwnedWindows.OfType<ConfirmDialog>().LastOrDefault()?.Activate();
+            return;
+        }
+        MainWindow over = Front is { IsVisible: true } front ? front : from;
+        askingQuit = over;
+        bool agreed;
+        try
+        {
+            // Once the close in hand is over, as the system's Quit goes on to close each window, which waits on this.
+            await Task.Yield();
+            if (Open.LastOrDefault() is { AsksOfHeld: true })
+            {
+                agreed = true;
+            }
+            else
+            {
+                BringForward(over);
+                agreed = await over.ConfirmedAsync(quits: true);
+            }
+        }
+        finally
+        {
+            askingQuit = null;
+        }
+        if (agreed)
+        {
+            Quit();
+        }
+    }
+
     /// <summary>A window closed as Passenger quit (by <see cref="Quit"/> or the system's) asked what to do with changes it
     /// could not save, and the person answered: the quit carries on, every window still open closing and keeping its
     /// solution, or, kept open, it is given up.</summary>
@@ -273,7 +315,7 @@ public static class PassengerApp
 
     /// <summary>A person's launch another Passenger process handed over (<see cref="LaunchHandOff"/>): its files and caret
     /// go, once its folder is open, to the innermost window whose folder holds what it names, else its folder or workspace
-    /// opens as File, Open opens one in a window of its own (the one in front when that has nothing open), a launch naming
+    /// opens as Open Solution opens one in a window of its own (the one in front when that has nothing open), a launch naming
     /// nothing going to the window in front, one asking for a new window making one with nothing open; that window comes
     /// forward, the person's own act. The answer the launch is told.</summary>
     internal static string TakeLaunch(HandedLaunch launch)
@@ -307,18 +349,7 @@ public static class PassengerApp
         IdeErrors.Write($"Launch: handed over for {launch.Workspace ?? launch.Folder ?? (launch.NewWindow ? "a new window" : "no folder")}"
             + $"{(launch.Files.Count > 0 ? $", {Plural.Listed(launch.Files)}" : string.Empty)}, taken by the window on {into.FolderHeld ?? "no folder"}");
         into.OnceOpen(() => into.TakeLaunch(launch.Files, launch.Caret));
-        BringForward(into);
-        if (!into.IsActive)
-        {
-            // Where the system keeps the program in front there (macOS's cooperative activation), the window asks for the person.
-            IDisposable asked = Attention.Ask(into);
-            void Came(object? sender, EventArgs e)
-            {
-                into.Activated -= Came;
-                asked.Dispose();
-            }
-            into.Activated += Came;
-        }
+        into.CallPerson(forward: true);
         return HandedLaunch.Answer(into.FolderHeld, null);
     }
 

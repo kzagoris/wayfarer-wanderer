@@ -1,9 +1,9 @@
-using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Passenger.App.ToolWindows;
 
 namespace Passenger.App.Tables;
 
@@ -12,10 +12,10 @@ namespace Passenger.App.Tables;
 /// cells written through its file. Each file's chosen cells and scroll are kept for when its tab is shown again.</summary>
 public sealed class TableViewer
 {
-    private readonly StackPanel choices = new() { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
-    private readonly CheckBox header = new() { Content = "First row is header", FontSize = 12, Margin = new Thickness(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-    private readonly TextBlock size = new() { Classes = { StyleClasses.Muted }, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-    private readonly TextBlock message = new() { Classes = { StyleClasses.EmptyText }, IsVisible = false };
+    private readonly Segments<int> choices = new();
+    private readonly CheckBox header = new() { Classes = { StyleClasses.Caption }, Content = "First row is header", Margin = new Thickness(Gaps.Wide, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock size = new() { Classes = { StyleClasses.Muted, StyleClasses.Caption }, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+    private readonly EmptyState message = new() { IsVisible = false };
     private readonly Dictionary<TableFile, ((int, int) Anchor, (int, int) Caret, Vector Scroll)> kept = [];
     private TableFile? file;
     private bool painting;
@@ -27,10 +27,10 @@ public sealed class TableViewer
     {
         Bar = ToolWindows.ToolBars.OverEditor(new DockPanel
         {
-            Margin = new Thickness(8, 0),
+            Margin = new Thickness(Gaps.Normal, 0),
             Children =
             {
-                new Border { [DockPanel.DockProperty] = Dock.Right, Child = size, Margin = new Thickness(12, 0, 0, 0) },
+                new Border { [DockPanel.DockProperty] = Dock.Right, Child = size, Margin = new Thickness(Gaps.Wide, 0, 0, 0) },
                 new ScrollViewer
                 {
                     HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
@@ -40,6 +40,7 @@ public sealed class TableViewer
             },
         });
         Bar.IsVisible = false;
+        choices.Chosen += (_, index) => Choose(index);
         header.IsCheckedChanged += (_, _) =>
         {
             if (!painting && file is not null)
@@ -92,7 +93,7 @@ public sealed class TableViewer
         Hide();
         file = shown;
         file.Changed += OnChanged;
-        choices.Children.Clear();
+        choices.Clear();
         Paint();
         if (kept.TryGetValue(shown, out ((int, int) Anchor, (int, int) Caret, Vector Scroll) view))
         {
@@ -174,7 +175,7 @@ public sealed class TableViewer
         message.Text = file.Problem ?? (file.IsReading ? "Reading…" : string.Empty);
         View.IsVisible = file.Table is not null;
         size.Text = file.Table is { } table && file.ShowsTable
-            ? $"{table.RowCount.ToString("N0", CultureInfo.CurrentCulture)} {Core.Plural.Noun(table.RowCount, "row")} × {table.ColumnCount.ToString("N0", CultureInfo.CurrentCulture)} {Core.Plural.Noun(table.ColumnCount, "column")}"
+            ? $"{Core.Numbers.Said(table.RecordCount)} {Core.Plural.Noun(table.RecordCount, "row")} × {Core.Numbers.Said(table.ColumnCount)} {Core.Plural.Noun(table.ColumnCount, "column")}"
             : file.IsReading ? "Reading…" : string.Empty;
         painting = false;
     }
@@ -185,21 +186,15 @@ public sealed class TableViewer
         TableFile shown = file!;
         string[] names = shown.IsWorkbook ? [.. shown.Sheets] : ["Table", "Text"];
         int chosen = shown.IsWorkbook ? shown.Sheet : shown.ShowsTable ? 0 : 1;
-        if (choices.Children.Count != names.Length || names.Where((name, i) => (string?)((ToggleButton)choices.Children[i]).Content != name).Any())
+        if (choices.Toggles.Count != names.Length || names.Where((name, i) => (string?)choices.Toggles[i].Content != name).Any())
         {
-            choices.Children.Clear();
+            choices.Clear();
             for (int i = 0; i < names.Length; i++)
             {
-                int index = i;
-                ToggleButton choice = new() { Classes = { StyleClasses.Segment }, Content = names[i], FontSize = 12, Name = shown.IsWorkbook ? null : $"Show{names[i]}" };
-                choice.Click += (_, _) => Choose(index);
-                choices.Children.Add(choice);
+                choices.Add(i, names[i], shown.IsWorkbook ? null : $"Show{names[i]}");
             }
         }
-        for (int i = 0; i < choices.Children.Count; i++)
-        {
-            ((ToggleButton)choices.Children[i]).IsChecked = i == chosen;
-        }
+        choices.Choice = chosen;
         // A sheet alone needs no choosing.
         choices.IsVisible = names.Length > 1;
     }

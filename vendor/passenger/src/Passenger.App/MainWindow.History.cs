@@ -166,6 +166,11 @@ public partial class MainWindow
             status.Text = session.Vcs.NoRepository;
             return null;
         }
+        using Working? reading = BeginWork(AppActions.CompareWithBranch, "Reading the branches and tags…");
+        if (reading is null)
+        {
+            return null;
+        }
         IReadOnlyList<GitRef> refs = await repository.RefNamesAsync();
         string? current = session.Vcs.Branch;
         ChoicePopup popup = new($"Compare {Path.GetFileName(path)} with Branch or Tag", "Search for branches and tags",
@@ -191,7 +196,8 @@ public partial class MainWindow
     /// opens its text of the file, under the name it had then, beside the file's.</summary>
     public async Task<ChoicePopup?> ShowCompareWithRevisionAsync(string path)
     {
-        if (await ScopeOrSayAsync(path, null) is not { IsFolder: false } scope)
+        using Working? reading = BeginWork(AppActions.CompareWithRevision, $"Reading the history of {Path.GetFileName(path)}…");
+        if (reading is null || await ScopeOrSayAsync(path, null) is not { IsFolder: false } scope)
         {
             return null;
         }
@@ -211,8 +217,9 @@ public partial class MainWindow
 
     /// <summary>A version of a file beside the file as it is now: <paramref name="revision"/>'s text of it at
     /// <paramref name="then"/> (where it was in that version), else at <paramref name="origin"/> (where the last commit has a
-    /// file renamed since), the right side the open file's own text when it is open.</summary>
-    public async Task<IDiffHost?> CompareWithAsync(string path, string revision, string version, string then, string? origin = null)
+    /// file renamed since), the right side the open file's own text when it is open. A file <paramref name="added"/> since
+    /// that version, which has none of it, is beside an empty side.</summary>
+    public async Task<IDiffHost?> CompareWithAsync(string path, string revision, string version, string then, string? origin = null, bool added = false)
     {
         if (session.Vcs.Repository is null)
         {
@@ -225,7 +232,7 @@ public partial class MainWindow
             was = await session.Vcs.VersionAsync(revision, origin, path);
             then = origin;
         }
-        if (was?.Text is not { } theirs)
+        if ((was is null && added ? string.Empty : was?.Text) is not { } theirs)
         {
             status.Text = was is null ? $"{Path.GetFileName(then)} is not in {version}" : $"{Path.GetFileName(then)} is binary in {version}, so it has no lines to compare";
             return null;
@@ -233,7 +240,8 @@ public partial class MainWindow
         OpenDocument? open = Editors.Find(path) is { HoldsText: true } held ? held : null;
         TextDocument mine = open?.Text ?? new TextDocument(EditorArea.ReadText(path) ?? string.Empty);
         TextSnapshot text = mine.Snapshot;
-        FileDiff diff = await ComparedAsync(theirs, text);
-        return OpenLocalDiff(path, open, mine, diff, version, again: () => CompareWithAsync(path, revision, version, then, origin));
+        Task<bool> breaksAlike = was is null ? Task.FromResult(false) : session.Vcs.BreaksStoredAlikeAsync(revision, then, was, path);
+        FileDiff diff = (await ComparedAsync(theirs, text)).StoringBreaksAlike(await breaksAlike);
+        return OpenLocalDiff(path, open, mine, diff, version, again: () => CompareWithAsync(path, revision, version, then, origin, added));
     }
 }

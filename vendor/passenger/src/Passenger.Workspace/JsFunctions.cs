@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Passenger.Core;
+using Passenger.Text;
 
 namespace Passenger.Workspace;
 
@@ -19,7 +20,8 @@ public static class JsFunctions
     }
 
     /// <summary>Where a script declares what an identifier names, each the stretch of its name: a function declaration, a class,
-    /// a function or arrow function assigned to it or given as an object's member, and a method; none inside a comment.</summary>
+    /// a function or arrow function assigned to it or given as an object's member, and a method; none inside a comment. A
+    /// script read past the regex's time limit throws a <see cref="RegexMatchTimeoutException"/>.</summary>
     public static IReadOnlyList<(int Start, int Length)> Declared(string script, string identifier)
     {
         string name = NameOf(identifier);
@@ -36,9 +38,9 @@ public static class JsFunctions
             + $@"|(?<![\w$])(?<n>{escaped})\s*=(?![=>])\s*{function}"
             + $@"|(?<![\w$.])(?<q>['""]?)(?<n>{escaped})\k<q>\s*:\s*{function}"
             + $@"|^[ \t]*(?:static\s+)?(?:async\s+)?\*?\s*(?<n>{escaped})\s*\([^()]*\)\s*\{{",
-            RegexOptions.Multiline | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+            RegexOptions.Multiline | RegexOptions.CultureInvariant, TextSearch.Apart);
         List<(int, int)> found = [];
-        foreach (Match match in declared.Matches(script))
+        foreach (Match match in TextSearch.MatchesOf(declared, script))
         {
             Group at = match.Groups["n"];
             if (!comment[at.Index] && !found.Contains((at.Index, at.Length)))

@@ -11,16 +11,40 @@
          reaches nuget.org for them. -->
     <AvaloniaTemplatesVersion>12.1.6</AvaloniaTemplatesVersion>
     <!-- Avalonia 11's last release, for the previewer's test of an app still on it (tests/AvaloniaGraphs). -->
-    <AvaloniaOlderVersion>11.3.22</AvaloniaOlderVersion>
+    <AvaloniaOlderVersion>11.3.23</AvaloniaOlderVersion>
+    <!-- The first Avalonia 12, which Passenger's hooks into an Avalonia app are compiled against (src/AvaloniaHooks.props),
+         so they call nothing an app on any Avalonia 12 lacks. -->
+    <AvaloniaOldestVersion>12.0.0</AvaloniaOldestVersion>
+    <!-- Avalonia 12.0's last release, for the tests' desktop app on an older Avalonia 12 than Passenger's
+         (tests/AvaloniaGraphs). -->
+    <Avalonia120Version>12.0.5</Avalonia120Version>
+    <!-- The older Avalonia 12s whose headless platform and XAML compiler the inspector carries beside Passenger's own: each
+         serves an app from its version to the next one's, as Avalonia changed what the headless platform implements or
+         calls at 12.1.0 (a window's frame theme), 12.1.2 (a popup's hit testing) and 12.1.3 (the mouse device it resets),
+         so an app on any Avalonia 12 up to Passenger's is given one built against its own platform's interfaces. A move of
+         Passenger's Avalonia adds the version it leaves, and any between where the platform changed. -->
+    <AvaloniaCarriedVersions>$(AvaloniaOldestVersion);12.1.0;12.1.2</AvaloniaCarriedVersions>
     <!-- The MVVM Toolkit at the version Avalonia's MVVM template above writes, downloaded for the tests' package cache, so
          an app of theirs restores with its generators and reaches no feed. -->
     <CommunityToolkitMvvmVersion>8.4.2</CommunityToolkitMvvmVersion>
+    <!-- ReactiveUI and its source generators, whose [Reactive] and [ReactiveCommand] members the XAML tests bind to:
+         restored for the tests' package cache (tests/AvaloniaGraphs), so an app of theirs restores with its generators and
+         reaches no feed. -->
+    <ReactiveUiVersion>27.0.1</ReactiveUiVersion>
+    <ReactiveUiGeneratorsVersion>5.1.0</ReactiveUiGeneratorsVersion>
     <!-- Aspire's templates, AppHost SDK and package, dashboard, orchestrator and CLI at one version, downloaded for the
          tests' local feed. -->
     <AspireTemplatesVersion>13.6.5</AspireTemplatesVersion>
+    <!-- And Aspire's whose AppHost is a plain project or program with Aspire's AppHost package, no AppHost SDK, whose
+         dashboard and orchestrator come from the aspire CLI's bundle: its templates, AppHost and .NET project packages and
+         CLI, the AppHost's graph and its starter's restored at their own versions (tests/AspireGraphs/Package*). -->
+    <AspirePackageTemplatesVersion>17.0.0</AspirePackageTemplatesVersion>
+    <!-- What those templates write where it differs from what AspireTemplatesVersion's write (the tests' section below). -->
+    <AspirePackageOpenTelemetryVersion>1.18.0</AspirePackageOpenTelemetryVersion>
+    <AspirePackageOpenApiVersion>10.0.15</AspirePackageOpenApiVersion>
     <!-- The Azure Functions app (.NET isolated worker) the Aspire tests write: its MSBuild SDK, downloaded for the tests'
          local feed, and its worker and HTTP triggers, whose graph tests/AspireGraphs restores. -->
-    <AzureFunctionsSdkVersion>1.0.2</AzureFunctionsSdkVersion>
+    <AzureFunctionsSdkVersion>1.1.0</AzureFunctionsSdkVersion>
     <AzureFunctionsWorkerVersion>2.52.0</AzureFunctionsWorkerVersion>
     <AzureFunctionsHttpVersion>3.3.0</AzureFunctionsHttpVersion>
     <!-- WPF's reference pack at the version global.json's SDK gives its own WPF (its TargetingPackVersion), downloaded
@@ -33,8 +57,8 @@
     <MauiVersion>11.0.0</MauiVersion>
     <!-- EF Core and the dotnet-ef tool for the Migrations window's tests, downloaded for the tests' local feed: at its
          version, and at the one before for a tool that does not match and a stand-in provider that trails it. -->
-    <EfCoreVersion>10.0.14</EfCoreVersion>
-    <EfCoreOlderVersion>10.0.13</EfCoreOlderVersion>
+    <EfCoreVersion>10.0.15</EfCoreVersion>
+    <EfCoreOlderVersion>10.0.14</EfCoreOlderVersion>
     <!-- EF Core 11 and its dotnet-ef, whose options' defaults .config/dotnet-ef.json gives, for the Migrations window's
          test of them, downloaded for the tests' local feed. -->
     <EfCore11Version>11.0.0</EfCore11Version>
@@ -120,10 +144,10 @@
     <!-- Skia and HarfBuzz under Avalonia's renderer, Svg.Skia and the MAUI previewer, at their newest stable line rather
          than the older ones Avalonia.Skia and Avalonia.Controls.Maui name as their least, each with the Linux native
          library of its own version (macOS's and Windows' come with the managed package). -->
-    <PackageVersion Include="SkiaSharp" Version="4.156.0" />
-    <PackageVersion Include="SkiaSharp.NativeAssets.Linux" Version="4.156.0" />
-    <PackageVersion Include="HarfBuzzSharp" Version="14.4.0.100" />
-    <PackageVersion Include="HarfBuzzSharp.NativeAssets.Linux" Version="14.4.0.100" />
+    <PackageVersion Include="SkiaSharp" Version="4.157.0" />
+    <PackageVersion Include="SkiaSharp.NativeAssets.Linux" Version="4.157.0" />
+    <PackageVersion Include="HarfBuzzSharp" Version="14.4.0.200" />
+    <PackageVersion Include="HarfBuzzSharp.NativeAssets.Linux" Version="14.4.0.200" />
     <!-- The MAUI previewer's (src/Passenger.MauiPreview): Avalonia's backend for .NET MAUI, which draws MAUI's controls with
          Avalonia's on every system. Its newest release candidate, as it has no stable release yet. -->
     <PackageVersion Include="Avalonia.Controls.Maui" Version="11.0.0-rc.3.26301.1434" />
@@ -133,13 +157,13 @@
     <PackageVersion Include="Grpc.Net.Client" Version="2.85.0" />
     <!-- Also what Passenger's analyzers are compiled against (src/Passenger.Analyzers), so never past the compiler of
          global.json's SDK, nor of Roslyn's server at RoslynServerVersion, which load them. -->
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.12.0" />
     <!-- The unit tests' workspaces, at the compiler's version above: what the extension inside Roslyn's server keeps by a
          solution's documents, held to each workspace apart. -->
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.9.0" />
-    <PackageVersion Include="ModelContextProtocol.Core" Version="2.3.1" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.12.0" />
+    <PackageVersion Include="ModelContextProtocol.Core" Version="2.4.0" />
     <!-- The NuGet window's package sources, read by NuGet's own code, so they match the CLI's. -->
-    <PackageVersion Include="NuGet.Configuration" Version="7.9.0" />
+    <PackageVersion Include="NuGet.Configuration" Version="8.0.0" />
     <PackageVersion Include="StreamJsonRpc" Version="2.26.150" />
     <!-- The app's JoinableTaskFactory (Synchronously.cs), at the version StreamJsonRpc takes. -->
     <PackageVersion Include="Microsoft.VisualStudio.Threading.Only" Version="18.7.23" />
@@ -158,8 +182,11 @@
          so a step reads and matches in the editor as it does in a test run. -->
     <PackageVersion Include="Gherkin" Version="35.0.0" />
     <PackageVersion Include="Cucumber.CucumberExpressions" Version="17.1.0" />
+    <!-- Reqnroll's own runtime, which the unit tests run in-process as the reference StepConversions is held to, at the
+         version its port follows; Passenger never carries it. -->
+    <PackageVersion Include="Reqnroll" Version="$(ReqnrollVersion)" />
     <!-- VSTest's own client for the vstest.console the SDK ships: discovery, runs and debugging of tests. -->
-    <PackageVersion Include="Microsoft.TestPlatform.TranslationLayer" Version="18.11.0" />
+    <PackageVersion Include="Microsoft.TestPlatform.TranslationLayer" Version="18.12.0" />
     <!-- The Windows install's hooks, at the version of the vpk tool that packs it (dotnet-tools.json). -->
     <PackageVersion Include="Velopack" Version="1.2.161" />
   </ItemGroup>
@@ -184,13 +211,14 @@
     <PackageVersion Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.750501" />
     <PackageVersion Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="4.0.0" />
     <PackageVersion Include="Microsoft.Diagnostics.Runtime" Version="4.2.751201" />
-    <PackageVersion Include="MP.Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.ExpressionCompiler" Version="5.9.0" />
+    <PackageVersion Include="MP.Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator.ExpressionCompiler" Version="5.12.0" />
     <PackageVersion Include="ZLinq" Version="1.6.1" />
   </ItemGroup>
   <!-- Tests. xunit v3 stays on 3.2, the line Avalonia.Headless.XUnit is built against. -->
   <ItemGroup>
     <PackageVersion Include="Aspire.Hosting.AppHost" Version="$(AspireTemplatesVersion)" />
     <PackageVersion Include="Aspire.Hosting.Azure.Functions" Version="$(AspireTemplatesVersion)" />
+    <PackageVersion Include="Aspire.Hosting.Dotnet" Version="$(AspirePackageTemplatesVersion)" />
     <!-- The analyzers and generators at the versions Azure.Functions.Sdk (AzureFunctionsSdkVersion) adds them. -->
     <PackageVersion Include="Microsoft.Azure.Functions.Worker" Version="$(AzureFunctionsWorkerVersion)" />
     <PackageVersion Include="Microsoft.Azure.Functions.Worker.Extensions.Http" Version="$(AzureFunctionsHttpVersion)" />
@@ -220,11 +248,13 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="$(EfCoreVersion)" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="$(EfCoreVersion)" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(NpgsqlEfVersion)" />
+    <PackageVersion Include="ReactiveUI" Version="$(ReactiveUiVersion)" />
+    <PackageVersion Include="ReactiveUI.SourceGenerators" Version="$(ReactiveUiGeneratorsVersion)" />
     <PackageVersion Include="Avalonia.Headless.XUnit" Version="12.1.6" />
     <PackageVersion Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="5.6.0" />
     <!-- The analyzers' (src/Passenger.Analyzers): the last release, MIT where netstandard2.0's 1.1.0 is not. -->
     <PackageVersion Include="Microsoft.NETCore.Platforms" Version="7.0.4" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.12.0" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
   </ItemGroup>

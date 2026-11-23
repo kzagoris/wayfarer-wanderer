@@ -924,7 +924,7 @@ public sealed class OpenDocument : Observable
     /// language's once its grammar has read the whole file (never, once it failed; a language with neither has none known
     /// unless it holds none), or its language would read a block of the result otherwise.</summary>
     public string? WhyNotConverted(bool toTabs) =>
-        IsReadOnly ? Refusals.ReadOnly(Name)
+        ReadOnlyWhy is { } readOnly ? readOnly
         : toTabs && Language.IndentsWithSpacesAlone ? Refusals.SpacesAlone(Name, Language.Name)
         : parser is TextMateHighlighter { Failure: { } failure } ? Refusals.GrammarFailed(Name, Language.Name, failure.Message)
         : parser is TextMateHighlighter grammar && !grammar.HasRead(Text.Snapshot) ? Refusals.ReadingStrings(Name)
@@ -1134,9 +1134,9 @@ public sealed class OpenDocument : Observable
         {
             return;
         }
-        if (IsReadOnly)
+        if (ReadOnlyWhy is { } readOnly)
         {
-            throw new IOException(Refusals.ReadOnly(Name));
+            throw new IOException(readOnly);
         }
         Stored before = Current;
         SelectionSet carets = Selections;
@@ -1319,15 +1319,22 @@ public sealed class OpenDocument : Observable
 
     /// <summary>Whether the language server made this file from an assembly's metadata (Go to Declaration on a
     /// library's symbol), where nothing typed would reach the library.</summary>
-    public bool IsDecompiled => Path.Contains($"{System.IO.Path.DirectorySeparatorChar}MetadataAsSource{System.IO.Path.DirectorySeparatorChar}", StringComparison.Ordinal);
+    public bool IsDecompiled => Decompiled(Path);
+
+    /// <summary>Whether a file (a canonical path) is one a language server made from an assembly's metadata (<see cref="IsDecompiled"/>).</summary>
+    public static bool Decompiled(string path) => path.Contains($"{System.IO.Path.DirectorySeparatorChar}MetadataAsSource{System.IO.Path.DirectorySeparatorChar}", StringComparison.Ordinal);
 
     /// <summary>Whether the editor shows it read-only, under a bar that says why: decompiled, the licence, notices or release
     /// notes the app carries, a workbook, an asset preview, a diff's tab, a binary file shown as its bytes, an MSBuild file of the .NET
     /// SDK or any file of a package as NuGet restored it, a copy of a container's file or of what the engine says of one, a
-    /// copy of a source generator's code, or a stylesheet a page links on the web as it was downloaded.</summary>
-    public bool IsReadOnly => Asset is not null || Diff is not null || Tool is not null || IsDecompiled || IsWorkbook || IsBinary || Product.Carries(Path) || IsReleaseNotes
-        || MSBuild.MSBuildFiles.IsInstalled(Path) || Packages.PackageFolders.Holds(Path) || Containers.ContainerFilesPane.IsCopy(Path)
-        || Endpoints.RequestLog.IsCommandCopy(Path) || CSharp.GeneratedCode.IsCopy(Path) || Web.RemoteStylesheets.IsCopy(Path);
+    /// copy of a source generator's code, or a stylesheet a page links on the web as it was downloaded: those its path decides
+    /// read-only whether open or not (<see cref="ReadOnlyFiles"/>).</summary>
+    public bool IsReadOnly => Asset is not null || Diff is not null || Tool is not null || IsWorkbook || IsBinary || ReadOnlyFiles.Holds(Path);
+
+    /// <summary>Why every change of it is refused, in Refusals' words, while it is read-only (<see cref="IsReadOnly"/>); null
+    /// while it is not. Its text read-only by where it lies is refused as every write of such a file is, open or not, a
+    /// package's naming the package (<see cref="ReadOnlyFiles.Refused"/>); a tab holding none of its file's text as read-only.</summary>
+    public string? ReadOnlyWhy => !IsReadOnly ? null : (HoldsText ? ReadOnlyFiles.Refused(Path, Name) : null) ?? Refusals.ReadOnly(Name);
 
     /// <summary>The text refuses every change while the file is read-only, whatever asks it: the one place that holds it so.</summary>
     private void FollowReadOnly() => Text.IsReadOnly = IsReadOnly;
@@ -1372,7 +1379,7 @@ public sealed class OpenDocument : Observable
         : Diff is not null ? "A diff of two versions of the file, side by side"
         : Product.Carries(Path) ? "Passenger's own file, as the app carries it, read-only"
         : MSBuild.MSBuildFiles.IsInstalled(Path) ? "An MSBuild file of the .NET SDK or a package, as installed, read-only"
-        : Packages.PackageFolders.PackageOf(Path) is { } package ? $"A file of the package {package}, as NuGet restored it for every project, read-only"
+        : Packages.PackageFolders.PackageOf(Path) is { } package ? $"{Refusals.Sentence(Refusals.PackagesOwn(package))}, read-only"
         : Containers.ContainerFilesPane.IsCopy(Path) ? "A copy of what a container holds, or of what the engine says of it, read-only"
         : Endpoints.RequestLog.IsCommandCopy(Path) ? "SQL a running app issued, or an EF Core query's the debugger read, copied to read, read-only"
         : CSharp.GeneratedCode.IsCopy(Path) ? "Code a source generator made, as the C# language server has it, read-only"
@@ -1584,9 +1591,9 @@ public sealed class OpenDocument : Observable
             // Its control characters are shown as signs: written, they would replace the bytes.
             throw new IOException($"{Name} is a binary file, shown read-only.");
         }
-        if (IsReadOnly)
+        if (ReadOnlyWhy is { } readOnly)
         {
-            throw new IOException(Refusals.ReadOnly(Name));
+            throw new IOException(readOnly);
         }
         if (!IsModified && !overDisk)
         {

@@ -18,13 +18,15 @@ using ICSharpCode.Decompiler.IL;
 using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.Decompiler.TypeSystem;
 using ICSharpCode.Decompiler.Util;
+using Passenger.Core;
 using SequencePoint = ICSharpCode.Decompiler.DebugInfo.SequencePoint;
 
 namespace Passenger.Debugger.Decompilation;
 
 // ILSpy's PortablePdbWriter (ICSharpCode.Decompiler/DebugInfo/PortablePdbWriter.cs), Copyright (c) 2018 Siegfried
-// Pammer, under the MIT licence THIRD_PARTY_NOTICES.md gives in full; changed to decompile its files in parallel and
-// return their text. A change that moves what it maps raises SymbolCache.Format, so no cached PDB of the old one is read.
+// Pammer, under the MIT licence THIRD_PARTY_NOTICES.md gives in full; changed to decompile its files in parallel, on
+// threads of its own, and return their text. A change that moves what it maps raises SymbolCache.Format, so no cached
+// PDB of the old one is read.
 public class PortablePdbWriter2
 {
     private const string decompilerVersion = DecompilerVersionInfo.Version;
@@ -135,13 +137,7 @@ public class PortablePdbWriter2
 
         ConcurrentBag<PerFileResult> perFileResults = new ConcurrentBag<PerFileResult>();
 
-        Parallel.ForEach(
-            Partitioner.Create(sourceFiles, loadBalance: true),
-            new ParallelOptions
-            {
-                MaxDegreeOfParallelism = maxDegreeOfParallelism <= 0 ? Environment.ProcessorCount : maxDegreeOfParallelism,
-                CancellationToken = cancellationToken
-            },
+        ApartScheduler.ForEach("Passenger decompiler", sourceFiles, maxDegreeOfParallelism, cancellationToken,
             sourceFile =>
             {
                 // Create a per-task decompiler that shares the same type system but is otherwise independent.

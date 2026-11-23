@@ -29,7 +29,7 @@ public sealed class RequestsView : DockPanel
     }
 
     private readonly ListBox list;
-    private readonly TextBlock placeholder;
+    private readonly EmptyState placeholder;
     private readonly TextBlock following;
     private readonly RequestLog log;
     private readonly ObservableCollection<Row> rows = [];
@@ -47,16 +47,12 @@ public sealed class RequestsView : DockPanel
         };
         ReusedRows.Use(list, View);
         ListKeys.Act(list, new ListActs { Open = Open, Source = Open });
-        placeholder = new TextBlock { Text = "No requests yet: run or debug a web app and send it one", Classes = { StyleClasses.EmptyText } };
-        following = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0), TextTrimming = TextTrimming.CharacterEllipsis };
+        placeholder = new EmptyState { Text = "No requests yet: run or debug a web app and send it one" };
+        following = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(Gaps.Tight, 0), TextTrimming = TextTrimming.CharacterEllipsis };
         following.Classes.Add(StyleClasses.Muted);
         Button clear = ToolButtons.Of(IconKeys.Clear, "Clear the requests", log.Clear);
-        DockPanel bar = new() { Margin = new Thickness(8, 4) };
         DockPanel.SetDock(clear, Dock.Left);
-        bar.Children.Add(clear);
-        bar.Children.Add(following);
-        DockPanel.SetDock(bar, Dock.Top);
-        Children.Add(bar);
+        Children.Add(ToolBars.Top(new DockPanel { Margin = new Thickness(Gaps.Normal, 0), Children = { clear, following } }));
         Children.Add(new Panel { Children = { list, placeholder } });
         log.Changed += (_, told) => Take(told);
         log.FollowingChanged += (_, _) => following.Text = log.Following;
@@ -216,14 +212,14 @@ public sealed class RequestsView : DockPanel
             DockPanel.SetDock(method, Dock.Left);
             DockPanel.SetDock(outcome, Dock.Right);
             DockPanel.SetDock(repeated, Dock.Right);
-            Line = new DockPanel { Height = ListRow.Height, Margin = new Thickness(8, 0, 4, 0), Children = { method, outcome, repeated, path } };
+            Line = new DockPanel { Height = ListRow.Height, Margin = new Thickness(Gaps.Normal, 0, Gaps.Tight, 0), Children = { method, outcome, repeated, path } };
         }
 
         public DockPanel Line { get; }
 
         public void Show(LiveRequest request)
         {
-            TextBlock verb = (TextBlock)method.Child!;
+            TextBlock verb = Tags.WordsOf(method);
             verb.Text = request.Method;
             verb.Resource(TextBlock.ForegroundProperty, ref methodColour, EndpointsView.MethodColour(request.Method));
             string time = request.Milliseconds is { } ms ? string.Create(CultureInfo.InvariantCulture, $"{ms:0} ms") : "…";
@@ -244,17 +240,17 @@ public sealed class RequestsView : DockPanel
         private readonly Border repeated = Marked(string.Empty, TokenKeys.Warning);
         private readonly TextBlock text = new TextBlock
         {
-            FontSize = 12,
+            Classes = { StyleClasses.Code },
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
-        }.InCodeFont();
+        };
 
         public CommandLine()
         {
             DockPanel.SetDock(outcome, Dock.Right);
             DockPanel.SetDock(slow, Dock.Right);
             DockPanel.SetDock(repeated, Dock.Right);
-            Line = new DockPanel { Height = ListRow.Height, Margin = new Thickness(30, 0, 4, 0), Children = { outcome, slow, repeated, text } };
+            Line = new DockPanel { Height = ListRow.Height, Margin = new Thickness(Gaps.Indent + Gaps.Small + Gaps.Normal, 0, Gaps.Tight, 0), Children = { outcome, slow, repeated, text } };
         }
 
         public DockPanel Line { get; }
@@ -274,15 +270,15 @@ public sealed class RequestsView : DockPanel
 
     private static TextBlock Muted(string words)
     {
-        TextBlock text = new() { Text = words, VerticalAlignment = VerticalAlignment.Center, FontSize = 12, Margin = new Thickness(8, 0, 0, 0) };
+        TextBlock text = new() { Classes = { StyleClasses.Caption }, Text = words, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(Gaps.Normal, 0, 0, 0) };
         text.Classes.Add(StyleClasses.Muted);
         return text;
     }
 
     private static Border Marked(string words, string colour)
     {
-        TextBlock text = new() { Text = words, FontSize = 11, FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center };
-        text.Bind(TextBlock.ForegroundProperty, text.GetResourceObservable(colour));
-        return new Border { Classes = { StyleClasses.Tag }, Padding = new Thickness(4, 1), Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, Child = text };
+        Border tag = Tags.Of(words, colour);
+        tag.Margin = new Thickness(Gaps.Small, 0, 0, 0);
+        return tag;
     }
 }

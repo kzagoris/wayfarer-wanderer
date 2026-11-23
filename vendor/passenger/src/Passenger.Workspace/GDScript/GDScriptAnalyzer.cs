@@ -36,6 +36,12 @@ public sealed partial class GDScriptAnalyzer
     /// <summary>The engine's API the types are resolved against; null where none was dumped.</summary>
     public GodotEngineApi? Engine => project.Engine;
 
+    /// <summary>Whether the engine is Godot 4.8 or later, whose own errors and warnings are said only then: never for an engine
+    /// whose version is unknown.</summary>
+    private bool Since48 => Engine?.Version >= Godot48;
+
+    private static readonly Version Godot48 = new(4, 8);
+
     /// <summary>A script's analysis: every expression's and declaration's type, every name's declaration.</summary>
     public GDScriptAnalysis Analyze(GDScriptTree tree, string path)
     {
@@ -114,8 +120,8 @@ public sealed partial class GDScriptAnalyzer
     /// so in Godot's words.</summary>
     private bool BaseLacked(GDScriptClass node, string path, Context context)
     {
-        if (node.ExtendsPath is { } script && Engine?.Version >= new Version(4, 8) && !script.StartsWith(GodotUids.Scheme, StringComparison.Ordinal)
-            && !script.EndsWith(".gd", StringComparison.OrdinalIgnoreCase))
+        if (node.ExtendsPath is { } script && Since48 && !script.StartsWith(GodotUids.Scheme, StringComparison.Ordinal)
+            && !GodotFileKinds.IsScript(script))
         {
             Error(context, node, $"\"{GodotResPaths.Resolved(script, path)}\" is not a GDScript.");
             return true;
@@ -681,7 +687,8 @@ public sealed partial class GDScriptAnalyzer
 
     /// <summary>A type as the engine's API writes one: <c>int</c>, <c>Node</c>, <c>enum::Node.ProcessMode</c>,
     /// <c>bitfield::…</c> (an int), <c>typedarray::Node</c>, <c>typeddictionary::String;int</c>, several classes (their nearest
-    /// common class), <c>void</c>, <c>Variant</c>.</summary>
+    /// common class, a class after a minus one the hint leaves out: <c>Texture2D,-AnimatedTexture</c> is a Texture2D),
+    /// <c>void</c>, <c>Variant</c>.</summary>
     public GDScriptType FromApi(string written)
     {
         if (written is "Variant" or "")
@@ -719,8 +726,8 @@ public sealed partial class GDScriptAnalyzer
         }
         if (written.Contains(',', StringComparison.Ordinal))
         {
-            string[] classes = written.Split(',');
-            string? common = Engine?.Chain(classes[0]).Select(c => c.Name).FirstOrDefault(c => classes.All(other => Engine.Extends(other, c)));
+            string[] classes = [.. written.Split(',').Where(c => !c.StartsWith('-'))];
+            string? common = classes is [var first, ..] ? Engine?.Chain(first).Select(c => c.Name).FirstOrDefault(c => classes.All(other => Engine.Extends(other, c))) : null;
             return GDScriptType.Native(common ?? "Object");
         }
         if (Engine?.Builtins.ContainsKey(written) == true || IsBuiltinName(written))
@@ -880,7 +887,7 @@ public sealed partial class GDScriptAnalyzer
         }
         if (found is null && Member(context.Class, first.Name) is { } notType)
         {
-            return Unfound(tells, node, Engine?.Version >= new Version(4, 8) ? $"\"{first.Name}\" is a {MemberWords(notType)}, so it can't be used as a type."
+            return Unfound(tells, node, Since48 ? $"\"{first.Name}\" is a {MemberWords(notType)}, so it can't be used as a type."
                 : $"\"{first.Name}\" is a {MemberWords(notType)} but does not contain a type.");
         }
         if (found is null)

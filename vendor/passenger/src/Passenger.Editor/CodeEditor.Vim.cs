@@ -245,7 +245,10 @@ public sealed partial class CodeEditor
         }
         foreach (EditPlan plan in edits)
         {
+            // Marks on lines a plan moves (:m) go with them, where anchors would stay where the lines were taken.
+            IReadOnlyList<(char Name, int At, int LineStart, int Column)> carried = plan.Moved.Count > 0 ? vimView?.MarksMovedBy(plan.Moved) ?? [] : [];
             Apply(plan);
+            vimView?.SetMoved(carried);
         }
         if (oneStep)
         {
@@ -267,13 +270,14 @@ public sealed partial class CodeEditor
         {
             BackgroundWork.Track(PutFromClipboardAsync());
         }
-        if (result.Highlight is { } search)
-        {
-            ShowVimSearch(search);
-        }
+        string? partly = result.Highlight is { } search ? ShowVimSearch(search) : null;
         if (result.Message is { } said)
         {
-            VimSaid?.Invoke(this, new VimMessage(said, result.MessageIsError));
+            VimSaid?.Invoke(this, new VimMessage(partly is null ? said : $"{said}. {partly}", result.MessageIsError));
+        }
+        else if (partly is not null)
+        {
+            VimSaid?.Invoke(this, new VimMessage(partly, Error: false));
         }
         if (result.JumpedFrom is { } from)
         {
@@ -307,15 +311,17 @@ public sealed partial class CodeEditor
     }
 
     /// <summary>A Vim search's matches shown as the editor's own find shows them, the one at the caret the current one;
-    /// none for an empty query.</summary>
-    private void ShowVimSearch(SearchQuery search)
+    /// none for an empty query. Where its regex stopped at its time limit, those found before are shown and the words
+    /// saying so are given back; null where every match is shown.</summary>
+    private string? ShowVimSearch(SearchQuery search)
     {
         if (search.IsEmpty)
         {
             SetHighlights([], -1);
-            return;
+            return null;
         }
-        IReadOnlyList<TextRange> matches = TextSearch.FindAll(document.Snapshot, search, TextSearch.AtOnce).Matches;
+        SearchResult found = TextSearch.FindAll(document.Snapshot, search, TextSearch.AtOnce);
+        IReadOnlyList<TextRange> matches = found.Matches;
         int caret = selections.Primary.Caret;
         int current = -1;
         for (int i = 0; i < matches.Count; i++)
@@ -327,6 +333,7 @@ public sealed partial class CodeEditor
             }
         }
         SetHighlights(matches, current);
+        return found.Stopped ? $"Highlighted {Plural.Of(matches.Count, "match", "matches")}, those found before it stopped: {TextSearch.RegexStopped}" : null;
     }
 
     /// <summary>A macro's keys pressed in turn as typed, insert mode's typing done as the keymap's Enter, Backspace and
@@ -492,7 +499,10 @@ public sealed partial class CodeEditor
     private sealed class EditorVimView(CodeEditor editor) : IVimView
     {
         /// <summary>Each document's marks, held by anchors so edits carry them, shared by every editor showing it.</summary>
-        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TextDocument, Dictionary<char, Anchor>> Marks = new();
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TextDocument, Dictionary<char, HeldMark>> Marks = new();
+
+        /// <summary>A mark's character and its line's start, and the column it was set in (<see cref="VimMarks.Place"/>).</summary>
+        private sealed record HeldMark(Anchor At, Anchor LineStart, int Column);
 
         public IndentOptions Indent => editor.Indent;
 
@@ -517,18 +527,45 @@ public sealed partial class CodeEditor
         }
 
         public int? Mark(char name, TextSnapshot text) =>
-            Marks.TryGetValue(editor.document, out Dictionary<char, Anchor>? held) && held.TryGetValue(name, out Anchor? anchor) && anchor.IsLive
-                ? Math.Min(anchor.Offset, text.Length)
+            Marks.TryGetValue(editor.document, out Dictionary<char, HeldMark>? held) && held.TryGetValue(name, out HeldMark? mark) && mark.At.IsLive
+                ? VimMarks.Place(text, mark.At.Offset, mark.LineStart.Offset, mark.Column)
                 : null;
 
-        public void SetMark(char name, int offset)
+        public void SetMark(char name, int offset, TextSnapshot text)
         {
-            Dictionary<char, Anchor> held = Marks.GetOrCreateValue(editor.document);
-            if (held.TryGetValue(name, out Anchor? before))
+            EraseMark(name);
+            int at = Math.Clamp(offset, 0, editor.document.Snapshot.Length);
+            int lineStart = VimMotions.LineOf(editor.document.Snapshot, at).Start;
+            Marks.GetOrCreateValue(editor.document)[name] = new HeldMark(
+                editor.document.AnchorAt(at, AnchorGravity.Before), editor.document.AnchorAt(lineStart, AnchorGravity.Before), at - lineStart);
+        }
+
+        /// <summary>The marks on text a plan's moves take, at the places in the text after it they go to.</summary>
+        public IReadOnlyList<(char Name, int At, int LineStart, int Column)> MarksMovedBy(IReadOnlyList<TextMove> moves) =>
+            Marks.TryGetValue(editor.document, out Dictionary<char, HeldMark>? held)
+                ? [.. held.Where(mark => mark.Value.At.IsLive && VimMarks.MovedTo(mark.Value.At.Offset, moves) is not null)
+                    .Select(mark => (mark.Key, VimMarks.MovedTo(mark.Value.At.Offset, moves)!.Value,
+                        VimMarks.MovedTo(mark.Value.LineStart.Offset, moves) ?? VimMarks.MovedTo(mark.Value.At.Offset, moves)!.Value, mark.Value.Column))]
+                : [];
+
+        /// <summary>The marks a plan's moves took put where they went (<see cref="MarksMovedBy"/>).</summary>
+        public void SetMoved(IReadOnlyList<(char Name, int At, int LineStart, int Column)> moved)
+        {
+            foreach ((char name, int at, int lineStart, int column) in moved)
             {
-                before.Remove();
+                EraseMark(name);
+                Marks.GetOrCreateValue(editor.document)[name] = new HeldMark(
+                    editor.document.AnchorAt(at, AnchorGravity.Before), editor.document.AnchorAt(lineStart, AnchorGravity.Before), column);
             }
-            held[name] = editor.document.AnchorAt(Math.Clamp(offset, 0, editor.document.Snapshot.Length), AnchorGravity.Before);
+        }
+
+        public void EraseMark(char name)
+        {
+            if (Marks.TryGetValue(editor.document, out Dictionary<char, HeldMark>? held) && held.Remove(name, out HeldMark? mark))
+            {
+                mark.At.Remove();
+                mark.LineStart.Remove();
+            }
         }
 
         public int LineShown(TextSnapshot text, VimScreenLine at, int count)

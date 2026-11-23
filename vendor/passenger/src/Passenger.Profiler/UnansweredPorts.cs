@@ -10,29 +10,27 @@ namespace Passenger.Profiler;
 /// are held up from one whose own work for the request was.</summary>
 internal static class UnansweredPorts
 {
-    /// <summary>A provider no program registers, so a session of it starts without the program's code running.</summary>
-    private const string NoProvider = "Passenger-No-Provider";
-
     /// <summary>How long the port is given to answer that request.</summary>
     private static TimeSpan AnswerLimit => Waits.Of(TimeSpan.FromSeconds(2));
 
-    /// <summary>The words for process <paramref name="processId"/>, whose port left a request unanswered.</summary>
-    public static async Task<string> WhyAsync(int processId, CancellationToken cancel)
+    /// <summary>What process <paramref name="processId"/>'s port, which left a request unanswered, shows now: the words, and
+    /// whether it answered another request at once, its runtime slow to answer the first rather than held up.</summary>
+    public static async Task<(string Why, bool AnswersNow)> WhyAsync(int processId, CancellationToken cancel)
     {
         if (!DotnetProcesses.Runs(processId))
         {
-            return $"process {processId} has ended";
+            return ($"process {processId} has ended", false);
         }
         if (OperatingSystem.IsWindows() && !DiagnosticsClient.GetPublishedProcesses().Contains(processId))
         {
-            return $"process {processId} runs, but its diagnostic port, the pipe dotnet-diagnostic-{processId}, is not there";
+            return ($"process {processId} runs, but its diagnostic port, the pipe dotnet-diagnostic-{processId}, is not there", false);
         }
         string port = OperatingSystem.IsWindows() ? $"its diagnostic port, the pipe dotnet-diagnostic-{processId}," : "its diagnostic port";
         return await AnswerAsync(processId, cancel).ConfigureAwait(false) switch
         {
-            null => $"process {processId} runs, and {port} answered another request at once",
-            "" => $"process {processId} runs, and {port} is there but answered no other request either in {Durations.Said(AnswerLimit)}",
-            { } failed => $"process {processId} runs, and {port} failed another request: {failed}",
+            null => ($"process {processId} runs, and {port} answered another request at once", true),
+            "" => ($"process {processId} runs, and {port} is there but answered no other request either in {Durations.Said(AnswerLimit)}", false),
+            { } failed => ($"process {processId} runs, and {port} failed another request: {failed}", false),
         };
     }
 
@@ -42,11 +40,9 @@ internal static class UnansweredPorts
     {
         using CancellationTokenSource answered = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         answered.CancelAfter(AnswerLimit);
-        EventPipeSession session;
         try
         {
-            session = await new DiagnosticsClient(processId).StartEventPipeSessionAsync(new EventPipeProvider(NoProvider, EventLevel.Critical), requestRundown: false,
-                circularBufferMB: 1, answered.Token).ConfigureAwait(false);
+            await SessionStarts.NoProviderAsync(await DiagnosticPorts.ClientAsync(processId).ConfigureAwait(false), AnswerLimit, answered.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
         {
@@ -56,8 +52,6 @@ internal static class UnansweredPorts
         {
             return error.Message;
         }
-        await EventPipeStops.StopAsync(session, AnswerLimit).ConfigureAwait(false);
-        session.Dispose();
         return null;
     }
 }

@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Threading;
+using Passenger.App.Editors;
 using Passenger.App.Workspace;
 using Passenger.Core;
 
@@ -61,16 +62,22 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>Saves before anything else hears of the close (but an agent's input closing the last window, <see
-    /// cref="LastCloseRefused"/>); a file that cannot be written keeps the window open and asks whether to make it writable
-    /// or close without it (<see cref="CloseUnsavedAsync"/>). A save still landing holds the close until it has (<see
-    /// cref="CloseLandedAsync"/>), a program Hot Reload changed that it would stop is asked about (<see
-    /// cref="CloseHeldAsync"/>), and so are the containers of runs Detach let go of (<see cref="CloseLetGoAsync"/>).</summary>
+    /// <summary>Saves before anything else hears of the close (but a close refused to an agent's input, <see
+    /// cref="CloseRefused"/>, or asked about first, <see cref="ConfirmFirst"/>); a file that cannot be written keeps the window
+    /// open and asks whether to make it writable or close without it (<see cref="CloseUnsavedAsync"/>). A save still landing
+    /// holds the close until it has (<see cref="CloseLandedAsync"/>), and a program Hot Reload changed that it would stop is
+    /// asked about (<see cref="CloseHeldAsync"/>), as are the containers of runs Detach let go of (<see cref="CloseLetGoAsync"/>).</summary>
     protected override void OnClosing(WindowClosingEventArgs e)
     {
-        if (LastCloseRefused())
+        if (CloseRefused())
         {
             e.Cancel = true;
+            return;
+        }
+        if (ConfirmFirst(e) is { } asking)
+        {
+            e.Cancel = true;
+            IdeErrors.Observe(asking);
             return;
         }
         // Passenger's quit (File, Exit; Restart to Update) and the system's (the application menu's Quit) keep each solution.
@@ -88,10 +95,10 @@ public partial class MainWindow
             return;
         }
         // Nobody is at an agent's own IDE to ask, nor does the system's shutdown wait for an answer: its close stops them unasked.
-        if (!AgentsOwn && e.CloseReason != WindowCloseReason.OSShutdown && HeldByLeaving() is { Count: > 0 } held)
+        if (e.CloseReason != WindowCloseReason.OSShutdown && AsksOfHeld)
         {
             e.Cancel = true;
-            IdeErrors.Observe(CloseHeldAsync(held, quit));
+            IdeErrors.Observe(CloseHeldAsync(HeldByLeaving(), quit));
             return;
         }
         // The containers of runs Detach let go of: stopped with the folder, or left running as the person's.
@@ -130,16 +137,18 @@ public partial class MainWindow
         }
         else
         {
-            Close();
+            CloseAsAnswered();
         }
     }
 
     /// <summary>File, Save (the file shown as it is pressed) or Save All: each changed file first gets what Settings
     /// ask of a save (Run eslint --fix on save, then Prettier's Run on save, or a GDScript's Reformat on save, else
     /// Reformat on save), which an explicit save runs and autosave never does, each one undoable edit. The files are saved
-    /// whatever came of those, a file Reformat on save left as it was said once.</summary>
+    /// whatever came of those, a file Reformat on save left as it was said once. An agent's ide_action that ran it answers
+    /// once its saves have landed (<see cref="ActionWork.Unseen"/>), the person seeing nothing of it.</summary>
     private async Task SaveExplicitly(bool all)
     {
+        using Working underWay = work.Unseen(all ? AppActions.SaveAll : AppActions.Save);
         OpenDocument? pressed = all ? null : Editors.Active?.Saves;
         List<OpenDocument> saving = all ? [.. Editors.Documents.Where(d => d.IsModified)] : pressed is { IsModified: true } ? [pressed] : [];
         string? held = await Editors.ClearAsync([.. saving.Select(d => d.Path)]);
@@ -187,6 +196,14 @@ public partial class MainWindow
         finally
         {
             BackgroundWork.End();
+        }
+        if (held is not null || saving.Any(d => d.IsModified && Editors.Documents.Contains(d)))
+        {
+            Cue(SoundCue.SaveRefused);
+        }
+        if (ActionWork.Heard is not null)
+        {
+            await EditorArea.LandedAsync(saving.Select(d => d.Path), null);
         }
         // Not held while the person is asked, so a screenshot or a test finds the question.
         await SaveReadOnlyAsync(saving);

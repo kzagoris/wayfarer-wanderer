@@ -12,9 +12,9 @@ namespace Passenger.App;
 /// <summary>Where the chosen configuration's app runs: for a project whose frameworks run on devices, emulators or
 /// simulators, the widget beside the run configuration's names the target chosen, and its action lists what the
 /// project's platforms run on as their workloads list it (Android's devices and emulators, iOS's simulators on a Mac,
-/// those not running too, which Run and Debug start), with this machine for a platform whose apps run here (Windows'). The choice is the project's,
-/// kept with the folder, and decides the framework built and the launch profile tied to its platform; one no longer
-/// listed is said.</summary>
+/// those not running too, which Run and Debug start), with this machine for a platform whose apps run here (Windows')
+/// and for a desktop head (a MAUI app's Avalonia head, Linux's too). The choice is the project's, kept with the folder,
+/// and decides the framework built and the launch profile tied to its platform; one no longer listed is said.</summary>
 public partial class MainWindow
 {
     /// <summary>Why the last listing of the project's targets found none, where it could not list them.</summary>
@@ -115,6 +115,10 @@ public partial class MainWindow
         ProjectSession listing = session;
         List<DeviceTarget> found = DeviceTargets.OfThisMachine is { } here && DeviceTargets.FrameworkFor(project.TargetFrameworks, here) is not null
             ? [DeviceTargets.Here(here)] : [];
+        if (DeviceTargets.DesktopHead(project) is not null)
+        {
+            found.Add(DeviceTargets.Here(TargetPlatform.Desktop));
+        }
         List<string> problems = [];
         Dictionary<string, string> globals = ProjectModels.Properties(listing.Workspace, project);
         if (DeviceTargets.FrameworkFor(project.TargetFrameworks, TargetPlatform.Android) is { } android)
@@ -158,20 +162,14 @@ public partial class MainWindow
         if (targetsUnlisted is { } unlisted)
         {
             // What a platform lacks (a device, a package its build needs) is said above the targets, which are listed all the same.
-            menu.Items.Insert(0, new MenuItem
-            {
-                Header = new TextBlock { Text = unlisted, TextWrapping = Avalonia.Media.TextWrapping.Wrap, MaxWidth = 420, Classes = { StyleClasses.Muted } },
-                IsEnabled = false,
-            });
+            menu.Items.Insert(0, ToolWindows.ListMenus.Notice(unlisted));
         }
         else if (menu.Items.Count == 0)
         {
-            menu.Items.Add(new MenuItem { Header = Refusals.NoTargets, IsEnabled = false });
+            menu.Items.Add(ToolWindows.ListMenus.Notice(Refusals.NoTargets));
         }
         menu.Items.Add(new Separator());
-        MenuItem refresh = new() { Header = "Look Again" };
-        refresh.Click += (_, _) => IdeErrors.Observe(LookAgainAsync());
-        menu.Items.Add(refresh);
+        menu.Items.Add(ToolWindows.ListMenus.Item("Look Again", () => IdeErrors.Observe(LookAgainAsync())));
         // Gone from a narrow toolbar, the widget leaves its menu to the run configuration's beside it.
         Open(menu, ShrinkingRow.HasGone(RunTargetButton) ? RunConfigButton : RunTargetButton);
 
@@ -191,7 +189,7 @@ public partial class MainWindow
     {
         UiThread.Check();
         session.Targets.Choose(project, target);
-        if (DeviceTargets.FrameworkFor(project.TargetFrameworks, target.Platform) is { } framework
+        if (DeviceTargets.FrameworkFor(project, target.Platform) is { } framework
             && TargetFrameworkChoices.Offered(project).Contains(framework, StringComparer.OrdinalIgnoreCase))
         {
             session.Frameworks.Choose(project, framework);

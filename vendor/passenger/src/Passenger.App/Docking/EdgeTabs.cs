@@ -10,9 +10,9 @@ using Passenger.Editor;
 namespace Passenger.App.Docking;
 
 /// <summary>Under titled tabs, one edge of the frame (a side's, or the foot's) where each window of its places that stands
-/// hidden is a tab of its name: a click opens a docked one over the editors beside the edge (<see cref="DockHost.Peek"/>)
-/// and closes it again, opens one that floats or stands among the editors there, and a drag moves it as its titled tab's
-/// does. A side's tabs run down it, the upper place's before the lower's; the foot's run across, the left place's from its
+/// hidden is a tab of its name: the pointer resting on it opens a docked one over the editors beside the edge without the
+/// keys, a click opens it with them (<see cref="DockHost.Peek"/>) and closes it again, opens one that floats or stands
+/// among the editors there, and a drag moves it as its titled tab's does. A side's tabs run down it, the upper place's before the lower's; the foot's run across, the left place's from its
 /// start and the right's to its end. Each takes the keys as a tab of the window's regions, Enter or Space opening it, and
 /// is a button of its name to a screen reader, as a stripe icon is.</summary>
 internal sealed class EdgeTabs : Border
@@ -37,10 +37,10 @@ internal sealed class EdgeTabs : Border
         this.down = down;
         Orientation orientation = down ? Orientation.Vertical : Orientation.Horizontal;
         // Down a side, tabs as narrow as a stripe's buttons stand apart as those do.
-        firstTabs = new StackPanel { Orientation = orientation, Spacing = down ? 4 : 0 };
-        secondTabs = new StackPanel { Orientation = orientation, Spacing = down ? 4 : 0 };
+        firstTabs = new StackPanel { Orientation = orientation, Spacing = down ? Gaps.Tight : 0 };
+        secondTabs = new StackPanel { Orientation = orientation, Spacing = down ? Gaps.Tight : 0 };
         Panel groups = down
-            ? new StackPanel { Spacing = 12, Children = { firstTabs, secondTabs } }
+            ? new StackPanel { Spacing = Gaps.Wide, Children = { firstTabs, secondTabs } }
             : new DockPanel { Children = { new Panel { [DockPanel.DockProperty] = Dock.Right, Children = { secondTabs } }, firstTabs } };
         Child = new Panel { Children = { new ThemeBackdrop(BackgroundPlaces.Frame), groups } };
         Classes.Add(StyleClasses.EdgeTabs);
@@ -88,8 +88,7 @@ internal sealed class EdgeTabs : Border
         foreach ((ToolWindow window, Border tab) in tabs)
         {
             tab.Classes.Set(StyleClasses.Active, window == peeked);
-            string? keys = window.Action is { } action ? keymap.ShortcutsFor(action).FirstOrDefault()?.Display() : null;
-            ToolTip.SetTip(tab, keys is null ? window.Title : $"{window.Title} ({keys})");
+            ToolTip.SetTip(tab, ActionTips.Named(window.Title, window.Action is { } action ? KeyWords.Of(keymap, action) : null));
         }
     }
 
@@ -103,11 +102,11 @@ internal sealed class EdgeTabs : Border
         {
             return made;
         }
-        RowIcon icon = new() { Width = 14, Height = 14, DataKey = window.Icon };
+        RowIcon icon = new() { DataKey = window.Icon };
         TextBlock name = new() { Classes = { StyleClasses.TabName }, Text = window.Title, VerticalAlignment = VerticalAlignment.Center };
         Control content = down
-            ? new StackPanel { Spacing = 6, HorizontalAlignment = HorizontalAlignment.Center, Children = { icon, new LayoutTransformControl { LayoutTransform = new RotateTransform(90), Child = name } } }
-            : new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center, Children = { icon, name } };
+            ? new StackPanel { Spacing = Gaps.Small, HorizontalAlignment = HorizontalAlignment.Center, Children = { icon, new LayoutTransformControl { LayoutTransform = new RotateTransform(90), Child = name } } }
+            : new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gaps.Small, VerticalAlignment = VerticalAlignment.Center, Children = { icon, name } };
         Border tab = new() { Classes = { StyleClasses.Tab }, Tag = window.Id, Focusable = true };
         ChosenMark.Hold(tab, content);
         AutomationProperties.SetName(tab, window.Title);
@@ -129,8 +128,11 @@ internal sealed class EdgeTabs : Border
                 AutomationProperties.SetName(tab, window.Title);
             }
         };
+        tab.PointerEntered += (_, _) => host.EdgeTabEntered(window);
+        tab.PointerExited += (_, _) => host.EdgeTabLeft(window);
         tab.PointerPressed += (_, e) =>
         {
+            host.EdgeTabPressed();
             if (e.GetCurrentPoint(tab).Properties.IsLeftButtonPressed)
             {
                 host.Drag.Begin(window, e, tab);

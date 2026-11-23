@@ -87,9 +87,9 @@ public sealed partial class PassengerTools
             throw new ArgumentException($"{named} needs the place it works on: path, line and column", nameof(path));
         }
         (OpenDocument document, LspDocument lsp) = await CSharpOnly(path, named, cancel);
-        if (document.IsReadOnly)
+        if (document.ReadOnlyWhy is { } readOnly)
         {
-            throw new InvalidOperationException($"{Refactoring(named, null)} was not applied: {Refusals.ReadOnly(document.Name)}");
+            throw new InvalidOperationException($"{Refactoring(named, null)} was not applied: {readOnly}");
         }
         int offset = Offset(document, line.Value, column.Value);
         naming.Names(Refactoring(named, NameAt(document, offset)));
@@ -477,7 +477,7 @@ public sealed partial class PassengerTools
         string? title = JsonMembers.Text(options, "action");
         string? choice = JsonMembers.Text(options, "choice");
         CodeAction action = title is null
-            ? offered.Count == 1 ? offered[0] : throw new ArgumentException($"{refactoring.Name} offers {offered.Count} actions here; name one as action: {string.Join("; ", offered.Select(a => a.Title))}")
+            ? offered.Count == 1 ? offered[0] : throw new ArgumentException($"{refactoring.Name} offers {Numbers.Said(offered.Count)} actions here; name one as action: {string.Join("; ", offered.Select(a => a.Title))}")
             : offered.FirstOrDefault(a => a.Title == title) ?? throw new ArgumentException($"{refactoring.Name} offers no '{title}' here; it offers {string.Join("; ", offered.Select(a => a.Title))}");
         IReadOnlyList<ActionChoice> all = ClientCommands.Choices(action);
         IReadOnlyList<ActionChoice> choices = CSharp.CodeActions.ChoicesOf(action, refactoring);
@@ -500,7 +500,8 @@ public sealed partial class PassengerTools
 
     /// <summary>Optimize Imports or Code Cleanup, as the window's command makes it, on a file or on each C# file of a
     /// project or of the solution: those open first, each as its own command makes it, then those not open, read without a
-    /// tab, as one command that Undo takes back whole.</summary>
+    /// tab, as one command that Undo takes back whole; one the language server holds in no project yet left as it is,
+    /// saying why, as a file's alone is refused.</summary>
     private async Task<RefactorAnswer> TidyAsync(string kind, string? path, JsonElement? options, bool describe, CancellationToken cancel)
     {
         bool cleanup = kind == "code_cleanup";
@@ -525,9 +526,9 @@ public sealed partial class PassengerTools
                 return new RefactorAnswer(kind, formatted.Said, formatted.Changed ? [new RefactorFile(Relative(markup.Path), Words(RefactoredChange.Changed), [], formatted.Said)] : [], []);
             }
             (OpenDocument document, LspDocument lsp) = await CSharpOnly(path, kind, cancel);
-            if (document.IsReadOnly)
+            if (document.ReadOnlyWhy is { } readOnly)
             {
-                throw new InvalidOperationException($"{name} was not applied: {Refusals.ReadOnly(document.Name)}");
+                throw new InvalidOperationException($"{name} was not applied: {readOnly}");
             }
             if (describe)
             {
@@ -551,15 +552,21 @@ public sealed partial class PassengerTools
             return new RefactorAnswer(kind, $"{name} would tidy {Plural.Of(files.Count, "C# file")} of the {scope}",
                 [.. files.Select(f => new RefactorFile(Relative(f), "unchanged", []))], []);
         }
-        // Answers before the server has loaded the solution come from a file it knows alone, and are wrong.
-        await When(() => Session.CSharp is not { } csharp || csharp.IsReady, ServerLimit, cancel, ServerState());
-        CSharpService service = Session.CSharp is { IsReady: true } ready ? ready : throw new TimeoutException($"The language server has not loaded the workspace ({Session.CSharp?.State ?? "none"})");
+        // Answers before the server has loaded the solution as it stands come from a file it knows alone, or from the code before.
+        await SettledServer(cancel);
+        IReadOnlyList<(string Path, string Project)> untaken = await UntakenAsync(cancel) ?? [];
+        CSharpService service = Session.CSharp ?? throw new InvalidOperationException(Session.WhyNoCSharp);
         List<RefactorFile> tidied = [];
         List<string> left = [];
         // Those open are the person's, each with its own undo; the others are one command.
         foreach (OpenDocument open in Editors.Documents.Where(d => named.Contains(d.Path)).ToList())
         {
             cancel.ThrowIfCancellationRequested();
+            if (Untaken(open.Path) is { } notTaken)
+            {
+                left.Add(notTaken);
+                continue;
+            }
             await Tidied(open, service.For(open)?.Lsp);
         }
         using (Passenger.App.Editors.CommandHistory.Recording recording = Editors.Commands.RecordWrites(name))
@@ -568,6 +575,11 @@ public sealed partial class PassengerTools
             foreach (string file in files.Where(f => !shown.Contains(f)))
             {
                 cancel.ThrowIfCancellationRequested();
+                if (Untaken(file) is { } notTaken)
+                {
+                    left.Add(notTaken);
+                    continue;
+                }
                 recording.Watch(file);
                 if (Editors.Borrow(file) is not ({ } borrowed, { } hold))
                 {
@@ -590,7 +602,12 @@ public sealed partial class PassengerTools
             }
         }
         await LandedAsync(cancel);
-        return new RefactorAnswer(kind, $"{name} changed {tidied.Count} of the {Plural.Of(files.Count, "C# file")} of the {scope}", tidied, left);
+        return new RefactorAnswer(kind, $"{name} changed {Numbers.Said(tidied.Count)} of the {Plural.Of(files.Count, "C# file")} of the {scope}", tidied, left);
+
+        // A file the server holds in no project yet, or whose project it has not loaded again, is refused as a file's tidy refuses it.
+        string? Untaken(string file) => untaken.FirstOrDefault(u => PathNames.Same(u.Path, file)
+            || CSharpService.IsReload(u) && Session.ProjectOf(file) is { } owner && PathNames.Same(owner.Path, u.Project)) is { Path: not null } waited
+            ? NotTakenIn([waited]) : null;
 
         async Task Tidied(OpenDocument document, LspDocument? lsp)
         {
@@ -601,7 +618,7 @@ public sealed partial class PassengerTools
             }
             if (document.IsReadOnly)
             {
-                left.Add(Refusals.ReadOnly(Relative(document.Path)));
+                left.Add(ReadOnlyHere(document.Path, Relative(document.Path)));
                 return;
             }
             // Its text's version says whether the tidy changed it, never the text made into a string twice.
@@ -658,7 +675,7 @@ public sealed partial class PassengerTools
     private RefactorAnswer Applied(string kind, RefactorOutcome made) => made.Problem is { } problem
         ? throw new InvalidOperationException(problem)
         : new RefactorAnswer(kind, made.Said, [.. made.Files.Select(f => new RefactorFile(Relative(f.Path), Words(f.Change), f.Lines, To: f.To is { } to ? Relative(to) : null))],
-            [.. made.Left.Select(name => $"{name}: it was edited meanwhile, so it was left as it is"),
+            [.. made.Left.Select(name => $"{name}: {Refusals.EditedMeanwhile(1)}, so it was left as it is"),
                 .. made.Unchanged.Select(use => $"{Relative(use.Path)}:{use.Line}:{use.Column}: {use.Why}, so it was left as it is")]);
 
     /// <summary>What a refactoring did to a file, as an agent reads it ("moved").</summary>
@@ -703,7 +720,7 @@ public sealed partial class PassengerTools
         {
             1 => named[0].Id,
             0 => throw new ArgumentException($"'{given}' is none of the {what}: {string.Join("; ", members.Select(m => m.Text))}"),
-            _ => throw new ArgumentException($"'{given}' names {named.Count} of the {what}; give the one meant as it reads: {string.Join("; ", named.Select(m => m.Text))}"),
+            _ => throw new ArgumentException($"'{given}' names {Numbers.Said(named.Count)} of the {what}; give the one meant as it reads: {string.Join("; ", named.Select(m => m.Text))}"),
         };
 
         static string NameOf(string text) => text.Split('(', ':', '<', '[')[0].Trim();

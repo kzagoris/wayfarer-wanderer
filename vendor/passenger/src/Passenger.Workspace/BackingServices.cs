@@ -21,13 +21,14 @@ public sealed partial record BackingService(string Service, string Image, string
 {
     public static readonly IReadOnlyList<BackingService> Known =
     [
-        new("postgres", "postgres:17", ["Npgsql", "Npgsql.EntityFrameworkCore.PostgreSQL", "Aspire.Npgsql", "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL"],
+        new("postgres", "postgres:18", ["Npgsql", "Npgsql.EntityFrameworkCore.PostgreSQL", "Aspire.Npgsql", "Aspire.Npgsql.EntityFrameworkCore.PostgreSQL"],
             ["postgres", "npgsql", "pg"], "[\"CMD-SHELL\", \"pg_isready -U postgres\"]", null, "Aspire.Hosting.PostgreSQL", "AddPostgres"),
-        new("sqlserver", "mcr.microsoft.com/mssql/server:2022-latest",
+        new("sqlserver", "mcr.microsoft.com/mssql/server:2025-latest",
             ["Microsoft.Data.SqlClient", "System.Data.SqlClient", "Microsoft.EntityFrameworkCore.SqlServer", "Aspire.Microsoft.Data.SqlClient", "Aspire.Microsoft.EntityFrameworkCore.SqlServer"],
             ["sql", "mssql"], "[\"CMD-SHELL\", \"/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \\\"$$MSSQL_SA_PASSWORD\\\" -C -Q 'SELECT 1' || exit 1\"]",
-            "SQL Server's image has no arm64 build: on an Arm machine (Apple silicon) it runs as amd64 under emulation", "Aspire.Hosting.SqlServer", "AddSqlServer"),
-        new("redis", "redis:7", ["StackExchange.Redis", "Microsoft.Extensions.Caching.StackExchangeRedis", "Aspire.StackExchange.Redis"],
+            "SQL Server's image is built for x86-64 alone: on Apple silicon it runs only where the container engine translates it with Rosetta "
+            + "(Docker Desktop's Use Rosetta for x86_64/amd64 emulation, on the Apple Virtualization framework)", "Aspire.Hosting.SqlServer", "AddSqlServer"),
+        new("redis", "redis:8", ["StackExchange.Redis", "Microsoft.Extensions.Caching.StackExchangeRedis", "Aspire.StackExchange.Redis"],
             ["redis", "cache"], "[\"CMD\", \"redis-cli\", \"ping\"]", null, "Aspire.Hosting.Redis", "AddRedis"),
         new("rabbitmq", "rabbitmq:4", ["RabbitMQ.Client", "Aspire.RabbitMQ.Client", "MassTransit.RabbitMQ"],
             ["rabbit", "amqp", "bus", "messag", "queue"], "[\"CMD\", \"rabbitmq-diagnostics\", \"-q\", \"ping\"]", null, "Aspire.Hosting.RabbitMQ", "AddRabbitMQ"),
@@ -52,6 +53,10 @@ public sealed partial record BackingService(string Service, string Image, string
             .Select(c => (c.Name, c.Value, To: Reached(c.Name, c.Value, services)))
             .Where(c => c.To is not null).Select(c => new BackingConnection(c.Name, c.Value, c.To!))]);
     }
+
+    /// <summary>What it is, named where its image is built for x86-64 (amd64) alone, which an Arm engine runs only translated
+    /// or emulated: SQL Server; null for one built for Arm too.</summary>
+    public string? X64Only => Service == "sqlserver" ? "SQL Server" : null;
 
     /// <summary>Whether it keeps databases a connection string names (Postgres, SQL Server, Mongo), which an AppHost adds to its
     /// server one by one (AddDatabase), where the others are reached whole.</summary>
@@ -265,11 +270,12 @@ public sealed partial record BackingService(string Service, string Image, string
     };
 
     /// <summary>Its settings and where it keeps its data, as compose.yaml writes them under it: Postgres made with the
-    /// first database the apps name, RabbitMQ with the first virtual host.</summary>
+    /// first database the apps name, its volume the folder its image (18 on) keeps each major's data under, RabbitMQ with
+    /// the first virtual host.</summary>
     internal IReadOnlyList<string> Body(IReadOnlyList<string> databases) => Service switch
     {
         "postgres" => ["environment:", "  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}", .. databases.Take(1).Select(d => $"  POSTGRES_DB: {d}"),
-            "volumes:", "  - postgres-data:/var/lib/postgresql/data"],
+            "volumes:", "  - postgres-data:/var/lib/postgresql"],
         "sqlserver" => ["platform: linux/amd64", "environment:", "  ACCEPT_EULA: \"Y\"", "  MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Passenger_dev1}", "volumes:", "  - sqlserver-data:/var/opt/mssql"],
         "rabbitmq" => ["environment:", "  RABBITMQ_DEFAULT_USER: app", "  RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-app}", .. databases.Take(1).Select(v => $"  RABBITMQ_DEFAULT_VHOST: {v}")],
         "mongo" => ["volumes:", "  - mongo-data:/data/db"],

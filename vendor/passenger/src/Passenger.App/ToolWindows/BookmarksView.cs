@@ -15,7 +15,7 @@ public sealed class BookmarksView : DockPanel
     private BookmarkStore store;
     private readonly Func<string, int, string> lineText;
     private readonly ListBox list;
-    private readonly TextBlock placeholder;
+    private readonly EmptyState placeholder;
 
     public BookmarksView(BookmarkStore bookmarks, Func<string, int, string> lineText)
     {
@@ -38,14 +38,14 @@ public sealed class BookmarksView : DockPanel
                 }
             },
         });
-        placeholder = new TextBlock { Classes = { StyleClasses.EmptyText } };
-        ActionTips.SetWords(placeholder, AppActions.ToggleBookmark, keys => $"{ActionTips.Named("Toggle Bookmark", keys)} marks the caret's line");
+        placeholder = new EmptyState();
+        placeholder.SayWithKeys(AppActions.ToggleBookmark, keys => $"{ActionTips.Named("Toggle Bookmark", keys)} marks the caret's line");
         Children.Add(new Panel { Children = { list, placeholder } });
         store.Changed += OnChanged;
         ListMenus.Attach(list, () => list.SelectedItem is not Bookmark chosen ? [] :
         [
-            ListMenus.Item("Go to", "F4", Go),
-            ListMenus.Item("Remove Bookmark", "Delete", () => store.Remove(chosen)),
+            ListMenus.Source(Go),
+            ListMenus.Remove("Remove Bookmark", () => store.Remove(chosen)),
         ]);
         Refresh();
     }
@@ -83,12 +83,12 @@ public sealed class BookmarksView : DockPanel
     /// <summary>A bookmark's row: its file and line, then the line's code, muted.</summary>
     private Control Row()
     {
-        TextBlock where = new() { Width = 200, VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.SemiBold };
-        TextBlock text = new TextBlock { VerticalAlignment = VerticalAlignment.Center, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis }.InCodeFont();
+        TextBlock where = new() { Classes = { StyleClasses.Strong }, Width = 200, VerticalAlignment = VerticalAlignment.Center };
+        TextBlock text = new TextBlock { Classes = { StyleClasses.Code }, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
         text.Classes.Add(StyleClasses.Muted);
         // The line takes what the row leaves, so a narrow window ends it in an ellipsis rather than cutting it off.
         DockPanel.SetDock(where, Dock.Left);
-        DockPanel row = new() { Height = ListRow.Height, Margin = new Thickness(8, 0), Children = { where, text } };
+        DockPanel row = new() { Height = ListRow.Height, Margin = new Thickness(Gaps.Normal, 0), Children = { where, text } };
         return row.Showing<Bookmark>(bookmark =>
         {
             where.Text = $"{bookmark.Name}:{bookmark.Line + 1}";

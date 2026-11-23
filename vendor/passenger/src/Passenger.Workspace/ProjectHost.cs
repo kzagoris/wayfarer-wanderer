@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using Passenger.Core;
@@ -32,6 +33,11 @@ public sealed class ProjectHost : IAsyncDisposable
 
     /// <summary>The requests waiting for their answers, each with what reads its partial answers and its result.</summary>
     private readonly PendingRequests<Asked, object?> pending = new();
+
+    /// <summary>Every host's requests not yet answered, by its process and the request's id: the method and when it was
+    /// asked, recorded only while a test run watches what is in flight (<see cref="InFlight.Watched"/>), for a wait that
+    /// gives up to say (<see cref="ProjectHosts.Unanswered"/>).</summary>
+    internal static readonly ConcurrentDictionary<(int Host, int Id), (string Method, long Since)> Asking = new();
 
     /// <summary>The host's output, a line at a time.</summary>
     private readonly Utf8Lines lines;
@@ -125,9 +131,16 @@ public sealed class ProjectHost : IAsyncDisposable
             throw new ProjectHostFailed(missing.Message, missing) { MissingSdk = MissingSdk.NoDotnet(missing.Message) };
         }
         // Translated, the host is x64 code, and an Arm64 SDK's MSBuild would end it as it loads.
-        if (Dotnet.Translated && !ProgramProcessors.Of(dotnet).Contains(System.Runtime.InteropServices.Architecture.X64))
+        if (Dotnet.Translated && !Dotnet.IsX64(dotnet))
         {
             string said = $"{dotnet} is no x64 program, and this x64 Passenger loads MSBuild only from an x64 .NET SDK";
+            throw new ProjectHostFailed(said) { MissingSdk = MissingSdk.OtherProcessor(said) };
+        }
+        // An x64 dotnet with no SDK, where the system's own has one, is the same want: the host would load none.
+        if (Dotnet.Translated && DotnetMachine.Read(folder).SystemsOwn is { } own)
+        {
+            string said = $"{Path.GetDirectoryName(PathNames.Canonical(dotnet))} holds no .NET SDK, and the .NET SDK {own.NewestSdk} in {own.Root} is the system's "
+                + "own processor's: this x64 Passenger loads MSBuild only from an x64 .NET SDK";
             throw new ProjectHostFailed(said) { MissingSdk = MissingSdk.OtherProcessor(said) };
         }
         ProcessStartInfo start;
@@ -389,15 +402,26 @@ public sealed class ProjectHost : IAsyncDisposable
                 spoiled.Add(id);
             }
         }
-        Send(id, method, parameters);
-        // Given up by the caller, the host is told to end the request, and what it still sends of it is dropped.
-        using (cancel.Register(() =>
+        bool watched = InFlight.Watched && Asking.TryAdd((ProcessId, id), (method, Stopwatch.GetTimestamp()));
+        try
         {
-            pending.Forget(id, answered, cancel);
-            Send(pending.NextId(), HostMethods.Cancel, new CancelParams(id));
-        }))
+            Send(id, method, parameters);
+            // Given up by the caller, the host is told to end the request, and what it still sends of it is dropped.
+            using (cancel.Register(() =>
+            {
+                pending.Forget(id, answered, cancel);
+                Send(pending.NextId(), HostMethods.Cancel, new CancelParams(id));
+            }))
+            {
+                return (T?)await answered;
+            }
+        }
+        finally
         {
-            return (T?)await answered;
+            if (watched)
+            {
+                Asking.TryRemove((ProcessId, id), out _);
+            }
         }
     }
 
@@ -689,6 +713,18 @@ public static class ProjectHosts
         {
             Gate.Release();
         }
+    }
+
+    /// <summary>What the hosts were asked and have not answered, a line each with how long it has waited, and whether a
+    /// caller holds the hosts' gate (a host starting, a folder's SDK asked): the unheld waits a test's wait that gave up
+    /// with the IDE quiet may have stood in. Empty with neither; known only while a test run watches (<see cref="InFlight"/>).</summary>
+    public static string Unanswered()
+    {
+        long now = Stopwatch.GetTimestamp();
+        string asked = InFlight.Describe(ProjectHost.Asking.OrderBy(a => a.Value.Since)
+            .Select(a => ($"Project host (process {a.Key.Host}): {a.Value.Method}, request {a.Key.Id}", a.Value.Since)), now);
+        string gate = Gate.CurrentCount == 0 ? "  The hosts' gate is held: a host starting, or a folder's SDK asked" : string.Empty;
+        return string.Join('\n', ((string[])[asked, gate]).Where(l => l.Length > 0));
     }
 
     /// <summary>Ends the hosts handed out for a folder or one under it (one whose trust was taken back), which may hold its

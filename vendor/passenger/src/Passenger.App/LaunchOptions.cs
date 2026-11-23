@@ -236,7 +236,7 @@ public sealed record LaunchOptions(string? Folder, IReadOnlyList<string> Files, 
                     break;
                 case "--open":
                     string opened = Value(args, ref i, flag);
-                    // As File, Open takes it: a solution, project or folder as the workspace, any other file in a tab.
+                    // As the window opens what it is handed: a solution, project or folder as the workspace, a file in a tab.
                     steps.Add(new ScriptStep.Open(Directory.Exists(opened) || File.Exists(opened)
                         ? PathNames.Canonical(opened)
                         : throw new FormatException($"--open takes a file or folder that is there, not '{opened}'")));
@@ -256,9 +256,16 @@ public sealed record LaunchOptions(string? Folder, IReadOnlyList<string> Files, 
                     break;
                 case "--hover":
                     string hoverText = Value(args, ref i, flag);
-                    double[] at = Numbers(flag, hoverText, ',', 2, "X,Y");
+                    // The keys held as the pointer moves come first, joined by + as a keystroke's are: meta+400,300.
+                    string[] held = hoverText.Split('+');
+                    KeyModifiers holding = KeyModifiers.None;
+                    foreach (string word in held[..^1])
+                    {
+                        holding |= Keystroke.ModifierOf(word) ?? throw new FormatException($"--hover takes the keys held before its point, such as meta+400,300, not '{hoverText}'");
+                    }
+                    double[] at = Numbers(flag, held[^1], ',', 2, "[KEYS+]X,Y");
                     points.Add((flag, hoverText, new Point(at[0], at[1])));
-                    steps.Add(new ScriptStep.Hover(new Point(at[0], at[1])));
+                    steps.Add(new ScriptStep.Hover(new Point(at[0], at[1])) { Held = holding });
                     break;
                 case "--click" or "--double-click" or "--right-click":
                     string clickText = Value(args, ref i, flag);
@@ -510,12 +517,13 @@ public sealed record LaunchOptions(string? Folder, IReadOnlyList<string> Files, 
             int.TryParse(part, NumberStyles.None, CultureInfo.InvariantCulture, out value) && value >= first;
     }
 
-    /// <summary>"cmd+shift+L", or "meta shift L" as keymaps write it.</summary>
+    /// <summary>"cmd+shift+L", or "meta shift L" as keymaps write it, a key by its name or the character it types on a US
+    /// keyboard ("meta+,", "shift+/"), as <see cref="Keystroke.ParseJoined"/> reads it.</summary>
     private static Keystroke ParseKey(string text)
     {
         try
         {
-            return Keystroke.Parse(text.Replace('+', ' '));
+            return Keystroke.ParseJoined(text);
         }
         catch (FormatException error)
         {
@@ -569,8 +577,12 @@ public abstract record ScriptStep
     /// the drag itself (a tool window over its drop place).</summary>
     public sealed record Drag(Point From, Point To, bool Release) : ScriptStep;
 
-    /// <summary>The pointer moved to a point and left to rest there, long enough for a hover card.</summary>
-    public sealed record Hover(Point At) : ScriptStep;
+    /// <summary>The pointer moved to a point and left to rest there, long enough for a hover card, with the keys held that
+    /// are still held as the picture is taken.</summary>
+    public sealed record Hover(Point At) : ScriptStep
+    {
+        public KeyModifiers Held { get; init; }
+    }
 
     /// <summary>Time for what the screenshot does not wait on by itself: a program running.</summary>
     public sealed record Wait(TimeSpan For) : ScriptStep;
@@ -585,8 +597,8 @@ public abstract record ScriptStep
     /// start shows it, its keys and clicks the next steps'.</summary>
     public sealed record FirstStart : ScriptStep;
 
-    /// <summary>A folder, solution or project opened as File, Open opens the one chosen: with one open already, Open
-    /// Solution asks where (Settings' default), and a window of its own opens on New Window.</summary>
+    /// <summary>A folder, solution or project opened as Open Solution and Open Folder open the one chosen: with one open
+    /// already, the Open Solution question asks where (Settings' default), and a window of its own opens on New Window.</summary>
     public sealed record Open(string Path) : ScriptStep;
 
     /// <summary>A run configuration of the folder open run or debugged as the window's own <c>--run</c> or <c>--debug</c>

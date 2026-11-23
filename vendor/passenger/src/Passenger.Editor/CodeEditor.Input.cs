@@ -40,6 +40,7 @@ public sealed partial class CodeEditor
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
+        formattedKey = null;
         base.OnKeyDown(e);
         if (e.Handled || ownKeys is null)
         {
@@ -68,6 +69,7 @@ public sealed partial class CodeEditor
 
     protected override void OnTextInput(TextInputEventArgs e)
     {
+        formattedKey = null;
         base.OnTextInput(e);
         if (e.Handled || string.IsNullOrEmpty(e.Text))
         {
@@ -111,7 +113,8 @@ public sealed partial class CodeEditor
             TypedOverEndTag?.Invoke(this, EventArgs.Empty);
             return;
         }
-        Apply(TextEditing.Type(document.Snapshot, selections, typed));
+        formattedKey = BeginFormattedKey(typed);
+        Apply(TextEditing.Type(document.Snapshot, selections, typed, ClosesWhole(typed)));
         EditPlan? closing = ClosesTags ? TextEditing.CloseTag(document.Snapshot, selections, typed, Markup) : null;
         if (closing is not null)
         {
@@ -198,6 +201,8 @@ public sealed partial class CodeEditor
             e.Handled = true;
             return;
         }
+        // A drag the press may begin is no gesture held over a stretch.
+        DropReach();
         MouseShortcut gesture = MouseShortcut.Of(e);
         Keymap? gestures = point.Position.X >= GutterWidth ? GesturesKeymap : null;
         string? clicked = gestures?.ActionFor(gesture);
@@ -329,6 +334,8 @@ public sealed partial class CodeEditor
         RestartHover(position);
         Cursor = position.X < GutterWidth || drag.Mode == DragMode.Gutter ? Cursor.Default : IbeamCursor;
         FollowLinks(position, drag.Mode != DragMode.None && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed);
+        pointer = position;
+        FollowGesture(e.KeyModifiers);
         bool inGutter = position.X < GutterWidth;
         if (inGutter != overGutter)
         {
@@ -420,6 +427,8 @@ public sealed partial class CodeEditor
         hoverAt = new Point(double.NaN, double.NaN);
         HideFoldPreview();
         hovered.Release();
+        pointer = null;
+        DropReach();
     }
 
     /// <summary>Whether Ctrl+wheel (Cmd+wheel on macOS) asks for a bigger or smaller font rather than scrolling.</summary>

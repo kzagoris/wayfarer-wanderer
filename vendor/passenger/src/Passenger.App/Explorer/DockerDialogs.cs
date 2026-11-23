@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Passenger.App.ToolWindows;
 using Passenger.Core;
 
 namespace Passenger.App.Explorer;
@@ -24,7 +25,7 @@ public sealed class DockerSupportDialog : IdeWindow
     public DockerSupportDialog(string project, bool hasDockerfile)
     {
         Title = "Add Docker Support";
-        Width = 520;
+        Width = DialogWidths.Form;
         SizeToContent = SizeToContent.Height;
         MinWidth = 360;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -43,13 +44,13 @@ public sealed class DockerSupportDialog : IdeWindow
         };
         foreach (RadioButton choice in new[] { dockerfile, sdk })
         {
-            choice.Margin = new Thickness(0, 0, 0, 8);
+            choice.Margin = new Thickness(0, 0, 0, Gaps.Normal);
             choice.HorizontalAlignment = HorizontalAlignment.Stretch;
         }
-        TextBlock heading = new() { Text = $"How {project}'s image is built", FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 0, 0, 10) };
+        TextBlock heading = new() { Classes = { StyleClasses.PaneTitle }, Text = $"How {project}'s image is built", Margin = new Thickness(0, 0, 0, Gaps.Wide) };
         Button ok = DialogFooter.Default();
         ok.Click += (_, _) => Accept();
-        StackPanel page = new() { Margin = new Thickness(16), Children = { heading, dockerfile, sdk } };
+        StackPanel page = new() { [DialogFooter.InsetProperty] = true, Children = { heading, dockerfile, sdk } };
         Content = DialogFooter.Page(page, DialogFooter.OkCancel(ok, () => Close(null)));
     }
 
@@ -67,72 +68,67 @@ public sealed class DockerSupportDialog : IdeWindow
     private static TextBlock Words(string text) => new() { Text = text, TextWrapping = TextWrapping.Wrap };
 }
 
-/// <summary>A project or a backing service Add > Docker Compose offers, checked while it is to be in compose.yaml.</summary>
-public sealed class ComposeChoice(string name, string detail, bool chosen, object value) : Observable, ICheckChoice
-{
-    private bool isChosen = chosen;
-
-    public string Name { get; } = name;
-
-    public string Detail { get; } = detail;
-
-    public bool CanChoose => true;
-
-    public object Value { get; } = value;
-
-    public bool IsChosen
-    {
-        get => isChosen;
-        set => Set(ref isChosen, value);
-    }
-}
-
 /// <summary>Add > Docker Compose on the solution: its projects that run, each checked, a project with no Dockerfile given
-/// one by Docker Support as it is written; and the databases, caches and brokers their packages point to, each checked.
-/// Closes with true for OK, null when cancelled; what is checked is read from <see cref="Projects"/> and
-/// <see cref="Services"/>.</summary>
+/// one by Docker Support as it is written; and the databases, caches and brokers their packages point to, each checked,
+/// what the engine makes of one said under them (<see cref="Note"/>). Closes with true for OK, null when cancelled; what is
+/// checked is read from <see cref="Projects"/> and <see cref="Services"/>.</summary>
 public sealed class DockerComposeDialog : IdeWindow
 {
-    public DockerComposeDialog(string solution, IReadOnlyList<ComposeChoice> projects, IReadOnlyList<ComposeChoice> services)
+    private readonly TextBlock note = MutedText.Wrapped(string.Empty);
+
+    public DockerComposeDialog(string solution, IReadOnlyList<CheckChoice> projects, IReadOnlyList<CheckChoice> services)
     {
         Projects = projects;
         Services = services;
         Title = "Add Docker Compose";
-        Width = 560;
+        Width = DialogWidths.Form;
         Height = 460;
         MinWidth = 380;
         MinHeight = 300;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Button ok = DialogFooter.Default();
         ok.Click += (_, _) => Close((bool?)true);
-        Grid page = new() { Margin = new Thickness(16), RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto") };
+        Grid page = new() { [DialogFooter.InsetProperty] = true, RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto,Auto") };
         page.Children.Add(Heading($"The services of {solution}'s compose.yaml", 0));
         page.Children.Add(List(projects, 1));
         page.Children.Add(Heading("Beside them, from their packages", 2));
         Control backing = services.Count == 0
-            ? new TextBlock { Classes = { StyleClasses.EmptyText }, Text = "No database, cache or broker among their packages", Margin = new Thickness(0, 0, 0, 4) }
+            ? new EmptyState("No database, cache or broker among their packages")
             : List(services, 3);
         Grid.SetRow(backing, 3);
         page.Children.Add(backing);
+        note.Margin = new Thickness(0, Gaps.Normal, 0, 0);
+        note.IsVisible = false;
+        Grid.SetRow(note, 4);
+        page.Children.Add(note);
         Content = DialogFooter.Page(page, DialogFooter.OkCancel(ok, () => Close(null)));
     }
 
-    public IReadOnlyList<ComposeChoice> Projects { get; }
+    public IReadOnlyList<CheckChoice> Projects { get; }
 
-    public IReadOnlyList<ComposeChoice> Services { get; }
+    public IReadOnlyList<CheckChoice> Services { get; }
+
+    /// <summary>What is said under the backing services of one of them (SQL Server's image on an Arm engine); null for nothing.</summary>
+    public string? Note
+    {
+        get => note.IsVisible ? note.Text : null;
+        set
+        {
+            note.Text = value ?? string.Empty;
+            note.IsVisible = value is not null;
+        }
+    }
 
     private static TextBlock Heading(string text, int row)
     {
-        TextBlock heading = new() { Text = text, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, row == 0 ? 0 : 12, 0, 8) };
+        TextBlock heading = new() { Classes = { StyleClasses.PaneTitle }, Text = text, Margin = new Thickness(0, row == 0 ? 0 : Gaps.Wide, 0, Gaps.Normal) };
         Grid.SetRow(heading, row);
         return heading;
     }
 
-    private static Border List(IReadOnlyList<ComposeChoice> choices, int row)
+    private static Border List(IReadOnlyList<CheckChoice> choices, int row)
     {
-        ListBox list = new() { Classes = { StyleClasses.Tree }, ItemsSource = choices };
-        ReusedRows.Use(list, CheckRows.Of);
-        Border framed = new() { Classes = { StyleClasses.Framed }, Child = list, MaxHeight = row == 3 ? 140 : double.PositiveInfinity };
+        Border framed = new() { Classes = { StyleClasses.Framed }, Child = CheckRows.List(choices), MaxHeight = row == 3 ? 140 : double.PositiveInfinity };
         Grid.SetRow(framed, row);
         return framed;
     }

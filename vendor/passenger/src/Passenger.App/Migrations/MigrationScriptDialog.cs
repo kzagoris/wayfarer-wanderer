@@ -23,17 +23,17 @@ public sealed class MigrationScriptDialog : IdeWindow
     public MigrationScriptDialog(IReadOnlyList<MigrationRow> migrations, string context)
     {
         FormRows.Scope(this);
-        Title = "Script Migrations";
-        Width = 460;
+        Title = $"Script {context}'s Migrations";
+        Width = DialogWidths.Form;
         SizeToContent = SizeToContent.Height;
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
         string[] names = [.. migrations.Select(m => m.Name)];
-        From = new ComboBox { Name = "ScriptFrom", ItemsSource = new[] { Start }.Concat(names).ToList(), SelectedIndex = 0, HorizontalAlignment = HorizontalAlignment.Stretch };
-        To = new ComboBox { Name = "ScriptTo", ItemsSource = names.Append(Latest).ToList(), SelectedIndex = names.Length, HorizontalAlignment = HorizontalAlignment.Stretch };
+        From = new FormDropDown { Name = "ScriptFrom", ItemsSource = new[] { Start }.Concat(names).ToList(), SelectedIndex = 0 };
+        To = new FormDropDown { Name = "ScriptTo", ItemsSource = names.Append(Latest).ToList(), SelectedIndex = names.Length };
         Idempotent = new CheckBox { Name = "ScriptIdempotent", Content = "Idempotent: each step checks the history table first" };
-        StackPanel choices = new() { Spacing = 8, Children = { FormRows.Of("From:", From), FormRows.Of("To:", To) } };
+        StackPanel choices = new() { Spacing = FormRows.Between, Children = { FormRows.Of("From", From), FormRows.Of("To", To) } };
 
         Button script = DialogFooter.Default("Script");
         script.Click += (_, _) => Close(new MigrationScript(
@@ -42,11 +42,10 @@ public sealed class MigrationScriptDialog : IdeWindow
             Idempotent.IsChecked == true));
         Content = DialogFooter.Page(new StackPanel
         {
-            Margin = new Thickness(20),
-            Spacing = 16,
+            [DialogFooter.InsetProperty] = true,
+            Spacing = Gaps.Group,
             Children =
             {
-                new TextBlock { Text = $"Script {context}'s migrations", FontWeight = FontWeight.SemiBold },
                 choices,
                 Idempotent,
             },

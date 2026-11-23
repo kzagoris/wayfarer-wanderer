@@ -43,7 +43,7 @@ internal sealed partial class CodeActions
                 if (refused is null)
                 {
                     int replaced = everywhere ? value.Uses.Count : 1;
-                    context.Say($"Extracted resource '{key}' to {place.Title}{(replaced > 1 ? $", used in {replaced} places" : string.Empty)}");
+                    context.Say($"Extracted resource '{key}' to {place.Title}{(replaced > 1 ? $", used in {Numbers.Said(replaced)} places" : string.Empty)}");
                 }
                 return refused;
             });
@@ -145,7 +145,7 @@ internal sealed partial class CodeActions
         {
             return failed.Message;
         }
-        return dropped.Count > 0 ? $"{name} was not applied to {string.Join(", ", dropped)}: it was edited meanwhile" : null;
+        return dropped.Count > 0 ? Refusals.NotAppliedEditedMeanwhile(name, dropped) : null;
     }
 
     /// <summary><see cref="ChangeFilesAsync"/> as one command, answered once the files not open it wrote have landed, the

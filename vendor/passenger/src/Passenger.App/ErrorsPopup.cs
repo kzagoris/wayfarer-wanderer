@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Passenger.Core;
 using Passenger.Editor;
 
 namespace Passenger.App;
@@ -32,8 +33,8 @@ public sealed class ErrorsPopup : UserControl
             TextWrapping = TextWrapping.NoWrap,
             AcceptsReturn = true,
             Height = 220,
-            FontSize = 11.5,
-        }.InCodeFont();
+            Classes = { StyleClasses.Code },
+        };
         list.SelectionChanged += (_, _) =>
         {
             IdeError? chosen = list.SelectedItem as IdeError;
@@ -55,20 +56,20 @@ public sealed class ErrorsPopup : UserControl
         Content = new Border
         {
             Classes = { StyleClasses.Popup },
-            Padding = new Thickness(14, 12),
+            Padding = PopupFrame.Inset,
             Child = new StackPanel
             {
-                Spacing = 10,
+                Spacing = Gaps.Wide,
                 Children =
                 {
-                    new TextBlock { Classes = { StyleClasses.PopupTitle }, Text = "IDE Internal Errors" },
+                    new TextBlock { Classes = { StyleClasses.PaneTitle }, Text = "IDE Internal Errors" },
                     new TextBlock
                     {
                         Classes = { StyleClasses.Muted },
                         TextWrapping = TextWrapping.Wrap,
                         Text = unlisted == 0
                             ? "Passenger caught these and kept running. Each is in the log with its details."
-                            : $"Passenger caught these and kept running. Each is in the log with its details, as are {unlisted} more that came after the first {IdeErrors.Limit}.",
+                            : $"Passenger caught these and kept running. Each is in the log with its details, as are {Numbers.Said(unlisted)} more that came after the first {Numbers.Said(IdeErrors.Limit)}.",
                     },
                     list,
                     occurred,
@@ -77,7 +78,7 @@ public sealed class ErrorsPopup : UserControl
                     {
                         Orientation = Orientation.Horizontal,
                         HorizontalAlignment = HorizontalAlignment.Right,
-                        Spacing = 8,
+                        Spacing = Gaps.Normal,
                         Children = { log, clear, close },
                     },
                 },
@@ -94,7 +95,7 @@ public sealed class ErrorsPopup : UserControl
         TextBlock count = new()
         {
             Classes = { StyleClasses.Muted },
-            Margin = new Thickness(12, 0, 0, 0),
+            Margin = new Thickness(Gaps.Wide, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
             [DockPanel.DockProperty] = Dock.Right,
         };
@@ -105,7 +106,7 @@ public sealed class ErrorsPopup : UserControl
         };
         return new DockPanel { Children = { count, what } }.Showing<IdeError>(error =>
         {
-            count.Text = error.Count == 1 ? string.Empty : $"{error.Count} times";
+            count.Text = error.Count == 1 ? string.Empty : $"{Numbers.Said(error.Count)} times";
             what.Text = $"{error.At:HH:mm:ss}  {error.Kind}: {error.Message.ReplaceLineEndings(" ")}";
         });
     }
@@ -113,7 +114,7 @@ public sealed class ErrorsPopup : UserControl
     /// <summary>The line over an error's details: how often it came, and when.</summary>
     private static string Occurred(IdeError error) => error.Count == 1
         ? $"Occurred once, at {error.At:HH:mm:ss}"
-        : $"Occurred {error.Count} times, from {error.At:HH:mm:ss} to {error.Last:HH:mm:ss}";
+        : $"Occurred {Numbers.Said(error.Count)} times, from {error.At:HH:mm:ss} to {error.Last:HH:mm:ss}";
 
     /// <summary>Show Log in Finder (Explorer on Windows) clicked.</summary>
     public event EventHandler? LogAsked;

@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media.Imaging;
+using Passenger.Core;
 
 namespace Passenger.App.ToolWindows;
 
@@ -17,7 +18,7 @@ public sealed class FrameViewer : IdeWindow, IOwnKeys
     private readonly string test;
     private readonly IReadOnlyList<ShownFrame> frames;
     private readonly ZoomedPicture picture = new();
-    private readonly TextBlock sizeText = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0), FontSize = 12 };
+    private readonly TextBlock sizeText = new() { Classes = { StyleClasses.Caption }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(Gaps.Normal, 0) };
 
     public FrameViewer(string test, IReadOnlyList<ShownFrame> frames, int index)
     {
@@ -77,7 +78,7 @@ public sealed class FrameViewer : IdeWindow, IOwnKeys
     private void ShowFrame()
     {
         picture.Picture = Picture;
-        Title = frames.Count > 1 ? $"{Frame?.Name} ({Index + 1} of {frames.Count}) — {test}" : $"{Frame?.Name} — {test}";
+        Title = frames.Count > 1 ? $"{Frame?.Name} ({Index + 1} of {Numbers.Said(frames.Count)}) — {test}" : $"{Frame?.Name} — {test}";
         sizeText.Text = Picture is { } shown ? $"{shown.PixelSize.Width} × {shown.PixelSize.Height} px" : string.Empty;
     }
 

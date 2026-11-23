@@ -35,29 +35,29 @@ public sealed class PublishDialog : IdeWindow
     private readonly Func<string?, string?, string?, string?, CancellationToken, Task<PropertiesAnswer>> read;
     private readonly Func<PublishChoice, Task<string?>> save;
 
-    private readonly ComboBox profileBox = new() { HorizontalAlignment = HorizontalAlignment.Stretch };
-    private readonly ComboBox targetBox = new() { HorizontalAlignment = HorizontalAlignment.Stretch, ItemsSource = new[] { FolderTarget, ImageTarget }, SelectedItem = FolderTarget };
-    private readonly TextBox repositoryBox = new() { Classes = { StyleClasses.Search } };
-    private readonly TextBox tagBox = new() { Classes = { StyleClasses.Search }, PlaceholderText = "latest (several between semicolons)" };
-    private readonly TextBox runtimesBox = new() { Classes = { StyleClasses.Search }, PlaceholderText = "The SDK's own (several between semicolons: linux-x64;linux-arm64)" };
-    private readonly TextBox registryBox = new() { Classes = { StyleClasses.Search }, PlaceholderText = "None: the engine on this machine" };
-    private readonly TextBlock imageSaid = new() { Classes = { StyleClasses.Muted }, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
+    private readonly ComboBox profileBox = new FormDropDown();
+    private readonly ComboBox targetBox = new FormDropDown { ItemsSource = new[] { FolderTarget, ImageTarget }, SelectedItem = FolderTarget };
+    private readonly TextBox repositoryBox = new();
+    private readonly TextBox tagBox = new() { PlaceholderText = "latest (several between semicolons)" };
+    private readonly TextBox runtimesBox = new() { PlaceholderText = "The SDK's own (several between semicolons: linux-x64;linux-arm64)" };
+    private readonly TextBox registryBox = new() { PlaceholderText = "None: the engine on this machine" };
+    private readonly TextBlock imageSaid = FormRows.Note();
     private readonly Control folderRows;
     private readonly Control imageRows;
-    private readonly TextBox nameBox = new() { Classes = { StyleClasses.Search } };
+    private readonly TextBox nameBox = new();
     private readonly Control nameRow;
-    private readonly ComboBox configurationBox = new() { HorizontalAlignment = HorizontalAlignment.Stretch };
-    private readonly ComboBox frameworkBox = new() { HorizontalAlignment = HorizontalAlignment.Stretch };
-    private readonly ComboBox deploymentBox = new() { HorizontalAlignment = HorizontalAlignment.Stretch, ItemsSource = new[] { FrameworkDependent, SelfContainedMode } };
-    private readonly ComboBox runtimeBox = new() { HorizontalAlignment = HorizontalAlignment.Stretch };
-    private readonly TextBox folderBox = new() { Classes = { StyleClasses.Search } };
-    private readonly Button browse = new() { Content = "Browse…", Margin = new Thickness(8, 0, 0, 0) };
-    private readonly TextBlock destination = new() { Classes = { StyleClasses.Muted }, FontSize = 12, TextTrimming = TextTrimming.PathSegmentEllipsis, Margin = new Thickness(0, 4, 0, 0) };
-    private readonly TextBlock copied = new() { Classes = { StyleClasses.Muted }, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 0), IsVisible = false };
+    private readonly ComboBox configurationBox = new FormDropDown();
+    private readonly ComboBox frameworkBox = new FormDropDown();
+    private readonly ComboBox deploymentBox = new FormDropDown { ItemsSource = new[] { FrameworkDependent, SelfContainedMode } };
+    private readonly ComboBox runtimeBox = new FormDropDown();
+    private readonly TextBox folderBox = new();
+    private readonly TextBlock destination = FormRows.Note(path: true);
+    private readonly TextBlock copied = FormRows.Note();
+    private readonly BrowseRow folderRow;
     private readonly CheckBox singleFileBox = new() { Content = "Produce a single file" };
     private readonly CheckBox readyToRunBox = new() { Content = "Compile ReadyToRun" };
     private readonly CheckBox trimBox = new() { Content = "Trim unused code" };
-    private readonly TextBlock command = new() { Classes = { StyleClasses.Muted }, TextWrapping = TextWrapping.Wrap, FontSize = 12 };
+    private readonly TextBlock command = FormRows.Note();
     private readonly TextBlock problem = new() { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
     private readonly Button publish = DialogFooter.Default("Publish");
     private readonly Button saveButton = new() { Content = "Save" };
@@ -96,7 +96,7 @@ public sealed class PublishDialog : IdeWindow
         string name = System.IO.Path.GetFileNameWithoutExtension(project.Path);
         Title = $"Publish {name}";
         repositoryBox.PlaceholderText = name.ToLowerInvariant().Replace(' ', '-');
-        Width = 600;
+        Width = DialogWidths.Form;
         SizeToContent = SizeToContent.Height;
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -104,42 +104,43 @@ public sealed class PublishDialog : IdeWindow
 
         publish.Click += (_, _) => IdeErrors.Observe(PublishAsync());
         saveButton.Click += (_, _) => IdeErrors.Observe(SaveAsync());
-        browse.Click += (_, _) => IdeErrors.Observe(BrowseAsync());
-        folderRows = new StackPanel { Children = { Row("Output folder:", BrowseRow.Of(folderBox, browse)), FormRows.Of(null, destination), FormRows.Of(null, copied) } };
+        folderRow = BrowseRow.Of(folderBox, BrowseAsync);
+        copied.IsVisible = false;
+        folderRows = FormRows.Of("Output folder", folderRow, [destination, copied]);
         imageRows = new StackPanel
         {
-            Spacing = 10,
+            Spacing = FormRows.Between,
             Children =
             {
-                Row("Image:", repositoryBox), Row("Tags:", tagBox), Row("Platforms:", runtimesBox),
-                new StackPanel { Children = { Row("Registry:", registryBox), FormRows.Of(null, imageSaid) } },
+                Row("Image", repositoryBox), Row("Tags", tagBox), Row("Platforms", runtimesBox),
+                FormRows.Of("Registry", registryBox, [imageSaid]),
             },
         };
         Closing += (_, _) => reads?.Cancel();
 
         frameworkBox.ItemsSource = project.TargetFrameworks;
-        nameRow = Row("Name:", nameBox);
-        StackPanel options = new() { Spacing = 6, Children = { singleFileBox, readyToRunBox, trimBox } };
+        nameRow = Row("Name", nameBox);
+        StackPanel options = new() { Spacing = Gaps.Small, Children = { singleFileBox, readyToRunBox, trimBox } };
         StackPanel fields = new()
         {
-            Spacing = 10,
+            Spacing = FormRows.Between,
             Children =
             {
-                Row("Profile:", profileBox),
+                Row("Profile", profileBox),
                 nameRow,
-                Row("Target:", targetBox),
-                Row("Configuration:", configurationBox),
+                Row("Target", targetBox),
+                Row("Configuration", configurationBox),
             },
         };
         if (multi)
         {
-            fields.Children.Add(Row("Target framework:", frameworkBox));
+            fields.Children.Add(Row("Target framework", frameworkBox));
         }
-        fields.Children.Add(Row("Deployment:", deploymentBox));
-        fields.Children.Add(Row("Target runtime:", runtimeBox));
+        fields.Children.Add(Row("Deployment", deploymentBox));
+        fields.Children.Add(Row("Target runtime", runtimeBox));
         fields.Children.Add(folderRows);
         fields.Children.Add(imageRows);
-        fields.Children.Add(Row("Options:", options, top: true));
+        fields.Children.Add(Row("Options", options, top: true));
         ShowTarget();
 
         Content = DialogFooter.Headed($"Publish {name}", command, fields, DialogFooter.OkCancel(publish, () => Close(null), problem, saveButton));
@@ -450,11 +451,8 @@ public sealed class PublishDialog : IdeWindow
             List<ComboBoxItem> items = [];
             foreach (PublishProfileFile each in profiles)
             {
-                ComboBoxItem item = new() { Content = each.Remote is null ? each.Name : $"{each.Name} ({each.Remote})", Tag = each, IsEnabled = each.Remote is null };
-                if (each.Remote is { } method)
-                {
-                    ToolTip.SetTip(item, $"{each.Name} publishes by {method}: Passenger publishes to a folder only, for now");
-                }
+                ComboBoxItem item = new() { Content = each.Remote is null ? each.Name : $"{each.Name} ({each.Remote})", Tag = each };
+                ToolButtons.Grey(item, each.Remote is { } method ? $"{each.Name} publishes by {method}: Passenger publishes to a folder only, for now" : null);
                 items.Add(item);
             }
             items.Add(new ComboBoxItem { Content = "New profile" });
@@ -667,12 +665,12 @@ public sealed class PublishDialog : IdeWindow
     private void Enable()
     {
         bool idle = !reading && !saving && loaded is not null;
-        foreach (Control control in (Control[])[configurationBox, frameworkBox, deploymentBox, runtimeBox, folderBox, browse, nameBox, repositoryBox, tagBox, runtimesBox, registryBox])
+        foreach (Control control in (Control[])[configurationBox, frameworkBox, deploymentBox, runtimeBox, folderBox, folderRow.Browse, nameBox, repositoryBox, tagBox, runtimesBox, registryBox])
         {
             control.IsEnabled = idle;
         }
-        targetBox.IsEnabled = idle && Chosen is null;
-        ToolTip.SetTip(targetBox, Chosen is null ? null : "A profile publishes as it was made to: a new profile publishes the other way");
+        ToolButtons.Grey(targetBox, Chosen is null ? null : "A profile publishes as it was made to: a new profile publishes the other way");
+        targetBox.IsEnabled &= idle;
         profileBox.IsEnabled = !saving;
         bool runtime = Runtime is not null;
         singleFileBox.IsEnabled = idle && runtime;

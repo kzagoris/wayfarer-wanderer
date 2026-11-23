@@ -350,12 +350,11 @@ public partial class MainWindow
             string? ungodot = applied is { Moved.Count: > 0 } done ? await FollowGodotAsync([.. done.Moved.Select(m => (m.From, PathNames.Canonical(m.To)))], recording, left) : null;
             Explorer.Reveal(PathNames.Canonical(applied?.Moved.Any(m => PathNames.Same(m.From, path)) == true ? target : path));
             await WorkspaceEdits.LandedAsync(recording, waiting => status.Text = waiting);
-            string unchanged = dropped.Count > 0 ? $", but not in {string.Join(", ", dropped)}: it was edited meanwhile" : string.Empty;
             string unfollowed = ungodot is not null || left.Count > 0 ? $"; {ungodot ?? string.Join("; ", left)}" : string.Empty;
             // The code renamed with a file left unmoved is said as made: the box closes, and Undo takes it back whole.
             status.Text = applied?.Unmoved is { } unmoved
-                ? $"Renamed {type.Name} to {renamed} in {Plural.Of(files, "file")}{unchanged}{(unchanged.Length > 0 ? "; and" : ", but")} {unmoved}{unfollowed}"
-                : $"Renamed {Path.GetFileName(path)} to {name}, and {type.Name} to {renamed} in {Plural.Of(files, "file")}{unchanged}{unfollowed}";
+                ? $"{Refusals.EditedMeanwhile($"Renamed {type.Name} to {renamed} in {Plural.Of(files, "file")}", dropped)}{(dropped.Count > 0 ? "; and" : ", but")} {unmoved}{unfollowed}"
+                : $"{Refusals.EditedMeanwhile($"Renamed {Path.GetFileName(path)} to {name}, and {type.Name} to {renamed} in {Plural.Of(files, "file")}", dropped)}{unfollowed}";
             return null;
         }
         catch (Lsp.LanguageServerFailed failed)
@@ -412,12 +411,14 @@ public partial class MainWindow
             ? await LetGoAsync([path], $"Waiting for the design-time build of {Path.GetFileName(path)} to end before it is renamed…")
             : null;
         using CommandHistory.Recording recording = Editors.Commands.Record($"Rename {Path.GetFileName(path)} to {name}");
+        string? unmoved = null;
         string? failed = Following([.. moves.SelectMany(m => new[] { m.From, m.To })], () =>
         {
             foreach ((string from, string to) in moves)
             {
                 if (recording.Move(from, to) is { } refused)
                 {
+                    unmoved = from;
                     string why = $"{Path.GetFileName(from)} could not be renamed: {refused}";
                     (IReadOnlyList<(string From, string To)> kept, string? stuck) = recording.MoveBack();
                     if (stuck is null)
@@ -437,7 +438,7 @@ public partial class MainWindow
         });
         if (failed is not null)
         {
-            return failed;
+            return unmoved is not null && await HeldByAsync(unmoved) is { Length: > 0 } holders ? $"{failed}.{holders}" : failed;
         }
         List<string> left = [];
         if (await FollowGodotAsync([.. moves.Select(m => (m.From, PathNames.Canonical(m.To)))], recording, left) is { } ungodot)
@@ -528,8 +529,8 @@ public partial class MainWindow
     /// <summary>Moves files and folders to the Trash, none inside another, said in the status bar; their open files are
     /// saved first, and again just before they go with what was typed while it waited, so the Trash and Local History have
     /// what the editor showed, and close once gone. The design-time builds of the projects in them are held off, those
-    /// running waited out. Each goes in the command given, else, in a shared project's folder, in one of its own leaving
-    /// its items file, whose Undo takes it out of the Trash. Each that stayed, with why; null where an open file could not be saved.</summary>
+    /// running waited out. Each goes in the command given, else one of its own named after them (Undo takes each back out of
+    /// the Trash, a shared project's items file with it). Each that stayed, with why; null where an open file was not saved.</summary>
     private async Task<IReadOnlyList<(string Path, string Why)>?> TrashAsync(IReadOnlyList<string> paths, CommandHistory.Recording? within)
     {
         List<string> names = [.. paths.Select(Path.GetFileName).OfType<string>()];
@@ -548,10 +549,8 @@ public partial class MainWindow
         }
         List<string> gone = [];
         List<(string Path, string Why)> refused = [];
-        // What goes from a shared project's folder leaves its items file too, in a command whose Undo takes all it deleted
-        // back out of the Trash and writes the items file back.
-        using CommandHistory.Recording? sharing = within is null && InShared(paths) ? Editors.Commands.Record($"Delete {Plural.Listed(names)}") : null;
-        CommandHistory.Recording? recording = within ?? sharing;
+        using CommandHistory.Recording? own = within is null ? Editors.Commands.Record($"Delete {Plural.Listed(names)}") : null;
+        CommandHistory.Recording recording = within ?? own!;
         for (int i = 0; i < paths.Count; i++)
         {
             string path = paths[i];
@@ -563,7 +562,7 @@ public partial class MainWindow
             {
                 Trashed? went = Trash.Move(path);
                 gone.Add(path);
-                recording?.Deleted(path, went);
+                recording.Deleted(path, went);
                 if (taken[i] is { } kept)
                 {
                     keeping!.Deleted(kept);
@@ -583,7 +582,7 @@ public partial class MainWindow
             CameOrWent(gone);
         }
         List<string> said = gone.Count == 0 ? [] : [$"Moved {Plural.Listed([.. gone.Select(Path.GetFileName).OfType<string>()])} to the Trash"];
-        if (recording is not null && gone.Count > 0 && OutOfShared(gone, recording) is { } unshared)
+        if (gone.Count > 0 && OutOfShared(gone, recording) is { } unshared)
         {
             said.Add(unshared);
         }
@@ -634,28 +633,45 @@ public partial class MainWindow
             : $"Move {Plural.Of(files, "file")} and {Plural.Of(folders, "folder")}, with {everything}, to the Trash?";
     }
 
-    /// <summary>Lets go of what is about to go or move until disposed: the design-time builds of the projects under it are
-    /// held off, done once those running have ended or <see cref="BuildsGoing"/> has passed, saying <paramref name="waiting"/>
-    /// meanwhile, and nothing under it is watched for the C# language server. A build still writing a project's obj/ would
-    /// make its folder again where it was; on Windows a folder the build works in, or with one inside it watched, won't move.</summary>
+    /// <summary>Lets go of what is about to go or move until disposed: the builds and evaluations of the projects reaching it
+    /// (<see cref="FolderBuilds.Reaches"/>) are held off, nothing under it is watched or read for the C# language server, and,
+    /// once those have ended, the IDE's watchers read nothing there (<see cref="MovingFolders"/>), all within <see
+    /// cref="BuildsGoing"/>, saying <paramref name="waiting"/> meanwhile. A build writing obj/ would make the folder again; on
+    /// Windows a folder a build works in, or with a folder inside it watched or a file or folder inside it open, won't move.</summary>
     private async Task<IDisposable> LetGoAsync(IReadOnlyList<string> paths, string waiting)
     {
+        Deadline until = Deadline.In(BuildsGoing);
         (IDisposable held, Task built) = session.DesignTimeBuilds.HoldOff(paths);
-        IDisposable? unwatched = session.CSharp?.LetGoOf(paths);
-        if (!built.IsCompleted)
+        (IDisposable unevaluated, Task evaluated) = session.Models.HoldOff(paths);
+        (IDisposable? unwatched, Task unread) = session.CSharp is { } csharp ? csharp.LetGoOf(paths) : (null, Task.CompletedTask);
+        // Only while one is under way, so a move with nothing to wait for goes on in this turn, saying nothing.
+        if (!built.IsCompleted || !evaluated.IsCompleted || !unread.IsCompleted)
         {
             status.Text = waiting;
             try
             {
-                await built.WaitAsync(BuildsGoing);
+                await Task.WhenAll(built, evaluated, unread.Ended()).WaitAsync(until.Left);
             }
             catch (TimeoutException)
             {
                 // Gone or moved anyway: what the build writes after makes only build output there again.
-                IdeErrors.Write($"Waited {Durations.Said(BuildsGoing)} for the design-time builds in {string.Join(", ", paths)} to end, and went on without them");
+                IdeErrors.Write($"Waited {Durations.Said(BuildsGoing)} for the design-time builds in {string.Join(", ", paths)}, and the watchers stopped there, to end, and went on without them");
             }
         }
-        return new LetGo(held, unwatched);
+        // Held only now, so what the watchers hear elsewhere meanwhile is not held up behind a change there.
+        (IDisposable unheard, Task quiet) = MovingFolders.Hold(paths);
+        if (!quiet.IsCompleted)
+        {
+            try
+            {
+                await quiet.WaitAsync(until.Left);
+            }
+            catch (TimeoutException)
+            {
+                IdeErrors.Write($"Went on before the folder watchers' reads in {string.Join(", ", paths)} had ended, {Durations.Said(BuildsGoing)} after the wait began");
+            }
+        }
+        return new LetGo(held, unevaluated, unwatched, unheard);
     }
 
     /// <summary>Lets go of the folders an Undo or Redo moves (<see cref="CommandHistory.LetGo"/>) as a move does, saying
@@ -668,21 +684,35 @@ public partial class MainWindow
     }
 
     /// <summary>What was let go of for a move or a delete (<see cref="LetGoAsync"/>), taken up again once it is done.</summary>
-    private sealed class LetGo(IDisposable builds, IDisposable? watches) : IDisposable
+    private sealed class LetGo(IDisposable builds, IDisposable evaluations, IDisposable? watches, IDisposable reads) : IDisposable
     {
         public void Dispose()
         {
+            reads.Dispose();
             builds.Dispose();
+            evaluations.Dispose();
             watches?.Dispose();
         }
     }
 
-    /// <summary>The programs holding a file or folder that would not go, as Windows names them (" Held by Passenger.Host
-    /// (process 1234)."), read off the window's thread; nothing where none is told.</summary>
+    /// <summary>The programs holding a file or folder that would not go or move, or what is under it, as Windows names them
+    /// (<see cref="FileHolders.Within"/>): " Held by powershell (process 1234)." for one holding it, " Held by dotnet
+    /// (process 1234: obj\project.assets.json)." for one holding what is under it; read off the window's thread, nothing
+    /// where none is told.</summary>
     private static async Task<string> HeldByAsync(string path)
     {
-        List<string> named = await BackgroundWork.Run(() => FileHolders.Of(path)
-            .Select(id => DotnetProcesses.Describe(id) is { } process ? $"{process.Program} (process {id})" : $"process {id}").ToList());
+        List<string> named = await BackgroundWork.Run(() => FileHolders.Within(path).Select(held =>
+        {
+            if (held.Process == Environment.ProcessId)
+            {
+                return FileHolders.Itself;
+            }
+            List<string> under = [.. held.Paths.Where(p => !PathNames.Same(p, path)).Select(p => PathNames.Shown(p, path))];
+            string inside = under.Count <= 3 ? Plural.Listed(under) : $"{string.Join(", ", under.Take(2))} and {Numbers.Said(under.Count - 2)} more";
+            return DotnetProcesses.Describe(held.Process) is { } process
+                ? $"{process.Program} (process {held.Process}{(inside.Length == 0 ? string.Empty : $": {inside}")})"
+                : $"process {held.Process}{(inside.Length == 0 ? string.Empty : $" ({inside})")}";
+        }).ToList());
         return named.Count == 0 ? string.Empty : $" Held by {Plural.Listed(named)}.";
     }
 
@@ -874,8 +904,10 @@ public partial class MainWindow
         IdeErrors.Observe(session.Vcs.RefreshAsync());
     }
 
+    /// <summary>Why a name given a new or renamed file or folder is none: empty, holding a character no name may, or with a
+    /// part that climbs out of its folder (".."), where two dots inside a name (release..notes.txt) are its own.</summary>
     private static string? Invalid(string name) =>
         name.Trim().Length == 0 ? "A name is needed"
-        : name.IndexOfAny(Path.GetInvalidFileNameChars().Where(c => c is not '/' and not '\\').ToArray()) >= 0 || name.Contains("..", StringComparison.Ordinal) ? $"{name} is not a file name"
+        : name.IndexOfAny(Path.GetInvalidFileNameChars().Where(c => c is not '/' and not '\\').ToArray()) >= 0 || name.Split(['/', '\\']).Contains("..") ? $"{name} is not a file name"
         : null;
 }

@@ -4,7 +4,7 @@ using Avalonia.Layout;
 namespace Passenger.App;
 
 /// <summary>A form's rows of less weight folded under a link that opens and closes them ("More options (21)"), its
-/// chevron turned down while they show. The rows go in <see cref="Rows"/>; the form adds <see cref="Opener"/> and
+/// chevron turned down while they show; a Markdown page's HTML <c>details</c> folds its blocks so too. The rows go in <see cref="Rows"/>; the form adds <see cref="Opener"/> and
 /// <see cref="Rows"/> where they belong, within its <see cref="FormRows.Scope"/> so the rows share its labels' column.</summary>
 public sealed class FormFold
 {
@@ -18,7 +18,7 @@ public sealed class FormFold
         {
             Classes = { StyleClasses.Link },
             HorizontalAlignment = HorizontalAlignment.Left,
-            Content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { chevron, title } },
+            Content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gaps.Small, Children = { chevron, title } },
         };
         Opener.Click += (_, _) => IsOpen = !IsOpen;
     }
@@ -27,7 +27,7 @@ public sealed class FormFold
     public Button Opener { get; }
 
     /// <summary>The folded rows, shown while open.</summary>
-    public StackPanel Rows { get; } = new() { Spacing = 10, IsVisible = false };
+    public StackPanel Rows { get; } = new() { Spacing = FormRows.Between, IsVisible = false };
 
     /// <summary>What the link says.</summary>
     public string Title

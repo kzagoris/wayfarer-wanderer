@@ -26,13 +26,12 @@ public sealed class DebugView : DockPanel, IOwnKeys
     private readonly VariablesList variables;
     private readonly TextBox evaluate;
     private readonly DockPanel debugger;
-    private readonly ToggleButton debuggerTab;
-    private readonly ToggleButton consoleTab;
-    private readonly ToggleButton telemetryTab;
+    /// <summary>The Debugger, Console and Telemetry tabs, by their words.</summary>
+    private readonly ToolTabs.Strip<string> tabs = new();
     private readonly TelemetryPane telemetry = new() { IsVisible = false };
     private readonly Dictionary<string, Button> tools = [];
     private readonly ToggleButton mute;
-    private readonly TextBlock placeholder;
+    private readonly EmptyState placeholder;
     private readonly Banner offer = new();
     private readonly Button offerLink;
     private readonly DockPanel consolePane;
@@ -54,13 +53,14 @@ public sealed class DebugView : DockPanel, IOwnKeys
         ReusedRows.Use(sessions, SessionTab);
         HeaderTools = sessions;
 
-        threads = new ComboBox
+        threads = new ToolDropDown("No paused threads")
         {
             [DockProperty] = Dock.Top,
-            Margin = new Thickness(6, 6, 6, 4),
+            Margin = new Thickness(Gaps.Small, Gaps.Small, Gaps.Small, Gaps.Tight),
             HorizontalAlignment = HorizontalAlignment.Stretch,
             ItemsSource = model.Threads,
         };
+        Avalonia.Automation.AutomationProperties.SetName(threads, "Threads");
         ReusedRows.Use(threads, () =>
         {
             TextBlock label = new();
@@ -86,15 +86,26 @@ public sealed class DebugView : DockPanel, IOwnKeys
                 model.ChooseFrame(frame);
             }
         };
+        // F4 goes to the chosen frame's line, as its menu's Go to Source does.
+        ListKeys.Act(frames, new ListActs
+        {
+            Source = () =>
+            {
+                if (frames.SelectedItem is DapStackFrame { Source: not null } frame)
+                {
+                    model.GoToFrame(frame);
+                }
+            },
+        });
         DockPanel framesPane = new() { Children = { threads, frames } };
 
         evaluate = new TextBox
         {
             [DockProperty] = Dock.Top,
-            Classes = { StyleClasses.Search },
-            Margin = new Thickness(6, 6, 6, 4),
+            [Avalonia.Automation.AutomationProperties.NameProperty] = "Evaluate expression",
+            Margin = new Thickness(Gaps.Small, Gaps.Small, Gaps.Small, Gaps.Tight),
         };
-        string enter = new Keystroke(Key.Enter, KeyModifiers.None).Display();
+        string enter = KeyWords.Of(Key.Enter);
         ActionTips.SetWords(evaluate, AppActions.AddToWatches, keys => keys is null ? $"Evaluate expression ({enter})" : $"Evaluate expression ({enter}) or add a watch ({keys})");
         evaluate.AddHandler(KeyDownEvent, OnEvaluateKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         // The debugger the model has now asked, whichever folder's it is: each folder's sets it as it is made.
@@ -116,26 +127,34 @@ public sealed class DebugView : DockPanel, IOwnKeys
 
         // The frames a third of the window and the variables the rest, so a narrow window narrows both.
         PaneSplit split = new(framesPane, variablesPane, "*,1,2*");
-        placeholder = new TextBlock { Classes = { StyleClasses.EmptyText } };
-        ActionTips.SetWords(placeholder, AppActions.Debug, keys => keys is null ? "Not debugging." : $"Not debugging. Debug starts with {keys}.");
+        placeholder = new EmptyState("Not debugging");
+        placeholder.Offer(AppActions.Debug, "Debug");
+        placeholder.ActionRequested += (_, action) => model.Request(action);
         // Over the frames and values, what the chosen program's console offers: a terminal, for one stopped needing it.
         offerLink = offer.Link(null, () => model.Console.TakeOffer());
         debugger = new DockPanel { Children = { offer, new Panel { Children = { split, placeholder } } } };
 
-        debuggerTab = new ToggleButton { Content = "Debugger", Classes = { StyleClasses.PanelTab }, IsChecked = true };
-        consoleTab = new ToggleButton { Content = "Console", Classes = { StyleClasses.PanelTab } };
-        telemetryTab = new ToggleButton { Content = RunWindows.TelemetryTab, Classes = { StyleClasses.PanelTab }, Name = "debugTelemetryTab", IsVisible = false };
-        debuggerTab.Click += (_, _) => model.ShowTab(console: false);
-        consoleTab.Click += (_, _) => model.ShowTab(console: true);
-        telemetryTab.Click += (_, _) => model.ShowTelemetry();
+        tabs.Add(DebuggerTab, DebuggerTab);
+        tabs.Add(ConsoleTab, ConsoleTab);
+        tabs.Add(RunWindows.TelemetryTab, RunWindows.TelemetryTab, name: "debugTelemetryTab").IsVisible = false;
+        tabs.Choice = DebuggerTab;
+        tabs.Chosen += (_, tab) =>
+        {
+            if (tab == RunWindows.TelemetryTab)
+            {
+                model.ShowTelemetry();
+            }
+            else
+            {
+                model.ShowTab(console: tab == ConsoleTab);
+            }
+        };
         ToolFlow top = new()
         {
-            Margin = new Thickness(6, 3),
+            Margin = new Thickness(Gaps.Small, Gaps.Hair),
             Children =
             {
-                debuggerTab,
-                consoleTab,
-                telemetryTab,
+                tabs,
                 new Border { Width = 12 },
                 Tool(AppActions.StepOver, IconKeys.StepOver, "Step Over"),
                 Tool(AppActions.StepInto, IconKeys.StepInto, "Step Into"),
@@ -191,6 +210,10 @@ public sealed class DebugView : DockPanel, IOwnKeys
     /// <summary>The link over Variables that reads the frame's values anew once every thread ran in an evaluation.</summary>
     public const string ReadAgain = "Read Again";
 
+    private const string DebuggerTab = "Debugger";
+
+    private const string ConsoleTab = "Console";
+
     /// <summary>The window header's own tools: the sessions' tabs.</summary>
     public Control HeaderTools { get; }
 
@@ -206,20 +229,18 @@ public sealed class DebugView : DockPanel, IOwnKeys
     {
         TextBlock name = new() { VerticalAlignment = VerticalAlignment.Center };
         ToggleButton button = null!;
-        button = ToolTabs.Tab(name, false, () =>
+        button = ToolTabs.Tab(name, () =>
         {
             if (button.DataContext is DebugTab shown)
             {
                 model.Close(shown);
             }
         }, "Close Session");
-        // A press on the chosen tab leaves it chosen, where the toggle would let it go.
         button.Click += (_, _) =>
         {
             if (button.DataContext is DebugTab shown)
             {
                 model.Choose(shown);
-                button.IsChecked = shown.IsChosen;
             }
         };
         return button.Showing<DebugTab>(tab =>
@@ -274,12 +295,10 @@ public sealed class DebugView : DockPanel, IOwnKeys
         }
         // The Telemetry tab is there while the chosen program's run has records; without them its place is the console's.
         telemetry.Source = model.ChosenDashboard?.Telemetry;
-        telemetryTab.IsVisible = telemetry.Source is not null;
+        tabs[RunWindows.TelemetryTab].IsVisible = telemetry.Source is not null;
         bool records = model.IsTelemetryShown && telemetry.Source is not null;
         bool console = model.IsConsoleShown || model.IsTelemetryShown && !records;
-        debuggerTab.IsChecked = !console && !records;
-        consoleTab.IsChecked = console;
-        telemetryTab.IsChecked = records;
+        tabs.Choice = records ? RunWindows.TelemetryTab : console ? ConsoleTab : DebuggerTab;
         debugger.IsVisible = !console && !records;
         consolePane.IsVisible = console;
         telemetry.IsVisible = records;
@@ -335,13 +354,13 @@ public sealed class DebugView : DockPanel, IOwnKeys
         DapStackFrame? chosen = frames.SelectedItem as DapStackFrame;
         return
         [
-            ListMenus.Item("Copy Stack", null, () => IdeErrors.Observe(ListMenus.CopyAsync(this, string.Join('\n', model.Frames.Select(f => f.Source?.Path is { } path ? $"{f.Name} in {path}:{model.LineOf(f)}" : f.Name))))),
-            ListMenus.Item("Go to Source", "F4", () => model.GoToFrame(chosen!), chosen?.Source is not null),
+            ListMenus.Item("Copy Stack", () => IdeErrors.Observe(ListMenus.CopyAsync(this, string.Join('\n', model.Frames.Select(f => f.Source?.Path is { } path ? $"{f.Name} in {path}:{model.LineOf(f)}" : f.Name))))),
+            ListMenus.Source(() => model.GoToFrame(chosen!), chosen is null ? Refusals.NoFrameChosen : chosen.Source is null ? Refusals.FrameUnplaced : null),
         ];
     }
 
     private IReadOnlyList<Control> ThreadsMenu() =>
-        threads.SelectedItem is DapThread thread ? [ListMenus.Item("Copy Name", null, () => IdeErrors.Observe(ListMenus.CopyAsync(this, ThreadLabel(thread))))] : [];
+        threads.SelectedItem is DapThread thread ? [ListMenus.Item("Copy Name", () => IdeErrors.Observe(ListMenus.CopyAsync(this, ThreadLabel(thread))))] : [];
 
     /// <summary>Apply Hot Reload Changes, a flame: shown while the session has Hot Reload.</summary>
     private Button HotReloadTool()
@@ -376,8 +395,8 @@ public sealed class DebugView : DockPanel, IOwnKeys
         TextBlock method = new() { VerticalAlignment = VerticalAlignment.Center };
         TextBlock where = new()
         {
-            FontSize = 12,
-            Margin = new Thickness(8, 0, 0, 0),
+            Classes = { StyleClasses.Caption },
+            Margin = new Thickness(Gaps.Normal, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
         where.Classes.Add(StyleClasses.Muted);
@@ -396,7 +415,7 @@ public sealed class DebugView : DockPanel, IOwnKeys
             method.Text = name;
             where.Tag = frame;
             where.Text = frame.Source?.Name is { } file ? $"{file}:{model.LineOf(frame)}" : module;
-            row.Opacity = frame.PresentationHint == "subtle" ? 0.55 : 1;
+            ListRow.Dim(row, frame.PresentationHint == FrameHints.Subtle);
         });
     }
 }

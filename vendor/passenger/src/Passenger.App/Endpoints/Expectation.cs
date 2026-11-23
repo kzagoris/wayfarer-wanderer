@@ -166,7 +166,7 @@ public sealed partial record Expectation(string Kind, string Subject, string Op,
             }
             catch (RegexMatchTimeoutException)
             {
-                return new ExpectationResult(this, false, $"no match within {Durations.Said(TextSearch.AtOnce)}, the pattern given up on");
+                return new ExpectationResult(this, false, TextSearch.RegexStopped);
             }
         }
         bool passed = Op switch
@@ -322,7 +322,7 @@ public sealed partial record Expectation(string Kind, string Subject, string Op,
     {
         try
         {
-            _ = new Regex(pattern, RegexOptions.None, TimeSpan.FromSeconds(1));
+            _ = new Regex(pattern);
             return true;
         }
         catch (ArgumentException)

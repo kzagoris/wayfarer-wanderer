@@ -1,3 +1,6 @@
+using Passenger.Core;
+using Passenger.Terminal;
+
 namespace Passenger.App.Mobile;
 
 /// <summary>How a .NET workload install is run and what its words say: its downloads (gigabytes for Android's or MAUI's)
@@ -23,6 +26,19 @@ public static class WorkloadInstalls
     /// user's quota spent.</summary>
     public static bool NoRoom(IReadOnlyList<string> said) =>
         said.Any(l => l.Contains("No space left on device", StringComparison.Ordinal) || l.Contains("Disk quota exceeded", StringComparison.Ordinal));
+
+    /// <summary>Where a workload install puts the workloads, in the words of an offer or a question ("into the .NET in
+    /// /usr/share/dotnet"): the user's own folder where the .NET installs workloads for each user, else the .NET's own.</summary>
+    public static string Into(WorkloadFolders folders) => folders.UserLocal is { } own
+        ? $"into {PathNames.Shown(own, null)}, for you alone, as the .NET in {PathNames.Shown(folders.Root, null)} installs workloads for each user"
+        : $"into the .NET in {PathNames.Shown(folders.Root, null)}";
+
+    /// <summary>dotnet workload install of <paramref name="ids"/> as an administrator runs it for the .NET in
+    /// <paramref name="root"/>: through sudo, naming that .NET's dotnet by its path, as sudo's own PATH may find another;
+    /// on Windows as written, in a terminal run as administrator, whose PowerShell and cmd quote a path apart.</summary>
+    public static string AsAdministrator(string root, IReadOnlyList<string> ids) => OperatingSystem.IsWindows()
+        ? $"dotnet workload install {string.Join(' ', ids)}"
+        : $"sudo {ShellWords.Quoted(Path.Combine(root, Dotnet.HostName), ShellKind.Posix)} workload install {string.Join(' ', ids)}";
 }
 
 /// <summary>What a test's workload install takes in place of the .NET it installs into: that .NET's folder, which is

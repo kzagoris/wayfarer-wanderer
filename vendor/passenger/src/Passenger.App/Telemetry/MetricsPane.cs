@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Passenger.App.Profiling;
+using Passenger.App.ToolWindows;
 using Passenger.Core;
 using Passenger.Editor;
 using Passenger.Profiler;
@@ -26,9 +27,9 @@ public sealed class MetricsPane : DockPanel
     /// <summary>Where each shipped meter comes among the headings, the program's own after them.</summary>
     private static readonly Dictionary<string, int> ShippedOrder = LiveMetrics.Shipped.Select((meter, at) => (meter, at)).ToDictionary(m => m.meter, m => m.at, StringComparer.Ordinal);
 
-    private readonly StackPanel rows = new() { Margin = new Thickness(8, 4, 8, 8) };
-    private readonly TextBlock waiting = new() { Classes = { StyleClasses.EmptyText } };
-    private readonly TextBlock status = new() { Classes = { StyleClasses.Muted }, Margin = new Thickness(8, 6, 8, 0), TextTrimming = TextTrimming.CharacterEllipsis, [DockProperty] = Dock.Top };
+    private readonly StackPanel rows = new() { Margin = new Thickness(Gaps.Normal, Gaps.Tight, Gaps.Normal, Gaps.Normal) };
+    private readonly EmptyState waiting = new();
+    private readonly TextBlock status = new() { Classes = { StyleClasses.Muted }, Margin = new Thickness(Gaps.Normal, Gaps.Small, Gaps.Normal, 0), TextTrimming = TextTrimming.CharacterEllipsis, [DockProperty] = Dock.Top };
     private readonly Dictionary<(string Meter, string Instrument), Chart> charts = [];
     private readonly Dictionary<string, TextBlock> headings = new(StringComparer.Ordinal);
     private readonly HashSet<string> meters = new(StringComparer.Ordinal);
@@ -209,12 +210,12 @@ public sealed class MetricsPane : DockPanel
                 try
                 {
                     LiveMetrics started = place is { } there ? await LiveMetrics.AttachAsync(process, there, Heard(follow), asked.Token)
-                        : await LiveMetrics.AttachAsync(process, [.. meters], Heard(follow), _ =>
+                        : await LiveMetrics.AttachAsync(process, [.. meters], Heard(follow), wait =>
                         {
                             if (follow == follows)
                             {
                                 waited = true;
-                                Say(ProgramStarts.Waiting(name, "reading its metrics"));
+                                Say(wait.Saying(name, "reading its metrics"));
                             }
                         }, asked.Token);
                     if (follow != follows)
@@ -321,7 +322,7 @@ public sealed class MetricsPane : DockPanel
         if (live is { } session)
         {
             live = null;
-            IdeErrors.Observe(session.DisposeAsync().AsTask());
+            IdeErrors.Observe(LetGoAsync(session));
         }
         key = null;
         fed = false;
@@ -333,6 +334,14 @@ public sealed class MetricsPane : DockPanel
         headings.Clear();
         rows.Children.Clear();
         Showing();
+    }
+
+    /// <summary>Stops a session and lets go of its program, held as background work until its runtime took the stop, so
+    /// what waits for the IDE to be quiet finds the session gone.</summary>
+    private static async Task LetGoAsync(LiveMetrics session)
+    {
+        using IDisposable working = BackgroundWork.Scope();
+        await session.DisposeAsync();
     }
 
     private void Say(string words)
@@ -429,7 +438,7 @@ public sealed class MetricsPane : DockPanel
         {
             if (!headings.TryGetValue(meter.Key, out TextBlock? heading))
             {
-                headings[meter.Key] = heading = new TextBlock { Text = meter.Key, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 8, 0, 2) };
+                headings[meter.Key] = heading = new TextBlock { Classes = { StyleClasses.PaneTitle }, Text = meter.Key, Margin = new Thickness(0, Gaps.Normal, 0, Gaps.Hair) };
             }
             rows.Children.Add(heading);
             foreach (KeyValuePair<(string Meter, string Instrument), Chart> chart in meter)
@@ -471,16 +480,15 @@ public sealed class MetricsPane : DockPanel
                 : new Sparkline(Kept, fromZero: true, fromRight: false, TokenKeys.Link) { Least = 0 };
             TextBlock title = new() { Text = first.Instrument, TextTrimming = TextTrimming.CharacterEllipsis };
             ToolTip.SetTip(title, first.Unit.Length > 0 ? $"{first.Meter}: {first.Instrument} ({first.Unit})" : $"{first.Meter}: {first.Instrument}");
-            Value = MutedText.Of(string.Empty);
-            Value.FontSize = 11;
-            StackPanel words = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0), Children = { title, Value } };
+            Value = MutedText.Caption(string.Empty);
+            StackPanel words = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, Gaps.Normal, 0), Children = { title, Value } };
             Border frame = new() { Classes = { StyleClasses.Framed }, Child = Line, [Grid.ColumnProperty] = 1 };
             // The words a third of a narrow pane's width (a tool window's), at most 280 of a wide one's, the line the rest.
             Row = new Grid
             {
                 ColumnDefinitions = { new ColumnDefinition(1, GridUnitType.Star) { MaxWidth = 280 }, new ColumnDefinition(2, GridUnitType.Star) },
                 Height = 44,
-                Margin = new Thickness(0, 2),
+                Margin = new Thickness(0, Gaps.Hair),
                 Children = { words, frame },
             };
         }

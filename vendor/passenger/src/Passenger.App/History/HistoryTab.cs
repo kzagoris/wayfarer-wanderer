@@ -31,10 +31,10 @@ public sealed class HistoryTab : DockPanel
     private readonly LocalHistory store;
     private readonly HistoryHost host;
     private readonly ListBox list;
-    private readonly TextBlock placeholder;
+    private readonly EmptyState placeholder;
     private readonly TextBox filter;
     private readonly ContentControl diffHost = new();
-    private readonly TextBlock diffPlaceholder;
+    private readonly EmptyState diffPlaceholder;
     private readonly ListBox? fileList;
     private readonly ConcurrentDictionary<string, string> texts = new(StringComparer.Ordinal);
     private readonly EventHandler onStoreChanged;
@@ -65,21 +65,16 @@ public sealed class HistoryTab : DockPanel
         list.SelectionChanged += (_, _) => IdeErrors.Observe(ShowAsync());
         ListMenus.Attach(list, () => Selected is null ? [] :
         [
-            ListMenus.Item("Revert Selected and Later Changes", null, () => IdeErrors.Observe(RevertAsync())),
+            ListMenus.Item("Revert Selected and Later Changes", () => IdeErrors.Observe(RevertAsync())),
         ]);
-        placeholder = MutedText.Of(string.Empty);
-        placeholder.HorizontalAlignment = HorizontalAlignment.Center;
-        placeholder.VerticalAlignment = VerticalAlignment.Center;
-        placeholder.TextWrapping = TextWrapping.Wrap;
-        diffPlaceholder = MutedText.Of("Select activity to view changes");
-        diffPlaceholder.HorizontalAlignment = HorizontalAlignment.Center;
-        diffPlaceholder.VerticalAlignment = VerticalAlignment.Center;
+        placeholder = new EmptyState();
+        diffPlaceholder = new EmptyState("Select activity to view changes");
         diffHost.Content = diffPlaceholder;
 
-        filter = new TextBox { Classes = { StyleClasses.Search }, PlaceholderText = isFolder ? "Search by file name" : "Search by content", Width = 240, Margin = new Thickness(8, 0) };
+        filter = SearchBox.Of(isFolder ? "Search changes by file name" : "Search changes by content");
         filter.TextChanged += (_, _) => IdeErrors.Observe(FilterAsync());
         Button revert = ToolButtons.Of(IconKeys.Rollback, "Revert Selected and Later Changes", () => IdeErrors.Observe(RevertAsync()));
-        Border top = ToolBars.Top(new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Children = { filter, revert } });
+        Border top = ToolBars.Top(new ToolFlow { Margin = new Thickness(Gaps.Normal, Gaps.Hair), Children = { filter, revert } });
 
         Control right = diffHost;
         if (isFolder)
@@ -91,12 +86,12 @@ public sealed class HistoryTab : DockPanel
             };
             ReusedRows.Use(fileList, FileRow);
             fileList.SelectionChanged += (_, _) => IdeErrors.Observe(ShowFileAsync());
-            ListMenus.Attach(fileList, () => fileList.SelectedItems?.Count > 0 ? [ListMenus.Item("Revert Selection", null, () => IdeErrors.Observe(RevertSelectionAsync()))] : []);
+            ListMenus.Attach(fileList, () => fileList.SelectedItems?.Count > 0 ? [ListMenus.Item("Revert Selection", () => IdeErrors.Observe(RevertSelectionAsync()))] : []);
             Border fileBar = ToolBars.Top(new StackPanel
             {
                 Orientation = Orientation.Horizontal,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(4, 0),
+                Margin = new Thickness(Gaps.Tight, 0),
                 Children = { ToolButtons.Of(IconKeys.Rollback, "Revert Selection", () => IdeErrors.Observe(RevertSelectionAsync())) },
             });
             Grid split = new() { RowDefinitions = new RowDefinitions("*,1,2*") };
@@ -385,8 +380,8 @@ public sealed class HistoryTab : DockPanel
         DockPanel line = new() { Height = RowHeight, LastChildFill = true };
         TextBlock time = MutedText.Of(string.Empty);
         time[DockProperty] = Dock.Right;
-        time.Margin = new Thickness(8, 0, 4, 0);
-        RowIcon tag = new() { Width = 12, Height = 12, Margin = new Thickness(0, 0, 6, 0), [DockProperty] = Dock.Left };
+        time.Margin = new Thickness(Gaps.Normal, 0, Gaps.Tight, 0);
+        RowIcon tag = new() { Margin = new Thickness(0, 0, Gaps.Small, 0), [DockProperty] = Dock.Left };
         TextBlock title = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
         line.Children.Add(time);
         line.Children.Add(tag);
@@ -398,7 +393,7 @@ public sealed class HistoryTab : DockPanel
             tag.DataKey = row.IsLabel ? IconKeys.Label : null;
             tag.ForegroundKey = !row.IsLabel ? null : row.System ? TokenKeys.TextMuted : TokenKeys.Accent;
             title.Text = row.Title;
-            title.FontWeight = row.IsLabel ? FontWeight.SemiBold : FontWeight.Normal;
+            title.Classes.Set(StyleClasses.Strong, row.IsLabel);
         });
     }
 

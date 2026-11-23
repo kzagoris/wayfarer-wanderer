@@ -136,35 +136,42 @@ public sealed class RoslynSession : IAsyncDisposable, IDocumentHost
                 session.Fed = true;
                 server.WatchedFiles.HasLoader = true;
                 server.WatchedFiles.ReadFrom(fed.Read);
+                foreach (ProjectToOpen project in fed.First.Concat(fed.Later))
+                {
+                    if (project.Infos is { } infos)
+                    {
+                        server.WatchedFiles.Given(infos, fed.Inputs?.GetValueOrDefault(project.Path) ?? []);
+                    }
+                }
                 (IReadOnlyList<ProjectToOpen> before, IReadOnlyList<ProjectToOpen> rest) = (fed.First, fed.Later);
                 if (before.Count > 0)
                 {
                     session.Expect(2);
-                    await LoadAsync(server, ProjectMethods.Load, new LoadProjectsParams(before, solution)).ConfigureAwait(false);
-                    Core.UnawaitedWork.Observe(session.OpenRestAsync(() => LoadAsync(server, ProjectMethods.Load, new LoadProjectsParams(rest, solution))));
+                    await server.NotifyAsync(ProjectMethods.Load, new LoadProjectsParams(before, solution)).ConfigureAwait(false);
+                    Core.UnawaitedWork.Observe(session.OpenRestAsync(() => server.NotifyAsync(ProjectMethods.Load, new LoadProjectsParams(rest, solution))));
                     return session;
                 }
-                await LoadAsync(server, ProjectMethods.Load, new LoadProjectsParams(rest, solution)).ConfigureAwait(false);
+                await server.NotifyAsync(ProjectMethods.Load, new LoadProjectsParams(rest, solution)).ConfigureAwait(false);
                 return session;
             }
             IReadOnlyList<string> ahead = first is null ? [] : await first().ConfigureAwait(false);
             if (ahead.Count > 0)
             {
                 session.Expect(2);
-                await LoadAsync(server, LspMethods.ProjectOpen, new OpenProjectParams([.. ahead.Select(DocumentUris.FromPath)])).ConfigureAwait(false);
+                await server.NotifyAsync(LspMethods.ProjectOpen, new OpenProjectParams([.. ahead.Select(DocumentUris.FromPath)])).ConfigureAwait(false);
                 // The rest once those have loaded: opened at once, the server would take them all in one batch.
                 Core.UnawaitedWork.Observe(session.OpenRestAsync(() => solution is not null
-                    ? LoadAsync(server, LspMethods.SolutionOpen, new OpenSolutionParams(DocumentUris.FromPath(solution)))
-                    : LoadAsync(server, LspMethods.ProjectOpen, new OpenProjectParams([.. projects.Select(DocumentUris.FromPath)]))));
+                    ? server.NotifyAsync(LspMethods.SolutionOpen, new OpenSolutionParams(DocumentUris.FromPath(solution)))
+                    : server.NotifyAsync(LspMethods.ProjectOpen, new OpenProjectParams([.. projects.Select(DocumentUris.FromPath)]))));
                 return session;
             }
             if (solution is not null)
             {
-                await LoadAsync(server, LspMethods.SolutionOpen, new OpenSolutionParams(DocumentUris.FromPath(solution))).ConfigureAwait(false);
+                await server.NotifyAsync(LspMethods.SolutionOpen, new OpenSolutionParams(DocumentUris.FromPath(solution))).ConfigureAwait(false);
             }
             else
             {
-                await LoadAsync(server, LspMethods.ProjectOpen, new OpenProjectParams([.. projects.Select(DocumentUris.FromPath)])).ConfigureAwait(false);
+                await server.NotifyAsync(LspMethods.ProjectOpen, new OpenProjectParams([.. projects.Select(DocumentUris.FromPath)])).ConfigureAwait(false);
             }
         }
         catch
@@ -174,13 +181,6 @@ public sealed class RoslynSession : IAsyncDisposable, IDocumentHost
             throw;
         }
         return session;
-    }
-
-    /// <summary>Asks the server to load or open projects, its file watches counting the load as under way until it ends.</summary>
-    private static Task LoadAsync(LanguageServer server, string method, object parameters)
-    {
-        server.WatchedFiles.Loading();
-        return server.NotifyAsync(method, parameters);
     }
 
     /// <summary>The design-time builds asked for as a server started that will not load them: a fault in the asking is
@@ -250,7 +250,6 @@ public sealed class RoslynSession : IAsyncDisposable, IDocumentHost
                     opens++;
                 }
             }
-            Server.WatchedFiles.Loading();
             Server.Notify(ProjectMethods.Load, new LoadProjectsParams([.. projects.Select(p => new ProjectToOpen(p, null))], Solution));
         }
     }
@@ -289,7 +288,6 @@ public sealed class RoslynSession : IAsyncDisposable, IDocumentHost
             IsLoaded = false;
             opens = completed + 1;
         }
-        Server.WatchedFiles.Loading();
         Server.Notify(ProjectMethods.Load, new LoadProjectsParams([.. projects.Select(p => new ProjectToOpen(p, null))], Solution));
     }
 
@@ -402,6 +400,14 @@ public sealed class RoslynSession : IAsyncDisposable, IDocumentHost
     public async Task<IReadOnlyList<Roslyn.Extension.GeneratedText?>?> GeneratedNamedAsync(string project, string file, CancellationToken cancel = default) =>
         Server.ExtensionProblem is null
             ? (await ExtensionAsync<Roslyn.Extension.GeneratedFound>(Roslyn.Extension.Handlers.GeneratedNamed, new Roslyn.Extension.GeneratedNameAsked(project, file), cancel).ConfigureAwait(false)).Texts
+            : null;
+
+    /// <summary>The members source generators add to the types of the projects named by their files and to those the C# files
+    /// named declare (Passenger's extension's <see cref="Roslyn.Extension.GeneratedMembersAsked"/>), as the compilation has them
+    /// now; null when the server has no extension to ask.</summary>
+    public async Task<IReadOnlyList<Roslyn.Extension.GeneratedType>?> GeneratedMembersAsync(IReadOnlyList<string> projects, IReadOnlyList<string> files, CancellationToken cancel = default) =>
+        Server.ExtensionProblem is null
+            ? (await ExtensionAsync<Roslyn.Extension.GeneratedMembersFound>(Roslyn.Extension.Handlers.GeneratedMembers, new Roslyn.Extension.GeneratedMembersAsked(projects, files), cancel).ConfigureAwait(false)).Types
             : null;
 
     /// <summary>Whether each document the server names is generated code as Roslyn's own check tells it (Passenger's
@@ -758,14 +764,32 @@ public sealed class LspDocument : IDisposable
     /// well each item fits where it is asked for; else as the protocol asks it.</summary>
     public string CompletionMethod => Server.ExtensionProblem is null && !IsRazor ? ExtensionMethods.Completion : LspMethods.Completion;
 
+    /// <summary>An item's details (<see cref="ResolveMethod"/>).</summary>
     public Task<CompletionItem?> ResolveAsync(CompletionItem item, CancellationToken cancel = default) =>
-        Server.RequestAsync<CompletionItem>(LspMethods.CompletionResolve, item, cancel);
+        Server.RequestAsync<CompletionItem>(ResolveMethod, item, cancel);
 
+    /// <summary>What the server says of a place (<see cref="HoverMethod"/>).</summary>
     public async Task<Hover?> HoverAsync(int offset, CancellationToken cancel = default) =>
-        await Server.RequestAsync<Hover>(LspMethods.Hover, new TextDocumentPositionParams(Identifier, PositionOf(offset)), cancel);
+        await Server.RequestAsync<Hover>(HoverMethod, new TextDocumentPositionParams(Identifier, PositionOf(offset)), cancel);
 
+    /// <summary>The signatures of the call at a place (<see cref="SignatureHelpMethod"/>).</summary>
     public async Task<SignatureHelp?> SignatureHelpAsync(int offset, CancellationToken cancel = default) =>
-        await Server.RequestAsync<SignatureHelp>(LspMethods.SignatureHelp, new TextDocumentPositionParams(Identifier, PositionOf(offset)), cancel);
+        await Server.RequestAsync<SignatureHelp>(SignatureHelpMethod, new TextDocumentPositionParams(Identifier, PositionOf(offset)), cancel);
+
+    /// <summary>How a completion item is resolved: of a C# file, through Passenger's extension once it is up, its
+    /// documentation's code in parts (<see cref="CompletionItem.Code"/>); else as the protocol asks it.</summary>
+    public string ResolveMethod => CodedCards ? ExtensionMethods.CompletionResolve : LspMethods.CompletionResolve;
+
+    /// <summary>How a hover is asked for: of a C# file, through Passenger's extension once it is up, its code in parts
+    /// (<see cref="Hover.Code"/>); else as the protocol asks it.</summary>
+    public string HoverMethod => CodedCards ? ExtensionMethods.Hover : LspMethods.Hover;
+
+    /// <summary>How signatures are asked for: of a C# file, through Passenger's extension once it is up, each label in parts
+    /// (<see cref="SignatureInformation.Code"/>); else as the protocol asks it.</summary>
+    public string SignatureHelpMethod => CodedCards ? ExtensionMethods.SignatureHelp : LspMethods.SignatureHelp;
+
+    /// <summary>Whether the cards' answers come through Passenger's extension, with their code in parts: a C# file's, once it is up.</summary>
+    private bool CodedCards => Server.ExtensionProblem is null && !IsRazor;
 
     /// <summary>Where the symbol at an offset is declared. Like every answer that grows with the solution or the file, read
     /// on the thread pool before the caller resumes (<see cref="Read"/>).</summary>
@@ -860,21 +884,8 @@ public sealed class LspDocument : IDisposable
         return Shapes.CodeActions(result);
     }
 
-    /// <summary>A range without the spaces, tabs and line breaks at its ends; one of nothing else is left as it is.</summary>
-    private static TextRange Trimmed(TextSnapshot text, TextRange range)
-    {
-        int start = range.Start;
-        int end = range.End;
-        while (end > start && char.IsWhiteSpace(text[end - 1]))
-        {
-            end--;
-        }
-        while (start < end && char.IsWhiteSpace(text[start]))
-        {
-            start++;
-        }
-        return start == end ? range : TextRange.FromBounds(start, end);
-    }
+    /// <summary>A range without the white space at its ends; one of nothing else is left as it is.</summary>
+    private static TextRange Trimmed(TextSnapshot text, TextRange range) => TextRange.Trimmed(text, range) is { Length: > 0 } trimmed ? trimmed : range;
 
     /// <summary>The actions of one kind the server has for the whole document (ESLint's <c>source.fixAll.eslint</c>).</summary>
     public async Task<IReadOnlyList<CodeAction>> SourceActionsAsync(string kind, CancellationToken cancel = default)
@@ -978,8 +989,30 @@ public sealed class LspDocument : IDisposable
         await Server.RequestAsync<List<LspTextEdit>>(LspMethods.RangeFormatting,
             new DocumentRangeFormattingParams(Identifier, RangeOf(range), FormattingOptions.Of(indent, conventions, Text.Snapshot)), cancel) ?? [];
 
+    /// <summary>Whether the server formats around a character once it is typed (<see cref="LanguageServer.FormattingTriggers"/>).</summary>
+    public bool FormatsTyped(char typed)
+    {
+        foreach (string trigger in Server.FormattingTriggers)
+        {
+            if (trigger.Length == 1 && trigger[0] == typed)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>The server's formatting of what a character typed at an offset ends (the statement a ';' ends, the block a
+    /// '}' closes), the caret past it, by the options the whole document's formatting takes.</summary>
+    public async Task<IReadOnlyList<LspTextEdit>> FormatTypedAsync(int offset, string typed, IndentOptions indent, EditorConfig conventions, CancellationToken cancel = default) =>
+        await Server.RequestAsync<List<LspTextEdit>>(LspMethods.OnTypeFormatting,
+            new DocumentOnTypeFormattingParams(Identifier, PositionOf(offset), typed, FormattingOptions.Of(indent, conventions, Text.Snapshot)), cancel) ?? [];
+
+    /// <summary>Whether the server may write more on its own once a character is typed (<see cref="LanguageServer.AutoInsertTriggers"/>).</summary>
+    public bool AutoInserts(char typed) => Server.AutoInsertTriggers.Any(t => t.Length == 1 && t[0] == typed);
+
     /// <summary>What the server writes on its own after a character typed at an offset, the caret past it (Razor's end
-    /// tag after a start tag's '>'); null where it writes nothing.</summary>
+    /// tag after a start tag's '>', C#'s block laid out after the line break that opened it); null where it writes nothing.</summary>
     public async Task<AutoInserted?> AutoInsertAsync(int offset, string typed, IndentOptions indent, EditorConfig conventions, CancellationToken cancel = default) =>
         await Server.RequestAsync<AutoInserted>(LspMethods.OnAutoInsert,
             new AutoInsertParams(Identifier, PositionOf(offset), typed, FormattingOptions.Of(indent, conventions, Text.Snapshot)), cancel) is { TextEdit: not null } answer
@@ -1009,7 +1042,7 @@ public sealed class LspDocument : IDisposable
         {
             Server.Follow(parameters, sent);
         }
-        SemanticTokens? tokens = await OrLooseAsync(await Server.RequestAsync<SemanticTokens>(LspMethods.SemanticTokensFull, parameters, cancel), parameters, cancel);
+        SemanticTokens? tokens = await Server.RequestAsync<SemanticTokens>(ColoursMethod, parameters, cancel);
         Came(ref coloured, asked);
         if (tokens is { Data.Length: > 0 })
         {
@@ -1029,25 +1062,26 @@ public sealed class LspDocument : IDisposable
         {
             Server.Follow(parameters, sent);
         }
-        SemanticTokens? tokens = await OrLooseAsync(await Server.RequestAsync<SemanticTokens>(LspMethods.SemanticTokensRange, parameters, cancel), parameters, cancel);
+        SemanticTokens? tokens = await Server.RequestAsync<SemanticTokens>(RangeColoursMethod, parameters, cancel);
         Came(ref coloured, asked);
         return (tokens, version);
     }
 
-    /// <summary>The server's colours, or where it gave none, those Passenger's extension gives a file in no project, which
-    /// the server leaves uncoloured; asked with the same document and range.</summary>
-    private async Task<SemanticTokens?> OrLooseAsync(SemanticTokens? tokens, object parameters, CancellationToken cancel)
-    {
-        if (tokens is { Data.Length: > 0 } || Server.ExtensionProblem is not null)
-        {
-            return tokens;
-        }
-        return await Server.RequestAsync<SemanticTokens>(ExtensionMethods.LooseColours, parameters, cancel) ?? tokens;
-    }
+    /// <summary>How a C# file's colours are asked for, the whole file's: through Passenger's extension once it is up, which
+    /// leaves a name the server could not bind to the colour its syntax gives it and colours a file in no project; else as
+    /// the protocol asks them.</summary>
+    public string ColoursMethod => Server.ExtensionProblem is null && !IsRazor ? ExtensionMethods.Colours : LspMethods.SemanticTokensFull;
 
-    /// <summary>The symbol at an offset as a call hierarchy's root, if it is one that calls or is called.</summary>
-    public Task<HierarchyItem?> PrepareCallHierarchyAsync(int offset, CancellationToken cancel = default) =>
-        PrepareCallHierarchyAsync(Server, Identifier, PositionOf(offset), cancel);
+    /// <summary>How a range's colours are asked for, as <see cref="ColoursMethod"/>.</summary>
+    public string RangeColoursMethod => Server.ExtensionProblem is null && !IsRazor ? ExtensionMethods.RangeColours : LspMethods.SemanticTokensRange;
+
+    /// <summary>The symbol at an offset as a call hierarchy's root, if it is one that calls or is called: from a use of a
+    /// member declared in another file and at a record's positional parameter too where Passenger's extension answers
+    /// (<see cref="ExtensionMethods.CallHierarchy"/>), as the server's own makes an item only for what the file declares.</summary>
+    public async Task<HierarchyItem?> PrepareCallHierarchyAsync(int offset, CancellationToken cancel = default) =>
+        Server.ExtensionProblem is null && !IsRazor
+            ? (await Server.RequestAsync<List<HierarchyItem>>(ExtensionMethods.CallHierarchy, new TextDocumentPositionParams(Identifier, PositionOf(offset)), cancel))?.FirstOrDefault()
+            : await PrepareCallHierarchyAsync(Server, Identifier, PositionOf(offset), cancel);
 
     internal static async Task<HierarchyItem?> PrepareCallHierarchyAsync(LanguageServer server, TextDocumentIdentifier document, LspPosition at, CancellationToken cancel) =>
         (await server.RequestAsync<List<HierarchyItem>>(LspMethods.PrepareCallHierarchy, new TextDocumentPositionParams(document, at), cancel).ConfigureAwait(false))?.FirstOrDefault();

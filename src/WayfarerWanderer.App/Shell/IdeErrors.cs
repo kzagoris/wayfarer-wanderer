@@ -122,7 +122,11 @@ public static class IdeErrors
 
     /// <summary>Logs an error and shows it, from any thread. A repeat counts against the error listed already and is
     /// one line in the log, its details being there from the first time.</summary>
-    public static void Report(Exception error)
+    public static void Report(Exception error) => Report(error, observedAt: null);
+
+    /// <summary>An error as <see cref="Report(Exception)"/> reports it, its task observed at <paramref name="observedAt"/>,
+    /// which its details say where it carries no stack (<see cref="Passenger.Core.UnawaitedWork.Details"/>).</summary>
+    public static void Report(Exception error, string? observedAt)
     {
         lock (Gate)
         {
@@ -131,7 +135,7 @@ public static class IdeErrors
                 return;
             }
         }
-        List(new IdeError(DateTime.Now, error.GetType().Name, error.Message, error.ToString()));
+        List(new IdeError(DateTime.Now, error.GetType().Name, error.Message, Passenger.Core.UnawaitedWork.Details(error, observedAt)));
     }
 
     /// <summary>Logs and shows, from any thread, an error a run before this one ended on (<see cref="CrashFile"/>), at the

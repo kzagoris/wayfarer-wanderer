@@ -76,7 +76,7 @@ public partial class MainWindow
 
     /// <summary>Why the file's line separator and encoding cannot change: none is open, or it is read-only.</summary>
     private static string? Unchangeable(ActionContext context) =>
-        context.File is not { } file ? Refusals.NoFile : file.IsReadOnly ? Refusals.ReadOnly(file.Name) : null;
+        context.File is not { } file ? Refusals.NoFile : file.ReadOnlyWhy;
 
 
     /// <summary>The line separator popup: the Line Separators menu, the file's own checked.</summary>
@@ -84,7 +84,7 @@ public partial class MainWindow
     {
         ActionContext context = actions!.Context();
         List<Control> items = [.. LineSeparators.All.Select(s => FlyoutEntry(new MenuEntry(LineSeparatorAction(s)), context))];
-        Open(new ContextMenu { ItemsSource = items, Placement = PlacementMode.TopEdgeAlignedRight }, LineSeparatorButton);
+        Open(new ContextMenu { ItemsSource = items }, LineSeparatorButton);
     }
 
     private void OnEncodingClicked(object? sender, RoutedEventArgs e) => Request(A.FileEncoding);
@@ -111,7 +111,7 @@ public partial class MainWindow
         items.Add(new Separator());
         items.Add(FlyoutEntry(new MenuEntry(A.ConvertIndentationToTabs), context));
         items.Add(FlyoutEntry(new MenuEntry(A.ConvertIndentationToSpaces), context));
-        Open(new ContextMenu { ItemsSource = items, Placement = PlacementMode.TopEdgeAlignedRight }, IndentButton);
+        Open(new ContextMenu { ItemsSource = items }, IndentButton);
     }
 
     /// <summary>Converts every line's indentation to tabs or spaces at the file's indent size, as one undoable step, and
@@ -123,7 +123,9 @@ public partial class MainWindow
         string said = lines == 0
             ? $"Every line of {document.Name} outside its strings already indents with {kind}"
             : $"Converted the indentation of {Core.Plural.Of(lines, "line")} of {document.Name} to {kind}, {(tabs ? "a tab" : Core.Plural.Of(document.Indentation.Options.Size, "space"))} a level";
-        status.Text = inStrings == 0 ? said : $"{said}; {Core.Plural.Of(inStrings, "line")} inside strings left as {Core.Plural.Agreeing(inStrings, "it is", "they are")}";
+        said = inStrings == 0 ? said : $"{said}; {Core.Plural.Of(inStrings, "line")} inside strings left as {Core.Plural.Agreeing(inStrings, "it is", "they are")}";
+        status.Text = said;
+        ActionWork.Tell(true, said);
     }
 
     private void ChooseIndent(OpenDocument document, IndentOptions? options)
@@ -144,13 +146,8 @@ public partial class MainWindow
         string current = document.EncodingName;
         MenuItem Item(FileEncoding encoding) => MenuChoice.Of(encoding.Name, encoding.Name == current,
             () => IdeErrors.Observe(ChooseEncodingAsync(document, encoding)));
-        MenuItem more = new() { Header = "More" };
-        foreach (FileEncoding encoding in FileEncoding.More)
-        {
-            more.Items.Add(Item(encoding));
-        }
-        List<Control> items = [.. FileEncoding.First.Select(Item), new Separator(), more];
-        Open(new ContextMenu { ItemsSource = items, Placement = PlacementMode.TopEdgeAlignedRight }, EncodingButton);
+        List<Control> items = [.. FileEncoding.First.Select(Item), new Separator(), ToolWindows.ListMenus.Sub("More", FileEncoding.More.Select(Item))];
+        Open(new ContextMenu { ItemsSource = items }, EncodingButton);
     }
 
     /// <summary>An encoding chosen: taken at once when the bytes read as the same text and the text writes as the same
@@ -158,9 +155,9 @@ public partial class MainWindow
     /// answers, each warned against first when it would lose something.</summary>
     private async Task ChooseEncodingAsync(OpenDocument document, FileEncoding to)
     {
-        if (document.IsReadOnly)
+        if (document.ReadOnlyWhy is { } readOnly)
         {
-            status.Text = Refusals.ReadOnly(document.Name);
+            status.Text = readOnly;
             return;
         }
         string from = document.EncodingName;

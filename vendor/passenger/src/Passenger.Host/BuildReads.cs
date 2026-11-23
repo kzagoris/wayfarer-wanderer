@@ -183,12 +183,11 @@ internal static class BuildReads
         /// each reaches it (a reference with every framework of its own).</summary>
         public void Load(IReadOnlyList<(string Path, string? Framework)> projects, CancellationToken cancel)
         {
-            ParallelOptions parallel = new() { MaxDegreeOfParallelism = Environment.ProcessorCount, CancellationToken = cancel };
             HashSet<string> reached = new(PathNames.Comparer);
             List<(string Path, string? Framework)> round = [.. projects];
             while (round.Count > 0)
             {
-                Parallel.ForEach(round, parallel, each => _ = Get(each.Path, each.Framework));
+                ApartScheduler.ForEach("Passenger build reader", round, 0, cancel, each => _ = Get(each.Path, each.Framework));
                 round = [.. round.SelectMany(each => Get(each.Path, each.Framework).Projects ?? []).SelectMany(each => each.Walk.References)
                     .Where(reference => reached.Add(reference) && !made.ContainsKey(Key(reference, null))).Select(reference => (reference, (string?)null))];
             }
@@ -285,13 +284,13 @@ internal static class BuildReads
         HashSet<string> sources = new(PathNames.Comparer);
         foreach (ProjectItem item in project.AllEvaluatedItems)
         {
-            if (item.ItemType == "ProjectReference")
+            if (item.ItemType == MSBuildNames.ProjectReference)
             {
                 if (Reglobalizing.FirstOrDefault(m => item.GetMetadataValue(m).Length > 0) is { } metadata)
                 {
                     return $"{name} references {item.EvaluatedInclude} with {metadata}";
                 }
-                string reference = item.GetMetadataValue("FullPath");
+                string reference = item.GetMetadataValue(MSBuildNames.FullPath);
                 if (seen.Add(reference))
                 {
                     references.Enqueue(reference);
@@ -299,7 +298,7 @@ internal static class BuildReads
                 continue;
             }
             // A None file the build does not copy is none it reads (a launch profile, a database the app writes beside it), scoped CSS aside.
-            if (item.ItemType == "None" && item.GetMetadataValue("CopyToOutputDirectory") is var copy && (copy.Length == 0 || copy.Equals("Never", StringComparison.OrdinalIgnoreCase))
+            if (item.ItemType == MSBuildNames.None && item.GetMetadataValue("CopyToOutputDirectory") is var copy && (copy.Length == 0 || copy.Equals("Never", StringComparison.OrdinalIgnoreCase))
                 && !BuildInputs.IsProcessedStatic(item.EvaluatedInclude))
             {
                 continue;
@@ -309,13 +308,13 @@ internal static class BuildReads
             {
                 continue;
             }
-            string path = item.ItemType == "Reference" && item.GetMetadataValue("HintPath") is { Length: > 0 } hint
+            string path = item.ItemType == MSBuildNames.Reference && item.GetMetadataValue(MSBuildNames.HintPath) is { Length: > 0 } hint
                 ? Path.GetFullPath(Separated(hint), project.DirectoryPath)
                 : FullPath(item);
             if (path.Length > 0 && !Installed(path, installed) && !built.Any(folder => PathNames.IsUnder(path, folder)) && File.Exists(path))
             {
                 Read(path);
-                if (item.ItemType is "Compile" or "AdditionalFiles")
+                if (item.ItemType is MSBuildNames.Compile or MSBuildNames.AdditionalFiles)
                 {
                     sources.Add(Path.GetDirectoryName(path)!);
                 }
@@ -355,7 +354,7 @@ internal static class BuildReads
     {
         try
         {
-            return item.GetMetadataValue("FullPath");
+            return item.GetMetadataValue(MSBuildNames.FullPath);
         }
         catch (Exception error) when (error is InvalidOperationException or ArgumentException)
         {

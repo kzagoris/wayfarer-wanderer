@@ -31,6 +31,12 @@ public sealed record AppSettings : IStateDocument<AppSettings>
     /// theme's ground, so the areas stay told apart), or null for the theme's own.</summary>
     public SourcedTheme? ColourScheme { get; init; }
 
+    /// <summary>Whether High Contrast shows in the theme's and the scheme's place while the system asks for high contrast.</summary>
+    public bool FollowSystemContrast { get; init; } = true;
+
+    /// <summary>The colours of tests', changes' and signatures' states: the theme's own, or the colour-blind safe palette over it.</summary>
+    public StatePalette StatePalette { get; init; }
+
     /// <summary>The theme sources the person added, each as <see cref="ThemeSource"/> keeps it, beside Passenger's themes
     /// repository, which every Passenger lists.</summary>
     public IReadOnlyList<string> ThemeSources { get; init; } = [];
@@ -81,6 +87,9 @@ public sealed record AppSettings : IStateDocument<AppSettings>
     public bool Ligatures { get; init; }
     public bool ShowLineNumbers { get; init; } = true;
 
+    /// <summary>The navigation bar over each editor of a file with an outline, naming where its caret is.</summary>
+    public bool ShowNavigationBar { get; init; } = true;
+
     /// <summary>Rainbow braces: brackets coloured by how deeply they nest.</summary>
     public bool RainbowBraces { get; init; } = true;
 
@@ -98,6 +107,11 @@ public sealed record AppSettings : IStateDocument<AppSettings>
     /// <summary>In C#, a method chosen from the completion list by Enter, Tab or a click is written called, its parentheses
     /// after it and the caret between them where it takes arguments; off, its name alone.</summary>
     public bool CompletionParentheses { get; init; } = true;
+
+    /// <summary>In C#, the ';' that ends a statement formats the statement, the '}' that closes a block formats the block,
+    /// and Enter between a '{' and its '}' lays the '{' out, as Reformat Code lays them out, joined to the key's step of
+    /// Undo; off, all stay as typed.</summary>
+    public bool FormatOnType { get; init; } = true;
 
     /// <summary>The XAML workspace: an Avalonia or WPF file opens beside its preview and, while its app runs, its Live Visual
     /// Tree, an element chosen in any of the three chosen in the others.</summary>
@@ -187,6 +201,16 @@ public sealed record AppSettings : IStateDocument<AppSettings>
     /// configuration and breakpoints, without asking; off, the restart is asked first.</summary>
     public bool RestartOnRudeEdit { get; init; } = true;
 
+    /// <summary>"When the debugger stops": what a stop of a program the person debugs (a breakpoint, an exception, a step's
+    /// end) does while they are in another program: the window comes to the front, asking for them where the system keeps
+    /// the other in front; only asks for them; or nothing. An agent's debugging never brings it forward.</summary>
+    public DebuggerStop WhenDebuggerStops { get; init; } = DebuggerStop.ComeForward;
+
+    /// <summary>Whether Run, Debug or Profile of a configuration that runs asks first, rather than stopping what runs of it
+    /// and starting it again at once: Stop and Rerun, Stop alone, or Cancel. On at first; an agent's start, and one in a
+    /// window nobody sees, never asks.</summary>
+    public bool AskBeforeRerun { get; init; } = true;
+
     /// <summary>"Tool Window: when build is explicitly invoked, open the build progress view in a tool window": the
     /// Build menu's builds, rebuilds and cleans open the Build window as they start.</summary>
     public bool OpenBuildWindowOnBuild { get; init; } = true;
@@ -224,6 +248,10 @@ public sealed record AppSettings : IStateDocument<AppSettings>
     /// <summary>"Open project in": where a solution or folder opened from a window that has one goes, a window of its
     /// own, that window's place, or asked each time (Open Solution's This Window and New Window).</summary>
     public OpenProjectIn OpenProjectIn { get; init; } = OpenProjectIn.Ask;
+
+    /// <summary>"Confirm before closing": whether Passenger asks the person before it quits (Exit, the system's Quit, the last
+    /// window's close) or before any of its windows closes; never at first.</summary>
+    public ConfirmClosing ConfirmBeforeClosing { get; init; } = ConfirmClosing.Never;
 
     /// <summary>Check IDE updates: the person's window asks GitHub for Passenger's latest release as it starts and once
     /// a day, and an installed Passenger downloads a newer one to install as it restarts. Off, nothing is asked unless
@@ -286,9 +314,10 @@ public sealed record AppSettings : IStateDocument<AppSettings>
     /// first on the PATH as the login shell finds it.</summary>
     public string? NodeInterpreter { get; init; }
 
-    /// <summary>The Chromium browser a Blazor app's WebAssembly half is debugged in, with arguments given every start of it,
-    /// as one command line; null for the one found (<see cref="Passenger.Core.ChromiumBrowsers"/>).</summary>
-    public string? DebugBrowser { get; init; }
+    /// <summary>The browser a web app's page opens in, and Debug drives to debug a Blazor app's WebAssembly half, with
+    /// arguments given every start of it, as one command line (<see cref="Run.PageBrowsers"/>); null for the system's default
+    /// browser, and for debugging the Chromium one found (<see cref="Passenger.Core.ChromiumBrowsers"/>).</summary>
+    public string? Browser { get; init; }
 
     /// <summary>The Godot a Godot project's game and editor run on, with arguments given every start of it, as one command
     /// line; null for the one found (<see cref="Passenger.Core.GodotExecutables"/>).</summary>
@@ -409,6 +438,41 @@ public sealed record AppSettings : IStateDocument<AppSettings>
     /// the file while the popup is open; the popup's toggle changes it.</summary>
     public bool ChangePopupWords { get; init; } = true;
 
+    /// <summary>When the sound cues play (<see cref="SoundCues"/>): while the system says a screen reader runs, at first, so
+    /// a person who sees the screen hears none; always; or never.</summary>
+    public SoundCuesPlayed SoundCues { get; init; } = SoundCuesPlayed.WithScreenReader;
+
+    /// <summary>A sound as the caret comes to a line holding an error.</summary>
+    public bool SoundOnErrorLine { get; init; } = true;
+
+    /// <summary>A sound as the caret comes to a line holding a warning and no error.</summary>
+    public bool SoundOnWarningLine { get; init; } = true;
+
+    /// <summary>A sound as the caret comes to a line holding a breakpoint.</summary>
+    public bool SoundOnBreakpointLine { get; init; } = true;
+
+    /// <summary>A sound as the caret comes to a line that begins a folded region.</summary>
+    public bool SoundOnFoldedLine { get; init; } = true;
+
+    /// <summary>A sound as the caret comes to a line changed since the last commit.</summary>
+    public bool SoundOnChangedLine { get; init; } = true;
+
+    /// <summary>A sound as a build passes or fails, each its own.</summary>
+    public bool SoundOnBuildEnd { get; init; } = true;
+
+    /// <summary>A sound as a test run passes or fails, each its own.</summary>
+    public bool SoundOnTestsEnd { get; init; } = true;
+
+    /// <summary>A sound as the debugger stops the program the person debugs.</summary>
+    public bool SoundOnDebuggerStop { get; init; } = true;
+
+    /// <summary>A sound as a command the person ran in the terminal fails, where its shell tells.</summary>
+    public bool SoundOnTerminalFailure { get; init; } = true;
+
+    /// <summary>A sound as a save the person asked for is refused (a read-only file, one another program holds, a write
+    /// the system refused).</summary>
+    public bool SoundOnSaveRefused { get; init; } = true;
+
     /// <summary>"Show files with the same names as nested": the Solution view nests files by their nesting rules
     /// (Counter.razor.cs under Counter.razor), on until the Explorer's File Nesting... turns it off.</summary>
     public bool NestFiles { get; init; } = true;
@@ -439,17 +503,31 @@ public sealed record AppSettings : IStateDocument<AppSettings>
     public static IReadOnlyList<string> Sets { get; } = [nameof(AgentFolders), nameof(ThemeSources)];
 
     /// <summary>The settings naming a program Passenger runs, or a package of code it loads (the terminal's shell, the Node.js
-    /// the web servers run on, the browser and the Godot it debugs in, ESLint's and Prettier's packages): the person's alone to
-    /// change, which settings_set refuses an agent.</summary>
+    /// the web servers run on, the browser pages open and are debugged in, the Godot games run on, ESLint's and Prettier's
+    /// packages): the person's alone to change, which settings_set refuses an agent.</summary>
     public static IReadOnlySet<string> NamingPrograms { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
-        nameof(TerminalShell), nameof(NodeInterpreter), nameof(DebugBrowser), nameof(GodotExecutable), nameof(EslintPackage), nameof(PrettierPackage),
+        nameof(TerminalShell), nameof(NodeInterpreter), nameof(Browser), nameof(GodotExecutable), nameof(EslintPackage), nameof(PrettierPackage),
     };
 
+    /// <summary>The name <see cref="Browser"/> was kept under while it named the browser of debugging alone.</summary>
+    private const string FormerBrowser = "debugBrowser";
+
     /// <summary>A shortcut kept under an action's former id is kept under its id now, unless one is there already, as
-    /// <see cref="Clamped"/> reads them: written so, the former id leaves the file, and an action's shortcuts reset stay so.</summary>
+    /// <see cref="Clamped"/> reads them: written so, the former id leaves the file, and an action's shortcuts reset stay so.
+    /// The browser debugging named is the browser, unless one is named there already.</summary>
     public static void Renamed(JsonObject settings)
     {
+        if (settings.ContainsKey(FormerBrowser))
+        {
+            JsonNode? named = settings[FormerBrowser];
+            settings.Remove(FormerBrowser);
+            string browser = StateFile.Options.PropertyNamingPolicy!.ConvertName(nameof(Browser));
+            if (named is not null && settings[browser] is null)
+            {
+                settings[browser] = named;
+            }
+        }
         foreach (string property in new[] { nameof(Shortcuts), nameof(VSCodeShortcuts), nameof(IntelliJShortcuts) })
         {
             if (settings[StateFile.Options.PropertyNamingPolicy!.ConvertName(property)] is not JsonObject shortcuts)
@@ -663,6 +741,14 @@ public enum ToolConfiguration
     Manual,
 }
 
+/// <summary>The choices for "When the debugger stops", in the order Settings lists them.</summary>
+public enum DebuggerStop
+{
+    ComeForward,
+    AskForAttention,
+    Nothing,
+}
+
 /// <summary>The choices for "Open project in", in the order Settings lists them.</summary>
 public enum OpenProjectIn
 {
@@ -671,11 +757,27 @@ public enum OpenProjectIn
     Ask,
 }
 
+/// <summary>The choices for "Confirm before closing", in the order Settings lists them.</summary>
+public enum ConfirmClosing
+{
+    Never,
+    WhenQuitting,
+    EveryWindow,
+}
+
 /// <summary>Where a diff opens, in the order Settings lists them.</summary>
 public enum DiffPlace
 {
     Window,
     Tab,
+}
+
+/// <summary>When the sound cues play, in the order Settings lists them.</summary>
+public enum SoundCuesPlayed
+{
+    WithScreenReader,
+    Always,
+    Never,
 }
 
 /// <summary>What Discord's activity names beyond Passenger, in the order Settings lists them.</summary>

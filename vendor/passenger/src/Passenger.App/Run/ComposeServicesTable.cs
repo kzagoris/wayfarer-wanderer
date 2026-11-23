@@ -31,7 +31,7 @@ public sealed class ComposeServicesTable : EditableTable
 
     /// <param name="named">What a row stands for, the first column's title: a Compose service, an AppHost's resource.</param>
     public ComposeServicesTable(string named = "Service")
-        : base("*,*,130", [named, "Project", "Run does"])
+        : base("*,*,*", [named, "Project", "Run does"])
     {
     }
 
@@ -125,11 +125,12 @@ public sealed class ComposeServicesTable : EditableTable
 
     private void Add(string service, string runs, string? project, bool choosable, bool named, ServiceStart action, bool editable)
     {
-        StackPanel name = new() { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(8, 0), VerticalAlignment = VerticalAlignment.Center };
+        // In a narrow table what it runs gives way first, then its name, each ending in an ellipsis.
+        ShrinkingRow name = new() { Spacing = Gaps.Normal, Margin = new Thickness(Gaps.Normal, 0), VerticalAlignment = VerticalAlignment.Center };
         name.Children.Add(new TextBlock { Text = service, VerticalAlignment = VerticalAlignment.Center });
         if (runs.Length > 0)
         {
-            name.Children.Add(new TextBlock { Text = runs, Classes = { StyleClasses.Muted }, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis });
+            name.Children.Add(new TextBlock { Text = runs, Classes = { StyleClasses.Muted, StyleClasses.Caption }, VerticalAlignment = VerticalAlignment.Center });
         }
         ComboBox projectBox = new()
         {

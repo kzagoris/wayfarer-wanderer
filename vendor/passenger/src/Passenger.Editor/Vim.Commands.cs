@@ -10,6 +10,12 @@ public sealed partial class Vim
     /// typed), the register named, the operator if any, and the motion, object or command with the key it takes.</summary>
     private sealed record Command(IReadOnlyList<string> Keys, int Count, char? Register, string? Operator, [property: IdentifierOf(typeof(VimKeys))] string Name, string? Argument);
 
+    /// <summary>The column an operator's j or k aims at, set while the operator runs from a caret whose own j and k aim at it.</summary>
+    private int? operatorAim;
+
+    /// <summary>Set for a . pressed where j and k aim at the line's end, which takes a block made again to each line's end.</summary>
+    private bool againToEnd;
+
     private static readonly HashSet<string> SingleMotions =
         ["h", "l", "j", "k", "0", "^", "$", "|", "w", "W", "b", "B", "e", "E", "G", ";", ",", "%", "{", "}", "(", ")", "H", "M", "L", VimKeys.Backspace, VimKeys.Enter, " ", "+", "-", "_", "n", "N", "*", "#"];
 
@@ -210,7 +216,16 @@ public sealed partial class Vim
         changeExtent = null;
         if (command.Operator is { } op)
         {
-            return Operate(command, op, text, selections, view);
+            // An operator's j or k aims at the column the caret's own j and k aim at.
+            operatorAim = aims is [int aim] && selections.Count == 1 ? aim : null;
+            try
+            {
+                return Operate(command, op, text, selections, view);
+            }
+            finally
+            {
+                operatorAim = null;
+            }
         }
         if (view.Refuses is { } why && (Changing.Contains(command.Name) || command.Name == "." && lastChange is not null))
         {
@@ -235,7 +250,7 @@ public sealed partial class Vim
             case "q" or "@":
                 return Macro(command);
             case "m":
-                return SetMark(command, selections, view);
+                return SetMark(command, text, selections, view);
             case VimKeys.CtrlO:
                 return Asked(VimRequestKind.Older) with { Request = new VimRequest(VimRequestKind.Older, Count: n) };
             case VimKeys.CtrlI or VimKeys.Tab:
@@ -255,7 +270,15 @@ public sealed partial class Vim
             case "S":
                 return Operate(command with { Name = "line" }, "c", text, selections, view);
             case "Y":
-                return Operate(command with { Name = "line" }, "y", text, selections, view);
+                operatorAim = aims is [int yanked] && selections.Count == 1 ? yanked : null;
+                try
+                {
+                    return Operate(command with { Name = "line" }, "y", text, selections, view);
+                }
+                finally
+                {
+                    operatorAim = null;
+                }
             case "i":
                 return Insert(text, selections, command, "i");
             case "a":
@@ -273,6 +296,7 @@ public sealed partial class Vim
             case "p" or "P" or "gp" or "gP":
                 return Put(command, text, selections, view);
             case ".":
+                againToEnd = aims is { Length: > 0 } aimed && aimed.All(a => a == int.MaxValue);
                 return Again(command.Count, text, selections, view);
             case "r":
                 return Changed(command, Replace(text, selections, n, command.Argument!, view));
@@ -285,8 +309,8 @@ public sealed partial class Vim
     }
 
     /// <summary>J or gJ done. Lines joined are kept for . as a count of that many, fewer than asked where the text ended
-    /// first; on the last line, with nothing below to join, a count past two takes each caret to its line's start and is
-    /// kept for . as asked, and any smaller count fails.</summary>
+    /// first; on the last line, with nothing below to join, a count past two takes each caret to its line's start (but
+    /// for such a J made again by . with no count) and is kept for . as asked, and any smaller count fails.</summary>
     private VimResult Joined(Command command, EditPlan? plan, TextSnapshot text, SelectionSet selections)
     {
         int asked = Math.Max(command.Count, 2);
@@ -294,14 +318,21 @@ public sealed partial class Vim
         {
             int first = text.GetLineFromOffset(selections.Primary.Caret);
             int joined = Math.Max(2, Math.Min(asked, VimMotions.LastLine(text, breakEnds) - first + 1));
+            if (replaying && lastChange is { } again)
+            {
+                // Made again with a count past the text's end, . keeps the lines it joined.
+                lastChange = again with { Count = joined < asked ? joined : again.Count, JoinedNothing = false };
+            }
             return Changed(joined < asked ? command with { Count = joined } : command, plan);
         }
         if (asked <= 2)
         {
             return VimResult.Held;
         }
+        bool stays = replaying && !replayingCounted && lastChange is { JoinedNothing: true };
         Remember(command);
-        return new VimResult(true, selections.With(s => Selection.At(VimMotions.LineOf(text, s.Caret).Start)));
+        lastChange = lastChange is null ? null : lastChange with { JoinedNothing = true };
+        return new VimResult(true, stays ? selections : selections.With(s => Selection.At(VimMotions.LineOf(text, s.Caret).Start)));
     }
 
     /// <summary>A change made, kept for . to make again; nothing changed where there is no plan.</summary>
@@ -329,7 +360,8 @@ public sealed partial class Vim
         });
         if (!any)
         {
-            return VimResult.Held;
+            // A $ cut short aims j and k at the line's end all the same.
+            return command.Name == "$" ? Aimed(selections, [.. Enumerable.Repeat(int.MaxValue, selections.Count)]) : VimResult.Held;
         }
         // $ aims j and k at each line's end, and | at the column it asked for, however short the line.
         VimResult result = command.Name switch
@@ -341,7 +373,7 @@ public sealed partial class Vim
         int from = selections.Primary.Caret;
         if (Jumping.Contains(command.Name) && moved.Primary.Caret != from)
         {
-            view.SetMark('\'', from);
+            view.SetMark('\'', from, text);
             result = result with { JumpedFrom = from };
         }
         return result;
@@ -374,11 +406,18 @@ public sealed partial class Vim
                 return new VimTarget(VimMotions.OffsetAtColumn(text, text.GetLineFromOffset(caret), n - 1, view.Indent.TabWidth), VimMotionKind.Exclusive);
             case "w" or "W":
                 // Under an operator, w from an empty last line takes nothing rather than fail.
-                return VimMotions.WordStart(text, caret, n, command.Name == "W", operating)
+                return VimMotions.WordStart(text, caret, n, command.Name == "W", operating, breakEnds)
                     ?? (operating && VimMotions.LineOf(text, caret) is { Length: 0 } empty && empty.Line == VimMotions.LastLine(text, breakEnds)
                         ? new VimTarget(caret, VimMotionKind.Exclusive) : null);
             case "b" or "B":
-                return VimMotions.WordBack(text, caret, n, command.Name == "B");
+                VimTarget? before = VimMotions.WordBack(text, caret, n, command.Name == "B", out bool startedOut);
+                if (operating && startedOut)
+                {
+                    // A count the text's empty first line cuts short fails the operator, the caret left where it ran out.
+                    ranOutAt = before?.Offset ?? caret;
+                    return null;
+                }
+                return before;
             case "e" or "E":
                 return VimMotions.WordEnd(text, caret, n, command.Name == "E", breakEnds, operating);
             case "ge" or "gE":
@@ -402,7 +441,8 @@ public sealed partial class Vim
                 }
                 // j and k keep the caret's column, the others go to the line's first non-blank.
                 return command.Name is "j" or "k"
-                    ? new VimTarget(VimMotions.OffsetAtColumn(text, line, CaretColumn(text, caret, view.Indent.TabWidth), view.Indent.TabWidth), VimMotionKind.Linewise)
+                    ? new VimTarget(VimMotions.OffsetAtColumn(text, line, operating && operatorAim is { } aim ? aim : CaretColumn(text, caret, view.Indent.TabWidth), view.Indent.TabWidth),
+                        VimMotionKind.Linewise)
                     : Line(text, line);
             case "gj" or "gk":
                 int row = view.RowsAway(text, caret, command.Name == "gj" ? n : -n);
@@ -488,6 +528,7 @@ public sealed partial class Vim
     private (VimSpan Span, int Landing, bool Inclusive)? SpanOf(Command command, string op, TextSnapshot text, int caret, IVimView view)
     {
         ranOutAt = null;
+        reachedPast = null;
         int n = Math.Max(command.Count, 1);
         if (command.Name == "line")
         {
@@ -498,8 +539,9 @@ public sealed partial class Vim
                 return null;
             }
             int last = (int)Math.Min(first + (long)n - 1, VimMotions.LastLine(text, breakEnds));
-            // A yank leaves the caret; a change of case over one line goes to its first non-blank, as Vim's do.
-            int landing = n == 1 && op != "y" ? Math.Min(caret, VimMotions.FirstNonBlank(text, first, breakEnds)) : caret;
+            // A yank leaves the caret, at a column j and k aim at short of the end; a change of case over one line goes to its first non-blank.
+            int landing = n == 1 && op != "y" ? Math.Min(caret, VimMotions.FirstNonBlank(text, first, breakEnds))
+                : op == "y" && operatorAim is { } aim and not int.MaxValue ? Settled(text, VimMotions.OffsetAtColumn(text, first, aim, view.Indent.TabWidth), breakEnds) : caret;
             return (new VimSpan(text.GetLineStart(first), text.GetLineStart(last), true), landing, false);
         }
         if (command.Name is "i" or "a")
@@ -515,7 +557,8 @@ public sealed partial class Vim
             int landing = words && found.Linewise
                 ? VimTextObjects.WordsStart(text, caret, n, command.Name == "i", command.Argument == "W", breakEnds) ?? found.Start
                 : found.Start;
-            return (taken, landing, words);
+            // Words that end before their last place take an empty line's place no more than any other exclusive end.
+            return (taken, landing, words && !VimTextObjects.WordsExclusive(text, caret, n, command.Name == "i", command.Argument == "W", breakEnds));
         }
         if (op == "c" && command.Name is "w" or "W" && caret < text.Length && !char.IsWhiteSpace(text[caret]))
         {
@@ -530,7 +573,8 @@ public sealed partial class Vim
                     end = VimMotions.WordEnd(text, end, 1, big, breakEnds)?.Offset ?? end;
                 }
             }
-            return (new VimSpan(caret, TextNavigation.NextGrapheme(text, end), false), caret, false);
+            // An end on an empty line takes nothing of it.
+            return (new VimSpan(caret, end < VimMotions.LineOf(text, end).End ? TextNavigation.NextGrapheme(text, end) : end, false), caret, false);
         }
         if (Target(command, text, caret, operating: true, view) is not { } target)
         {
@@ -555,6 +599,7 @@ public sealed partial class Vim
         if (target.Kind == VimMotionKind.Exclusive && stopLine > startLine && stop == text.GetLineStart(stopLine))
         {
             // An exclusive motion ending at a line's start ends at the line before; from the indent, it takes whole lines.
+            reachedPast = stopLine;
             if (VimMotions.InIndent(text, start))
             {
                 return (new VimSpan(text.GetLineStart(startLine), text.GetLineStart(stopLine - 1), true), start, false);

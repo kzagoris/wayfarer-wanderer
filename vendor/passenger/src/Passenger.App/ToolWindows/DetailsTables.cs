@@ -13,8 +13,8 @@ namespace Passenger.App.ToolWindows;
 /// click on a link in them lands however often what they show is read again.</summary>
 public class DetailsTables : DockPanel
 {
-    private readonly StackPanel sections = new() { Margin = new Thickness(8, 0, 8, 8) };
-    private readonly TextBlock said = new() { Classes = { StyleClasses.EmptyText } };
+    private readonly StackPanel sections = new() { Margin = new Thickness(Gaps.Normal, 0, Gaps.Normal, Gaps.Normal) };
+    private readonly EmptyState said = new();
 
     /// <summary>The tables a <see cref="Show"/> is making, and what they show in words; null outside one.</summary>
     private List<Control>? making;
@@ -80,19 +80,19 @@ public class DetailsTables : DockPanel
     public void Section(string title, IReadOnlyList<(string Name, Control Value)> rows)
     {
         words?.Append(title).Append('\u0001');
-        TextBlock heading = new() { Text = title, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 10, 0, 4) };
+        TextBlock heading = new() { Classes = { StyleClasses.PaneTitle }, Text = title, Margin = new Thickness(0, Gaps.Wide, 0, Gaps.Tight) };
         Grid table = new()
         {
             ColumnDefinitions = { new ColumnDefinition(GridLength.Auto) { SharedSizeGroup = "DetailsNames" }, new ColumnDefinition(GridLength.Star) },
-            Margin = new Thickness(8, 0),
+            Margin = new Thickness(Gaps.Normal, 0),
         };
         for (int i = 0; i < rows.Count; i++)
         {
             table.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
             TextBlock name = new()
             {
-                Text = rows[i].Name, Classes = { StyleClasses.Muted }, MaxWidth = namesMost, MinHeight = ListRow.Height, Margin = new Thickness(0, 0, 16, 0),
-                TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Top, Padding = new Thickness(0, 4),
+                Text = rows[i].Name, Classes = { StyleClasses.Muted }, MaxWidth = namesMost, MinHeight = ListRow.Height, Margin = new Thickness(0, 0, Gaps.Group, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Top, Padding = new Thickness(0, Gaps.Tight),
                 [Grid.RowProperty] = i,
             };
             ToolTip.SetTip(name, rows[i].Name);
@@ -103,7 +103,7 @@ public class DetailsTables : DockPanel
             table.Children.Add(name);
             table.Children.Add(value);
         }
-        Border framed = new() { Classes = { StyleClasses.Framed }, Padding = new Thickness(0, 2), Child = table };
+        Border framed = new() { Classes = { StyleClasses.Framed }, Padding = new Thickness(0, Gaps.Hair), Child = table };
         if (making is { } made)
         {
             made.Add(heading);
@@ -140,16 +140,15 @@ public class DetailsTables : DockPanel
         .OfType<string>());
 
     /// <summary>A value to read and copy, wrapped rather than cut; a program's words in the editor's font.</summary>
-    public static SelectableTextBlock Words(string text, bool code = false, string? brush = null)
+    public static SelectableWords Words(string text, bool code = false, string? brush = null)
     {
-        SelectableTextBlock words = new()
+        SelectableWords words = new()
         {
-            Text = text, TextWrapping = TextWrapping.Wrap, MinHeight = ListRow.Height, Padding = new Thickness(0, 4), VerticalAlignment = VerticalAlignment.Top,
+            Text = text, TextWrapping = TextWrapping.Wrap, MinHeight = ListRow.Height, Padding = new Thickness(0, Gaps.Tight), VerticalAlignment = VerticalAlignment.Top,
         };
         if (code)
         {
-            words.InCodeFont();
-            words.FontSize = 12;
+            words.Classes.Add(StyleClasses.Code);
         }
         if (brush is not null)
         {
@@ -174,7 +173,7 @@ public class DetailsTables : DockPanel
     /// <summary>A state in words beside its health's tag, as the lists show it.</summary>
     public static Control State(string state, string? health)
     {
-        StackPanel shown = new() { Orientation = Orientation.Horizontal, Spacing = 8, MinHeight = ListRow.Height };
+        StackPanel shown = new() { Orientation = Orientation.Horizontal, Spacing = Gaps.Normal, MinHeight = ListRow.Height };
         shown.Children.Add(new TextBlock { Text = state, VerticalAlignment = VerticalAlignment.Center });
         if (health is not null)
         {

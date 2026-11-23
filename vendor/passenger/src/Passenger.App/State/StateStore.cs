@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json.Nodes;
 using Passenger.App.CSharp;
 using Passenger.App.Debugging;
@@ -10,6 +8,7 @@ using Passenger.App.Settings;
 using Passenger.App.Updates;
 using Passenger.App.Welcome;
 using Passenger.App.Workspace;
+using Passenger.Core;
 
 namespace Passenger.App.State;
 
@@ -23,6 +22,9 @@ public sealed class StateStore
 {
     /// <summary>The settings' file at the store's top.</summary>
     public const string SettingsFile = "settings.json";
+
+    /// <summary>The file of the templates New Solution and New Project made something from lately (<see cref="Templates"/>).</summary>
+    public const string TemplatesFile = "recentTemplates.json";
 
     /// <summary>The stores open in this process by their folder, each shared by the windows keeping their state there. UI
     /// thread only.</summary>
@@ -48,6 +50,7 @@ public sealed class StateStore
         LiveTree = new(Path.Combine(root, "liveTree.json"));
         Dotnet = new(Path.Combine(root, "dotnet.json"));
         Trust = new(Path.Combine(root, "trust.json"));
+        Templates = new(Path.Combine(root, TemplatesFile));
         // Before this process writes any: a change is written a moment after it is made, and only through this store.
         UsedBefore = new[] { Path.Combine(root, SettingsFile), Layout.Path, Recent.Path, Updates.Path }.Any(File.Exists)
             || Directory.Exists(Path.Combine(root, "workspaces"));
@@ -66,22 +69,36 @@ public sealed class StateStore
 
     /// <summary>The state folder made the person's alone as Passenger starts (<see cref="Containers.OwnFiles.Folder"/>, one an
     /// earlier Passenger made put right), its logs with all they hold (<see cref="Containers.OwnFiles.Tree"/>): Local History
-    /// in it keeps copies of a folder's files, .env and appsettings among them, and the logs what programs said.</summary>
-    public static void Own()
+    /// in it keeps copies of a folder's files, .env and appsettings among them, and the logs what programs said. False where
+    /// it could not be, said on the standard error.</summary>
+    public static bool Own()
     {
         try
         {
             Containers.OwnFiles.Folder(DefaultRoot);
             Containers.OwnFiles.Tree(IdeLog.Folder);
+            return true;
         }
         catch (Exception refused) when (refused is IOException or UnauthorizedAccessException)
         {
-            Console.Error.WriteLine($"passenger: the state folder {DefaultRoot} could not be made the person's alone: {refused.Message}");
+            Console.Error.WriteLine($"passenger: the state folder {DefaultRoot}{(Named is null ? "" : $", which {Variable} names,")} could not be made the person's alone: {refused.Message}");
+            return false;
         }
     }
 
     /// <summary>The folder PASSENGER_SETTINGS names, or null where it names none.</summary>
     public static string? Named => Environment.GetEnvironmentVariable(Variable) is { Length: > 0 } folder ? folder : null;
+
+    /// <summary>Makes a folder PASSENGER_SETTINGS names by a relative path the one it names from the folder Passenger was
+    /// started in, before Passenger leaves that folder for the person's home: this process and every program it starts
+    /// (a terminal's shell, a Godot editor's addon, another Passenger) then take the same folder.</summary>
+    public static void NameWhole()
+    {
+        if (Named is { } named && !Path.IsPathFullyQualified(named))
+        {
+            OwnEnvironment.Set(Variable, Path.GetFullPath(named));
+        }
+    }
 
     public string Root { get; }
 
@@ -150,6 +167,9 @@ public sealed class StateStore
     /// <summary>The folders the person trusted, and those they opened without trusting.</summary>
     public StateDocument<TrustState> Trust { get; }
 
+    /// <summary>The templates New Solution and New Project made something from lately, which their lists show first.</summary>
+    public StateDocument<Passenger.App.Templates.RecentTemplatesState> Templates { get; }
+
     /// <summary>A folder's own documents, held for a window that has the folder open or is opening it until it lets them go
     /// (<see cref="LetGo"/>); every window holding the folder shares them.</summary>
     public ProjectState Hold(string folder)
@@ -195,6 +215,7 @@ public sealed class StateStore
         LiveTree.Flush();
         Dotnet.Flush();
         Trust.Flush();
+        Templates.Flush();
         foreach ((ProjectState documents, _) in projects.Values)
         {
             documents.Flush();
@@ -245,7 +266,7 @@ public sealed class ProjectState
     /// documents, and the profiler's snapshots of its programs, which a window keeps whether or not it keeps state.</summary>
     public static string FolderOf(string root, string folder)
     {
-        string hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(folder)))[..12];
+        string hash = FileNames.Hash(folder, 12);
         return Path.Combine(root, "workspaces", $"{Path.GetFileName(folder)}-{hash}");
     }
 

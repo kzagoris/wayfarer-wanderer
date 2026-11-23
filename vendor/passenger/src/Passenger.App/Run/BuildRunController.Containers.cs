@@ -242,7 +242,7 @@ public sealed partial class BuildRunController
             {
                 return Checkpoint(work, chosen.Name) is { } stopped ? Said(stopped) : built.Message;
             }
-            if (plan.Dotnet.FirstOrDefault(d => d.Starts && !File.Exists(Path.Combine(d.Output, d.Assembly + ".dll"))) is { } unbuilt)
+            if (plan.Running.FirstOrDefault(d => !File.Exists(Path.Combine(d.Output, d.Assembly + ".dll"))) is { } unbuilt)
             {
                 return Said($"Could not run {chosen.Name}: {unbuilt.Assembly}.dll has not been built in {unbuilt.Output}");
             }
@@ -314,6 +314,9 @@ public sealed partial class BuildRunController
             Certificate = certificate,
             Tools = session.ContainerTools,
         };
+        // Its services' programs name their images' paths, the workspace's files where copied, and addresses, reached where published.
+        parts.Views.Run.Links.Paths = () => run.Plan.Paths;
+        parts.Views.Run.Links.Reaching = run.ReachingAsync;
         run.Brought([.. holding.Select(h => ((IRunService)h.Service, h.How))]);
         run.ProblemFound += (_, found) =>
         {
@@ -391,8 +394,8 @@ public sealed partial class BuildRunController
             return following;
         }
         string what = ServicesStarted(chosen.Name, how, Plural.Listed([.. debugged.Select(s => s.Service)]));
-        parts.Say($"{what}{(how == RunStart.Run ? ":" : ";")} {Plural.Of(plan.Dotnet.Count(d => plan.Starts(d.Service)), ".NET service")} from Passenger's build"
-            + $"{(plan.Mode == ContainerMode.Images ? " images" : string.Empty)}, {Plural.Of(plan.Backing.Count, "other service")}; Stop takes them down"
+        parts.Say($"{what}{(how == RunStart.Run ? ":" : ";")} {Plural.Of(plan.Running.Count(), ".NET service")} from Passenger's build"
+            + $"{(plan.Mode == ContainerMode.Images ? " images" : string.Empty)}, {Plural.Of(plan.Backing.Count(plan.Touched.Contains), "other service")}; Stop takes them down"
             + (notes.Count > 0 ? $" ({string.Join("; ", notes)})" : string.Empty),
             // What dev-certs said of a certificate that did not come is in the Run window.
             unexported ? StatusPlace.Window(parts.Dock, ToolWindowIds.Run) : null);
@@ -400,8 +403,10 @@ public sealed partial class BuildRunController
         if (plan.BrowserUrl is not null && await run.BrowserUrlAsync(CancellationToken.None) is { } url)
         {
             run.Address = url;
-            parts.OpenBrowser(new LaunchPlan { Name = chosen.Name, Program = engine.Cli!, WorkingDirectory = plan.Folder, BrowserUrl = url, BrowserService = plan.LaunchService ?? chosen.Name },
-                session.Runner.Ended);
+            parts.OpenBrowser(new LaunchPlan
+            {
+                Name = chosen.Name, Program = engine.Cli!, WorkingDirectory = plan.Folder, BrowserUrl = url, BrowserService = plan.LaunchService ?? chosen.Name, BrowserLine = chosen.Browser,
+            }, session.Runner.Ended);
         }
         return null;
     }
@@ -640,7 +645,7 @@ public sealed partial class BuildRunController
         using (work)
         {
             using IDisposable held = BackgroundWork.Scope();
-            List<DotnetService> dotnet = [.. run.Plan.Dotnet.Where(d => d.Starts && run.Plan.Touched.Contains(d.Service))];
+            List<DotnetService> dotnet = [.. run.Plan.Running];
             List<string> others = [.. run.Plan.Touched.Where(s => dotnet.All(d => d.Service != s))];
             await EndSessionsAsync(run, dotnet);
             try

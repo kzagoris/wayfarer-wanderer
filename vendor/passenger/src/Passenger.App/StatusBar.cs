@@ -4,7 +4,9 @@ using Passenger.App.Docking;
 using Passenger.App.Run;
 using Passenger.App.ToolWindows;
 using Passenger.App.Workspace;
+using Passenger.Core;
 using Passenger.Editor;
+using Passenger.Lsp;
 using Passenger.Text;
 
 namespace Passenger.App;
@@ -31,8 +33,9 @@ public delegate void StatusSay(string said, StatusPlace? more = null);
 
 /// <summary>The window's status bar: what the last action came to (an error's or a warning's marked with its icon until
 /// something else is said, and a link to where it has more to see while it has a place, its whole text on hover), and
-/// the file shown's place (its path while nothing is said), caret, line separator, encoding, indent and language with
-/// the language server's state, each of the file's a widget a click acts on. It says what it is told; what an operation came to is the operation's own answer, never
+/// the file shown's place (its path while nothing is said), caret, line separator, encoding, indent, the context it is
+/// analysed in where it has several, and language with the language server's state, each of the file's a widget a click
+/// acts on. It says what it is told; what an operation came to is the operation's own answer, never
 /// read back from here. What it is told is heard through the window's <see cref="Announcer"/>, what it shows of its own
 /// accord (the file's path, Vim's command line, words put back) is not. A UI-thread object of the window.</summary>
 public sealed class StatusBar
@@ -51,6 +54,8 @@ public sealed class StatusBar
     private readonly TextBlock lineEnding;
     private readonly Button encoding;
     private readonly TextBlock encodingText;
+    private readonly Button framework;
+    private readonly TextBlock frameworkText;
     private readonly Announcer announcer;
 
     /// <summary>What was said through <see cref="Say(string, ProblemSeverity?, StatusPlace?, Urgency)"/>, with its mark and place;
@@ -61,7 +66,8 @@ public sealed class StatusBar
     private (OpenDocument? File, string? Folder)? shownFile;
 
     public StatusBar(Button message, TextBlock text, PathIcon icon, WorkingRing working, TextBlock vimMode, Button caretButton, TextBlock caret, Button indentButton,
-        TextBlock indent, TextBlock language, Button lineSeparator, TextBlock lineEnding, Button encoding, TextBlock encodingText, Announcer announcer)
+        TextBlock indent, TextBlock language, Button lineSeparator, TextBlock lineEnding, Button encoding, TextBlock encodingText, Button framework,
+        TextBlock frameworkText, Announcer announcer)
     {
         this.announcer = announcer;
         this.message = message;
@@ -78,6 +84,8 @@ public sealed class StatusBar
         this.lineEnding = lineEnding;
         this.encoding = encoding;
         this.encodingText = encodingText;
+        this.framework = framework;
+        this.frameworkText = frameworkText;
         Announcer.Live(text, Urgency.Polite);
         text.PropertyChanged += (_, e) =>
         {
@@ -213,6 +221,7 @@ public sealed class StatusBar
         indentButton.IsVisible = textual is not null;
         indent.Text = textual?.Indentation.Shown ?? "";
         ToolTip.SetTip(indentButton, textual?.Indentation.Tip(textual.Language.Name));
+        ShowContext(textual);
         ShowLanguage(languageLabel);
         ShowCaret(textual is null ? null : editor);
     }
@@ -232,6 +241,29 @@ public sealed class StatusBar
         ToolTip.SetTip(lineSeparator, active?.SeparatorTip);
         ToolTip.SetTip(encoding, active?.EncodingTip);
     }
+
+    /// <summary>The context a file in several of the server's projects is analysed in, which a click offers the others of:
+    /// the target framework alone (Roslyn names a multi-targeted project's "Lib (net10.0)") when they are one project's,
+    /// else the project's name too; nothing for a file in one.</summary>
+    private void ShowContext(OpenDocument? textual)
+    {
+        if (textual is not { ProjectContexts.Count: > 1, ProjectContext: { } chosen })
+        {
+            framework.IsVisible = false;
+            frameworkText.Text = string.Empty;
+            ToolTip.SetTip(framework, null);
+            return;
+        }
+        string shown = textual.ProjectContexts.Select(ProjectContext.ProjectOf).Distinct(StringComparer.Ordinal).Count() == 1
+            && ProjectContext.FrameworkOf(chosen) is { } only ? only : chosen;
+        framework.IsVisible = true;
+        frameworkText.Text = shown;
+        ToolTip.SetTip(framework, $"{textual.Name} is analysed as {chosen}: click to choose another target framework");
+        Avalonia.Automation.AutomationProperties.SetName(framework, $"Target framework: {shown}");
+    }
+
+    /// <summary>The context the file shown is analysed in, as its widget says it; null while it shows none.</summary>
+    public string? Context => framework.IsVisible ? frameworkText.Text : null;
 
     /// <summary>The file's language, with the language server's state or work beside it as the window words it.</summary>
     public void ShowLanguage(string label) => language.Text = label;
@@ -257,14 +289,14 @@ public sealed class StatusBar
         }
         shownCaret = (at, carets, selected);
         string position = $"{at.Line + 1}:{at.Column + 1}";
-        caret.Text = carets > 1 ? $"{carets} carets" : selected > 0 ? $"{position} ({selected} chars)" : position;
+        caret.Text = carets > 1 ? $"{Numbers.Said(carets)} carets" : selected > 0 ? $"{position} ({Numbers.Said(selected)} chars)" : position;
     }
 
     /// <summary>Vim's mode in the editor shown, with the keys of a command typed so far ("NORMAL 2d"); nothing with Vim mode
     /// off. Worded again only when either changes.</summary>
     private void ShowVimMode(CodeEditor? editor)
     {
-        ShowCommandLine(editor?.VimCommandLine);
+        ShowCommandLine(editor);
         (VimMode? Mode, string Pending) now = (editor?.VimModeShown, editor?.VimPending ?? string.Empty);
         if (now == shownMode)
         {
@@ -285,11 +317,12 @@ public sealed class StatusBar
         vimMode.Text = now.Pending.Length > 0 ? $"{words} {now.Pending}" : words;
     }
 
-    /// <summary>Vim mode's command line in the place of what the status bar says, what it said put back once the line
-    /// closes unless the command said something of its own. A line longer than the bar is cut at its start, so what is
-    /// being typed stays in sight.</summary>
-    private void ShowCommandLine(string? line)
+    /// <summary>Vim mode's command line in the editor shown in the place of what the status bar says, what it said put back
+    /// once the line closes unless the command said something of its own. A line longer than the bar is cut at its start,
+    /// so what is being typed stays in sight.</summary>
+    public void ShowCommandLine(CodeEditor? editor)
     {
+        string? line = editor?.VimCommandLine;
         if (line == shownLine)
         {
             return;

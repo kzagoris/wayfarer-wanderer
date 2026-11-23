@@ -3,6 +3,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using Passenger.App.LiveTree;
 using Passenger.App.Run;
+using Passenger.Core;
 using Passenger.Editor;
 
 namespace Passenger.App.ToolWindows;
@@ -304,7 +305,7 @@ public sealed class ProblemsModel
         };
         // A filter counts what it shows.
         count = tab == ProblemsTab.Solution ? solutionShown : CountShown(ProblemsOf(tab), count);
-        return count == 0 ? title : $"{title}  {count}";
+        return count == 0 ? title : $"{title}  {Numbers.Said(count)}";
     }
 
     /// <summary>Whether a tab's button shows: the Solution tab with solution-wide analysis on, Hot Reload's after one, the
@@ -319,14 +320,13 @@ public sealed class ProblemsModel
         _ => true,
     };
 
-    /// <summary>Whether a problem of the tab shown has fixes to offer: none in Toolset, and a failed binding's are the nearest
-    /// members of its source's type, when it has any.</summary>
-    internal bool HasFixes(Problem problem) => problem.Path is not null && Shown switch
-    {
-        ProblemsTab.Toolset => false,
-        ProblemsTab.Bindings => bindings.Any(b => b.Problem == problem && b.Failure.Nearest.Count > 0),
-        _ => true,
-    };
+    /// <summary>Why a problem of the tab shown has no fixes to offer, null where it has: none in Toolset, and a failed
+    /// binding's are the nearest members of its source's type, when it has any.</summary>
+    internal string? WhyNotFix(Problem problem) =>
+        problem.Path is null ? Refusals.ProblemNamesNoFile
+        : Shown == ProblemsTab.Toolset ? Refusals.ToolsetUnfixed
+        : Shown == ProblemsTab.Bindings && !bindings.Any(b => b.Problem == problem && b.Failure.Nearest.Count > 0) ? Refusals.BindingUnfixed
+        : null;
 
     /// <summary>A problem gone to, as a double-click, Enter or Go to does.</summary>
     internal void GoTo(Problem problem) => Chosen?.Invoke(this, problem);

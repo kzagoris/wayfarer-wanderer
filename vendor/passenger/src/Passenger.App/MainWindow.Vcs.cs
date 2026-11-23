@@ -97,12 +97,15 @@ public partial class MainWindow
         // Each built as it is first shown or asked for, over the session's Git then.
         Dock.Add(new Docking.ToolWindow(ToolWindowIds.Commit, "Commit", IconKeys.Commit, MakeCommit, Docking.ToolAnchor.LeftTop)
         {
+            // Outside a repository it offers to create one, as Git does.
+            Serves = ToolWindowServes.EveryFolder,
             Action = AppActions.ShowCommit,
             ActionTitle = "Commit Tool Window",
             Menus = [new MenuPlace("Git", 3, 0)],
         });
         Dock.Add(new Docking.ToolWindow(ToolWindowIds.Git, "Git", IconKeys.Branch, MakeGit, Docking.ToolAnchor.BottomLeft)
         {
+            Serves = ToolWindowServes.EveryFolder,
             Action = AppActions.ShowGit,
             Menus = [new MenuPlace("Git", 3, 1)],
             Tools = () => gitView?.Tabs,
@@ -132,6 +135,7 @@ public partial class MainWindow
         view.IgnoreRequested += (_, path) => IdeErrors.Observe(IgnoreAsync(path));
         view.ResolveRequested += (_, _) => ShowConflicts();
         view.MergeRequested += (_, path) => IdeErrors.Observe(MergeAsync(path));
+        view.StageRequested += (_, asked) => IdeErrors.Observe(StageFilesAsync(asked.Changes, asked.Stage));
         view.Confirm = (title, text, yes) => Confirm(title, text, yes);
         return view;
     }
@@ -144,7 +148,8 @@ public partial class MainWindow
         view.DiffRequested += (_, chosen) => IdeErrors.Observe(ShowCommitDiffAsync(chosen.Commit, chosen.File));
         view.CompareRequested += (_, chosen) => IdeErrors.Observe(CompareWithAsync(chosen.Local, chosen.Commit.Hash, chosen.Commit.Short, chosen.File.Path));
         view.WorkingTreeDiffRequested += (_, chosen) =>
-            IdeErrors.Observe(CompareWithAsync(chosen.File.Path, chosen.Branch.Ref.FullName, chosen.Branch.Name, chosen.File.From ?? chosen.File.Path));
+            IdeErrors.Observe(CompareWithAsync(chosen.File.Path, chosen.Branch.Ref.FullName, chosen.Branch.Name, chosen.File.From ?? chosen.File.Path,
+                added: chosen.File.Kind == ChangeKind.Added));
         view.OpenRequested += (_, path) => OpenFile(path);
         view.ActionRequested += (_, action) => Request(action);
         view.NewBranchRequested += (_, commit) =>
@@ -167,11 +172,11 @@ public partial class MainWindow
         gitView?.Bind(vcs);
         vcs.SaveFirst = Editors.SaveAllLandedAsync;
         vcs.MoveToTrash = TrashForGitAsync;
-        vcs.SignOffChanged += (_, _) =>
+        vcs.KeptChanged += (_, _) =>
         {
             if (session == next)
             {
-                session.State?.Commit.Set(new CommitState { SignOff = vcs.SignOff });
+                session.State?.Commit.Set(new CommitState { SignOff = vcs.SignOff, GroupsByDirectory = vcs.GroupsByDirectory });
             }
         };
         vcs.ChooseRemote = ChooseRemoteAsync;
@@ -203,35 +208,41 @@ public partial class MainWindow
     private void OnVcsChanged()
     {
         VcsController vcs = session.Vcs;
-        BranchName.Text = vcs.Repository is null ? "Version control" : vcs.Branch ?? "Detached HEAD";
+        BranchName.Text = vcs.Repository is null ? "Version control" : BranchWords;
         ToolTip.SetTip(BranchButton, vcs.Repository is null ? vcs.Refused ?? "Version control" : $"Git branch: {BranchName.Text}");
         Explorer.Tree.SetChanges(vcs.Changes.Where(c => c.Kind is not ChangeKind.Deleted).ToDictionary(c => c.Path, c => c.Kind));
         ShowGitStatus();
         FollowConflicts();
     }
 
+    /// <summary>What a working tree's branch is called where the window shows it (the toolbar's Git widget, the status bar).</summary>
+    private string BranchWords => session.Vcs.Branch ?? "Detached HEAD";
+
     /// <summary>The branch popup: new branch, commit, push, then the local branches (the current, favourites and last
     /// committed to, at most <see cref="BranchesListed"/>), each with its own menu, and More Branches… for the rest.</summary>
-    private void OnBranchClicked(object? sender, RoutedEventArgs e) => ShowBranches();
+    private void OnBranchClicked(object? sender, RoutedEventArgs e) => ShowBranches(BranchButton);
 
-    private void ShowBranches()
+    /// <summary>The branch popup from the status bar's branch, as from the toolbar's Git widget.</summary>
+    private void OnGitBranchClicked(object? sender, RoutedEventArgs e) => ShowBranches(GitBranchButton);
+
+    /// <summary>The branch popup, opened from <paramref name="widget"/>: the toolbar's Git widget or the status bar's branch.</summary>
+    private void ShowBranches(Button widget)
     {
-        IdeErrors.Observe(ShowBranchesAsync());
+        IdeErrors.Observe(ShowBranchesAsync(widget));
     }
 
-    private async Task ShowBranchesAsync()
+    private async Task ShowBranchesAsync(Button widget)
     {
-        ContextMenu menu = new();
-        MenuItem Item(string header, Action run)
+        using Working? listing = BeginWork(AppActions.Branches, "Reading the branches…");
+        if (listing is null)
         {
-            MenuItem item = new() { Header = header };
-            item.Click += (_, _) => run();
-            return item;
+            return;
         }
+        ContextMenu menu = new();
         ActionContext context = actions!.Context();
         MenuItem Action(string id)
         {
-            MenuItem item = Item(actions[id]!.Title, () => Request(id, context));
+            MenuItem item = ToolWindows.ListMenus.Item(actions[id]!.Title, () => Request(id, context));
             // In the menu's column of keys, as every menu's are, not run on after the title.
             actions.ShowKeys(item, id);
             return item;
@@ -242,7 +253,7 @@ public partial class MainWindow
             {
                 // Git's reason names what lets it in, or installs it; a new repository in the folder would not.
                 status.Text = refused;
-                menu.Items.Add(new MenuItem { Header = session.Vcs.GitMissing ? "Git is not installed" : "Git refuses this folder's repository", IsEnabled = false });
+                menu.Items.Add(ToolWindows.ListMenus.Notice(session.Vcs.GitMissing ? "Git is not installed" : "Git refuses this folder's repository"));
             }
             else if (Folder is not null)
             {
@@ -250,20 +261,20 @@ public partial class MainWindow
             }
             else
             {
-                menu.Items.Add(new MenuItem { Header = Refusals.NoFolder, IsEnabled = false });
+                menu.Items.Add(ToolWindows.ListMenus.Notice(Refusals.NoFolder));
             }
-            Open(menu, BranchButton);
+            Open(menu, widget);
             return;
         }
         menu.Items.Add(Action(AppActions.UpdateProject));
         menu.Items.Add(Action(AppActions.Fetch));
-        menu.Items.Add(Item("New Branch…", ShowNewBranch));
+        menu.Items.Add(ToolWindows.ListMenus.Item("New Branch…", ShowNewBranch));
         menu.Items.Add(Action(AppActions.Commit));
         menu.Items.Add(Action(AppActions.Push));
         menu.Items.Add(Action(AppActions.Stash));
         menu.Items.Add(Action(AppActions.Unstash));
         menu.Items.Add(new Separator());
-        menu.Items.Add(new MenuItem { Header = "Local", IsEnabled = false });
+        menu.Items.Add(ToolWindows.ListMenus.Heading("Local"));
         IReadOnlyList<BranchInfo> local = await session.Vcs.LocalBranchesAsync();
         // Each branch opens its own menu (Checkout, Merge into Current and the rest), so only Checkout checks one out.
         foreach (BranchInfo branch in Listed(local, gitView?.Log.Branches?.Favorites ?? branchFavorites))
@@ -272,9 +283,9 @@ public partial class MainWindow
         }
         if (local.Count > BranchesListed)
         {
-            menu.Items.Add(Item("More Branches…", ShowAllBranches));
+            menu.Items.Add(ToolWindows.ListMenus.Item("More Branches…", ShowAllBranches));
         }
-        Open(menu, BranchButton);
+        Open(menu, widget);
     }
 
     /// <summary>How many local branches the branch popup lists at most, whatever the repository holds.</summary>
@@ -415,6 +426,11 @@ public partial class MainWindow
             status.Text = session.Vcs.NoRepository;
             return null;
         }
+        using Working? reading = BeginWork(AppActions.Unstash, "Reading the stashes…");
+        if (reading is null)
+        {
+            return null;
+        }
         UnstashPopup popup = new(await session.Vcs.StashesAsync(), async (stash, pop) => (await session.Vcs.UnstashAsync(stash, pop)).Succeeded,
             async stash => (await session.Vcs.DropStashAsync(stash)).Succeeded, (title, text, yes) => Confirm(title, text, yes));
         popup.Done += (_, _) =>
@@ -463,6 +479,7 @@ public partial class MainWindow
         }
         OpenDocument? open = Editors.Find(path) is { HoldsText: true } held ? held : null;
         Task<string?> encoding = session.Vcs.EncodingChangeAsync(path);
+        Task<bool> breaksAlike = session.Vcs.BreaksStoredAlikeAsync(path);
         TextDocument mine = open?.Text ?? new TextDocument(EditorArea.ReadText(path) ?? string.Empty);
         // An open file's differences are its change bars' own when they are of its text now.
         if (open is null || await session.Vcs.DiffAsync(open) is not { } diff)
@@ -471,6 +488,7 @@ public partial class MainWindow
             TextSnapshot text = mine.Snapshot;
             diff = await BackgroundWork.Run(() => FileDiff.Compare(head, text));
         }
+        diff = diff.StoringBreaksAlike(await breaksAlike);
         string[] besides = [.. new[] { await encoding, mode?.Said }.OfType<string>()];
         return LocalDiff(path, open, mine, diff, "HEAD", note: besides.Length == 0 ? null : string.Join("; ", besides), again: () => ShowDiffAsync(path));
     }
@@ -497,9 +515,18 @@ public partial class MainWindow
         {
             DiffView view = Diffs.ForFile(other is null ? Path.GetFileName(path) : title, diff, mine, open, titles, other ?? path, path);
             view.Note = note;
+            if (open is null)
+            {
+                view.PutsBackOnDisk = (compared, edit, what) => PutBackOnDiskAsync(path, version, compared, edit, what);
+                FollowDisk(path, view);
+            }
             if (version == "HEAD" && other is null && note is null)
             {
                 CommitView.ConfigureDiff(path, view);
+            }
+            if (version == "HEAD" && other is null)
+            {
+                StageIn(path, view);
             }
             return view;
         })
@@ -615,8 +642,36 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>A diff's view as its host shows it: its Jump to Source opens the file here (<see cref="JumpToSource"/>).</summary>
-    private void WireDiff(DiffView view, IDiffHost host) => view.SourceRequested += (_, _) => JumpToSource(view, host);
+    /// <summary>A diff's view as its host shows it: its Jump to Source opens the file here (<see cref="JumpToSource"/>), and
+    /// its side that is the open file's own text shows the card of what the pointer rests on and Go to Declaration's reach,
+    /// as the file's editor does, while its tab is the active group's or in its own window, a gesture's action there run
+    /// from the file (<see cref="FromDiff"/>).</summary>
+    private void WireDiff(DiffView view, IDiffHost host)
+    {
+        view.SourceRequested += (_, _) => JumpToSource(view, host);
+        if (view.IsEditable && host.Shown.File is { } file && view.Right.Document == file.Text)
+        {
+            assist.HoverIn(view.Right, file, host is DiffWindow ? () => true : () => Editors.ActiveGroup.Diff == view, (host as DiffWindow)?.Assist);
+            view.Right.ActionRequested += (_, action) =>
+            {
+                view.Right.Focus();
+                Request(action);
+            };
+        }
+    }
+
+    /// <summary>Go to Declaration asked on a diff's side that is the open file's own text, by its keys or gesture: the file is
+    /// shown at the diff's caret (Jump to Source), where it goes from, as from the file's editor, Back returning to the diff;
+    /// null where no such side has the keys.</summary>
+    private ActionContext? FromDiff(string action, ActionContext context)
+    {
+        if (action != AppActions.GoToDeclaration || DiffWithKeys(context) is not { IsEditable: true } diff || !diff.Right.IsKeyboardFocusWithin)
+        {
+            return null;
+        }
+        diff.AskForSource();
+        return Editors.Active?.Text == diff.Right.Document ? actions!.Context() : null;
+    }
 
     /// <summary>The diffs open go where Settings now opens them: each window's into a tab, or each tab's into a window,
     /// the file each edits held open throughout.</summary>
@@ -756,9 +811,8 @@ public partial class MainWindow
         {
             menu.Items.Add(new Separator());
         }
-        MenuItem annotate = new() { Header = session.Vcs.IsAnnotated(document) ? "Close Annotations" : "Annotate with Git Blame", IsEnabled = session.Vcs.Repository is not null };
-        annotate.Click += (_, _) => IdeErrors.Observe(ToggleAnnotationsAsync(document));
-        menu.Items.Add(annotate);
+        menu.Items.Add(ToolWindows.ListMenus.Item(session.Vcs.IsAnnotated(document) ? "Close Annotations" : "Annotate with Git Blame",
+            () => IdeErrors.Observe(ToggleAnnotationsAsync(document)), session.Vcs.Repository is null ? Refusals.NoRepository : null));
         Open(menu, editor);
     }
 
@@ -777,12 +831,31 @@ public partial class MainWindow
         Add(AppActions.Push, "Push…", context => IdeErrors.Observe(session.Vcs.PushAsync()), new("Git", 0, 1), remote: true);
         Add(AppActions.UpdateProject, "Update Project…", context => IdeErrors.Observe(session.Vcs.UpdateAsync()), new("Git", 0, 2), remote: true);
         Add(AppActions.Fetch, "Fetch", context => IdeErrors.Observe(session.Vcs.FetchAsync()), new("Git", 0, 3), remote: true);
-        Add(AppActions.Branches, "Branches…", _ => ShowBranches(), new("Git", 0, 4));
+        Add(AppActions.Branches, "Branches…", _ => ShowBranches(BranchButton), new("Git", 0, 4));
         Add(AppActions.Stash, "Stash Changes…", _ => ShowStash(), new("Git", 1, 0), whyNot: () => session.Vcs.WhyNotStash);
         Add(AppActions.Unstash, "Unstash Changes…", context => IdeErrors.Observe(ShowUnstashAsync()), new("Git", 1, 1));
         Add(AppActions.ShowDiff, "Show Diff", context => IdeErrors.Observe(ShowDiffAsync(context.File!.Path)), new("Git", 2, 0), onFile: true);
         Add(AppActions.Annotate, "Annotate with Git Blame", context => IdeErrors.Observe(ToggleAnnotationsAsync(context.File!)), new("Git", 2, 1), onFile: true);
-        Add(AppActions.RollbackLines, "Rollback Lines", context => IdeErrors.Observe(RollbackLinesAsync()), new("Git", 2, 2), onFile: true);
+        // In a diff, the change at the caret of the side with the keys, as its band's arrow puts it back.
+        actions!.Add(new IdeAction(AppActions.RollbackLines, "Rollback Lines", "Git", context => IdeErrors.Observe(DiffWithKeys(context) is { } diff
+            ? RollingBackAsync(diff.RollBackAtCaretAsync)
+            : RollbackLinesAsync()))
+        {
+            WhyNot = context => DiffWithKeys(context) is { } diff ? diff.WhyNotRollBack : NeedsFolder(context) ?? (session.Vcs.Repository is null ? session.Vcs.NoRepository : Refusals.NeedsFile(context)),
+            Menus = [new MenuPlace("Git", 2, 2)],
+        });
+        // In a diff, the changes at its carets; in the Commit window, the files chosen there.
+        actions!.Add(new IdeAction(AppActions.Stage, "Stage", "Git", context => Staging(context, stage: true))
+        {
+            WhyNot = context => NeedsFolder(context) ?? WhyNotStaging(context, stage: true),
+            Menus = [new MenuPlace("Git", 2, 3)],
+        });
+        actions.Add(new IdeAction(AppActions.Unstage, "Unstage", "Git", context => Staging(context, stage: false))
+        {
+            WhyNot = context => NeedsFolder(context) ?? WhyNotStaging(context, stage: false),
+            Menus = [new MenuPlace("Git", 2, 4)],
+            KeysOf = () => AppActions.Stage,
+        });
         Add(AppActions.NextChange, "Next Change", _ => GoToChange(1), new("Navigate", 3, 2), onFile: true);
         Add(AppActions.PreviousChange, "Previous Change", _ => GoToChange(-1), new("Navigate", 3, 3), onFile: true);
         // A diff's own, whatever it compares: how its differences are highlighted.
@@ -807,6 +880,12 @@ public partial class MainWindow
         });
         // The Commit and Git windows' Refresh: the working tree's changes, and the log shown, read again.
         actions.Add(new IdeAction(AppActions.CommitRefresh, "Refresh Changes", "Git", _ => IdeErrors.Observe(session.Vcs.RefreshAsync())) { WhyNot = NeedsRepository });
+        // The Commit window's Group By › Directory: its files under their folders, else listed flat.
+        actions.Add(new IdeAction(AppActions.GroupByDirectory, "Group by Directory", "Git", _ => session.Vcs.GroupsByDirectory = !session.Vcs.GroupsByDirectory)
+        {
+            WhyNot = NeedsRepository,
+            IsChecked = _ => session.Vcs.GroupsByDirectory,
+        });
         actions.Add(new IdeAction(AppActions.GitLogRefresh, "Refresh Git Log", "Git", _ =>
         {
             session.Vcs.Signatures.Forget();
@@ -834,12 +913,20 @@ public partial class MainWindow
     private async Task ShowCommitSigningAsync()
     {
         VcsController vcs = session.Vcs;
+        using Working? reading = BeginWork(AppActions.CommitSigning, "Reading how commits are signed…");
+        if (reading is null)
+        {
+            return;
+        }
         SigningSetup setup = await vcs.SigningAsync();
         CommitSigningDialog dialog = new(setup, vcs.Repository, VcsController.GlobalAllowedSigners);
         CommitSigning = dialog;
         try
         {
-            await dialog.ShowDialog(this);
+            Task asked = dialog.ShowDialog(this);
+            // The answer is the person's, however long they take: the work ends as the dialog asks.
+            reading.Dispose();
+            await asked;
         }
         finally
         {
@@ -872,7 +959,7 @@ public partial class MainWindow
             return;
         }
         // The files are listed, so what goes back is seen before it does, and every file a rollback deletes is said to be.
-        string what = changes.Count == 1 ? changes[0].Name : $"these {changes.Count} files";
+        string what = changes.Count == 1 ? changes[0].Name : $"these {Numbers.Said(changes.Count)} files";
         string kept = changes.Any(c => c.Kind is ChangeKind.Added) ? " Files added to Git stay on disk, unversioned." : string.Empty;
         bool unversioned = changes.Any(c => c.Kind is ChangeKind.Unversioned);
         bool tracked = changes.Any(c => c.Kind is not (ChangeKind.Unversioned or ChangeKind.Added));
@@ -928,13 +1015,24 @@ public partial class MainWindow
         Editors.CodeEditor.GoTo(new TextPosition(at, 0));
     }
 
-    /// <summary>Rollback Lines: the change under the caret goes back to what the last commit has there.</summary>
-    private async Task RollbackLinesAsync()
+    /// <summary>Rollback Lines: the change under the caret goes back to what the last commit has there, said once done.</summary>
+    private Task RollbackLinesAsync() => RollingBackAsync(RolledBackLinesAsync);
+
+    /// <summary>Rollback Lines' work, in an editor or a diff, held from its first moment, what it came to said in the status
+    /// bar and told.</summary>
+    private Task RollingBackAsync(Func<Task<(bool RolledBack, string Said)>> rollBack) =>
+        WorkingAsync(AppActions.RollbackLines, "Rolling back the change at the caret…", async () =>
+        {
+            (bool rolledBack, string said) = await rollBack();
+            status.Text = said;
+            return (rolledBack, said);
+        });
+
+    private async Task<(bool RolledBack, string Said)> RolledBackLinesAsync()
     {
         if (Editors.Active is not { } document)
         {
-            status.Text = "No change here to roll back";
-            return;
+            return (false, DiffView.NoChangeHere);
         }
         FileDiff? diff;
         using (BackgroundWork.Scope())
@@ -948,14 +1046,170 @@ public partial class MainWindow
         }
         if (Editors.Active != document)
         {
-            return;
+            return (false, $"{document.Name} is no longer shown");
         }
         if (diff?.HunkAt(Editors.CodeEditor.CaretPosition.Line) is not { } hunk)
         {
-            status.Text = "No change here to roll back";
-            return;
+            return (false, DiffView.NoChangeHere);
         }
         Editors.CodeEditor.ApplyEdits([diff.Restore(hunk)]);
+        return (true, $"Rolled back the change at line {hunk.NewStart + 1} of {document.Name}");
+    }
+
+    /// <summary>A diff's change put back in a file not open (<see cref="DiffView.PutsBackOnDisk"/>): written as a save writes
+    /// it, keeping its encoding and line breaks, as one command of global Undo, unless the file changed on disk since its
+    /// diff read it or was opened since. Null once written, else why not.</summary>
+    private Task<string?> PutBackOnDiskAsync(string path, string version, TextSnapshot compared, TextEdit edit, string what) =>
+        ChangeFileAsync($"Roll back {what} of {Path.GetFileName(path)} to {version}", [path], () =>
+        {
+            if (Editors.Find(path) is not null)
+            {
+                return $"{Path.GetFileName(path)} was opened since its diff was shown: roll the change back there";
+            }
+            if (FileText.Load(path) is not { } file || file.Text != compared.ToString())
+            {
+                return $"{Path.GetFileName(path)} changed on disk since its diff read it: roll the change back again";
+            }
+            FileText.SaveOver(path, file, string.Concat(file.Text.AsSpan(0, edit.Start), edit.Text, file.Text.AsSpan(edit.Start + edit.Length)));
+            return null;
+        });
+
+    /// <summary>A diff whose file's side is a copy of a file not open takes the file's text again from disk whenever git's
+    /// status is read (after a rollback written there, its Undo, another program's write), read off the window's thread.</summary>
+    private void FollowDisk(string path, DiffView view)
+    {
+        VcsController vcs = session.Vcs;
+        void Follow(object? sender, EventArgs e) => IdeErrors.Observe(FollowDiskAsync());
+        async Task FollowDiskAsync() => view.FollowDisk(await BackgroundWork.Run(() => EditorArea.ReadText(path)));
+        view.AttachedToVisualTree += (_, _) => vcs.Changed += Follow;
+        view.DetachedFromVisualTree += (_, _) => vcs.Changed -= Follow;
+    }
+
+    /// <summary>A diff of a changed text file against the last commit stages its changes into git's index: a change's own
+    /// button and Stage's keys turn as the index holds it, read again whenever the status is.</summary>
+    private void StageIn(string path, DiffView view)
+    {
+        VcsController vcs = session.Vcs;
+        if (vcs.Changes.FirstOrDefault(c => PathNames.Same(c.Path, path)) is not { Kind: ChangeKind.Modified or ChangeKind.Renamed, Submodule: SubmoduleChange.None })
+        {
+            return;
+        }
+        view.StageWith(diff => HeldInIndexAsync(vcs, path, diff));
+        view.StageRequested += (_, asked) => IdeErrors.Observe(StageChangesAsync(view, path, asked.Changes, asked.Stage));
+        void Follow(object? sender, EventArgs e) => view.RefreshStaged();
+        view.AttachedToVisualTree += (_, _) => vcs.Changed += Follow;
+        view.DetachedFromVisualTree += (_, _) => vcs.Changed -= Follow;
+    }
+
+    /// <summary>Which changes of a file's diff git's index holds whole, its text there read in the file's encoding; null
+    /// where it holds no text of it.</summary>
+    private static async Task<bool[]?> HeldInIndexAsync(VcsController vcs, string path, FileDiff diff)
+    {
+        if (await vcs.IndexTextAsync(path) is not { } index)
+        {
+            return null;
+        }
+        TextSnapshot text = diff.Text;
+        bool alike = diff.BreaksStoredAlike;
+        return await BackgroundWork.Run(() => diff.HeldIn(FileDiff.Compare(index, text).StoringBreaksAlike(alike)));
+    }
+
+    /// <summary>Stage or Unstage: in a diff that stages, the changes at its carets; in the Commit window, the files chosen
+    /// there, said once done.</summary>
+    private void Staging(ActionContext context, bool stage)
+    {
+        if (DiffWithKeys(context) is { } diff)
+        {
+            if (diff.StageAtCarets(stage) is { } refused)
+            {
+                status.Text = refused;
+            }
+            return;
+        }
+        IdeErrors.Observe(StageFilesAsync(CommitView.SelectedChanges, stage));
+    }
+
+    /// <summary>Why Stage (or Unstage) can't run: no diff that stages nor the Commit window has the keys, or nothing chosen
+    /// there can be.</summary>
+    private string? WhyNotStaging(ActionContext context, bool stage) =>
+        DiffWithKeys(context) is { } diff ? diff.Stages ? null : "Only a diff of the working tree against the last commit stages its changes"
+        : context.ToolWindow?.Id == ToolWindowIds.Commit && commitView is { } commit ? commit.WhyNotStage(commit.SelectedChanges, stage)
+        : $"No diff or Commit window has the keys to {(stage ? "stage" : "unstage")} what they show";
+
+    /// <summary>Stage's keys where what they act on is staged whole already (the changes at a diff's carets, the files chosen
+    /// in the Commit window) run Unstage, as the change's own button turns.</summary>
+    private string ByPlace(string action, ActionContext context) =>
+        action == AppActions.Stage && windowKeys.Pressing is not null
+            && (DiffWithKeys(context) is { Stages: true } diff ? diff.ChangesAtCarets() is { Count: > 0 } changes && changes.All(c => diff.HeldAt(diff.Hunks.ToList().IndexOf(c)) == true)
+                : context.ToolWindow?.Id == ToolWindowIds.Commit && commitView is { SelectedStaged: true })
+            ? AppActions.Unstage : action;
+
+    /// <summary>The Commit window's Undo and Redo take back or make again the last command, a stage or unstage among them, as
+    /// the Explorer's do.</summary>
+    private bool CommitTakes(string action, object? focused) =>
+        action is EditorActions.Undo or EditorActions.Redo && commitView is { } commit && focused is Visual inside && commit.IsVisualAncestorOf(inside)
+        && UndoCommand(action == EditorActions.Redo, null);
+
+    /// <summary>Stages or unstages files whole, from the Commit window, one command of global Undo where git's index changed.</summary>
+    private async Task StageFilesAsync(IReadOnlyList<FileChange> changes, bool stage)
+    {
+        using Working? work = BeginWork(stage ? AppActions.Stage : AppActions.Unstage, stage ? "Staging…" : "Unstaging…");
+        if (work is null)
+        {
+            return;
+        }
+        if (session.Vcs.WhyNotStage(changes) is { } refused)
+        {
+            work.Tell(false, status.Text = refused);
+            return;
+        }
+        string[] paths = [.. changes.SelectMany(c => c.From is { } from ? new[] { c.Path, from } : [c.Path])];
+        VcsOutcome outcome = await IndexChangedAsync($"{(stage ? "Stage" : "Unstage")} {Plural.Listed([.. changes.Select(c => c.Name)])}", paths,
+            () => session.Vcs.StageAsync(changes, stage));
+        work.Tell(outcome.Succeeded, outcome.Message);
+    }
+
+    /// <summary>Stages or unstages some of a file's changes from its diff, one command of global Undo where git's index changed.</summary>
+    private async Task StageChangesAsync(DiffView view, string path, IReadOnlyList<DiffHunk> changes, bool stage)
+    {
+        using Working? work = BeginWork(stage ? AppActions.Stage : AppActions.Unstage, stage ? "Staging…" : "Unstaging…");
+        if (work is null)
+        {
+            return;
+        }
+        if (session.Vcs.Changes.FirstOrDefault(c => PathNames.Same(c.Path, path)) is not { } change)
+        {
+            work.Tell(false, status.Text = $"{Path.GetFileName(path)} has no change to {(stage ? "stage" : "unstage")}");
+            return;
+        }
+        FileDiff diff = view.Compared;
+        string[] paths = change.From is { } from ? [path, from] : [path];
+        VcsOutcome outcome = await IndexChangedAsync($"{(stage ? "Stage" : "Unstage")} {VcsController.Said(diff, changes)} of {change.Name}", paths,
+            () => stage ? session.Vcs.StageChangesAsync(path, new PartialCommit(diff, changes, change.From)) : session.Vcs.UnstageChangesAsync(change, diff, changes));
+        work.Tell(outcome.Succeeded, outcome.Message);
+        view.RefreshStaged();
+    }
+
+    /// <summary>Runs a change of git's index over <paramref name="paths"/>, kept as one command of global Undo named
+    /// <paramref name="command"/> where the index changed: its Undo puts each entry back as it was, its Redo as it left
+    /// it, while the index still holds them as the other left them. What came of it, said in the status bar.</summary>
+    internal async Task<VcsOutcome> IndexChangedAsync(string command, IReadOnlyList<string> paths, Func<Task<VcsOutcome>> change)
+    {
+        VcsController vcs = session.Vcs;
+        IReadOnlyList<(string Path, (string Mode, string Blob)? Entry)> before = await vcs.IndexEntriesAsync(paths);
+        VcsOutcome outcome = await change();
+        IReadOnlyList<(string Path, (string Mode, string Blob)? Entry)> after = await vcs.IndexEntriesAsync(paths);
+        status.Text = outcome.Message;
+        if (outcome.Succeeded && !before.SequenceEqual(after) && vcs == session.Vcs)
+        {
+            using CommandHistory.Recording made = Editors.Commands.Record(command);
+            made.Also(new CommandHistory.Part($"Git's index of {Plural.Listed([.. paths.Select(Path.GetFileName).OfType<string>().Distinct()])}", _ => null,
+                redo => vcs.PutIndexEntriesAsync(redo ? after : before))
+            {
+                Read = async redo => (await vcs.IndexEntriesAsync(paths)).SequenceEqual(redo ? before : after) ? null : "Git's index has changed since",
+            });
+        }
+        return outcome;
     }
 
     /// <summary>Add to .gitignore: a line of the repository's top .gitignore matching that file alone (<see

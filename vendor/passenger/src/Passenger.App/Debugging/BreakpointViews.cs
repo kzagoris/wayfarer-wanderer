@@ -18,9 +18,9 @@ public sealed class BreakpointProperties : UserControl
     private readonly CheckBox suspend = new() { Content = "Suspend execution" };
     private readonly TextBox condition = Field("A C# condition: count > 2");
     private readonly TextBox hitCount = Field("Stop on hits: ==3, >=2, %2");
-    private readonly TextBlock hitCountProblem = new() { TextWrapping = TextWrapping.Wrap, IsVisible = false, Margin = new Thickness(0, 6, 0, 0) };
+    private readonly TextBlock hitCountProblem = new() { TextWrapping = TextWrapping.Wrap, IsVisible = false, Margin = new Thickness(0, Gaps.Small, 0, 0) };
     private readonly TextBox log = Field("Logged on each hit: count is {count}");
-    private readonly TextBlock logProblem = new() { TextWrapping = TextWrapping.Wrap, IsVisible = false, Margin = new Thickness(0, 6, 0, 0) };
+    private readonly TextBlock logProblem = new() { TextWrapping = TextWrapping.Wrap, IsVisible = false, Margin = new Thickness(0, Gaps.Small, 0, 0) };
     private readonly CheckBox thrownInUserCode = new() { Content = "User code" };
     private readonly CheckBox thrownInExternalCode = new() { Content = "External code" };
     private readonly CheckBox handledInUserCode = new() { Content = "User code" };
@@ -33,12 +33,12 @@ public sealed class BreakpointProperties : UserControl
     {
         StackPanel fields = new()
         {
-            Spacing = 6,
+            Spacing = Gaps.Small,
             Children =
             {
-                FormRows.Of("Condition:", condition),
-                new StackPanel { Children = { FormRows.Of("Hit count:", hitCount), FormRows.Of(null, hitCountProblem) } },
-                new StackPanel { Children = { FormRows.Of("Log message:", log), FormRows.Of(null, logProblem) } },
+                FormRows.Of("Condition", condition),
+                new StackPanel { Children = { FormRows.Of("Hit count", hitCount), FormRows.Of(null, hitCountProblem) } },
+                new StackPanel { Children = { FormRows.Of("Log message", log), FormRows.Of(null, logProblem) } },
             },
         };
         hitCountProblem.Classes.Add(StyleClasses.Error);
@@ -50,11 +50,11 @@ public sealed class BreakpointProperties : UserControl
         // The "Suspend If" panel: the exception breakpoint stops when one of each row holds.
         StackPanel scenarios = new()
         {
-            Spacing = 4,
+            Spacing = Gaps.Tight,
             Children =
             {
-                FormRows.Of("Exception thrown in:", Row(thrownInUserCode, thrownInExternalCode)),
-                FormRows.Of("Exception handler:", Row(handledInUserCode, handledInExternalCode, unhandled)),
+                FormRows.Of("Exception thrown in", Row(thrownInUserCode, thrownInExternalCode)),
+                FormRows.Of("Exception handler", Row(handledInUserCode, handledInExternalCode, unhandled)),
             },
         };
         // Two forms, so the rows shown only for an exception breakpoint never widen the labels of every breakpoint's.
@@ -66,13 +66,13 @@ public sealed class BreakpointProperties : UserControl
         }
         suspendIf = new StackPanel
         {
-            Spacing = 6,
+            Spacing = Gaps.Small,
             IsVisible = false,
-            Children = { new TextBlock { Text = "Suspend If", FontWeight = FontWeight.SemiBold }, scenarios, inactive },
+            Children = { new TextBlock { Classes = { StyleClasses.PaneTitle }, Text = "Suspend If" }, scenarios, inactive },
         };
         Content = new StackPanel
         {
-            Spacing = 8,
+            Spacing = Gaps.Normal,
             Children = { Row(enabled, suspend), fields, suspendIf },
         };
         foreach (TextBox box in new[] { condition, hitCount, log })
@@ -155,12 +155,7 @@ public sealed class BreakpointProperties : UserControl
     /// <summary>Says that an exception breakpoint with no box of a row checked never stops.</summary>
     private void CheckScenarios()
     {
-        ExceptionScenarios chosen = Chosen();
-        inactive.Text = (chosen & ExceptionScenarios.Thrown) == 0
-            ? "Exception breakpoint is currently inactive because all 'Exception thrown in' options are disabled"
-            : (chosen & (ExceptionScenarios.HandledInUserCode | ExceptionScenarios.HandledInExternalCode | ExceptionScenarios.Unhandled)) == 0
-                ? "Exception breakpoint is currently inactive because all 'Exception handler' options are disabled"
-                : null;
+        inactive.Text = ExceptionBreakpoint.InactiveIn(Chosen());
         inactive.IsVisible = inactive.Text is not null;
     }
 
@@ -192,11 +187,11 @@ public sealed class BreakpointProperties : UserControl
         }
     }
 
-    private static TextBox Field(string watermark) => new() { Classes = { StyleClasses.Search }, PlaceholderText = watermark, MinWidth = 280 };
+    private static TextBox Field(string watermark) => new() { PlaceholderText = watermark, MinWidth = 280 };
 
     private static StackPanel Row(params Control[] controls)
     {
-        StackPanel row = new() { Orientation = Orientation.Horizontal, Spacing = 16 };
+        StackPanel row = new() { Orientation = Orientation.Horizontal, Spacing = Gaps.Group };
         row.Children.AddRange(controls);
         return row;
     }
@@ -224,19 +219,19 @@ public sealed class BreakpointPopup : UserControl
         Content = new Border
         {
             Classes = { StyleClasses.Popup },
-            Padding = new Thickness(14, 12),
+            Padding = PopupFrame.Inset,
             Child = new StackPanel
             {
-                Spacing = 10,
+                Spacing = Gaps.Wide,
                 Children =
                 {
-                    new TextBlock { Text = breakpoint.Location, Classes = { StyleClasses.PopupTitle } },
+                    new TextBlock { Text = breakpoint.Location, Classes = { StyleClasses.PaneTitle } },
                     Properties,
                     new DockPanel
                     {
                         Children =
                         {
-                            Docked(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { more, done } }, Dock.Right),
+                            Docked(new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gaps.Normal, Children = { more, done } }, Dock.Right),
                             remove,
                         },
                     },
@@ -277,13 +272,13 @@ public sealed class BreakpointsWindow : UserControl
     private readonly Func<Task<IReadOnlyList<string>>> exceptionTypes;
     private readonly ListBox list = new() { Classes = { StyleClasses.Tree } };
     private readonly BreakpointProperties properties = new();
-    private readonly TextBlock title = new() { Classes = { StyleClasses.PopupTitle } };
+    private readonly TextBlock title = new() { Classes = { StyleClasses.PaneTitle } };
     private readonly Button remove = new() { Content = "Remove" };
     private readonly Button goTo = new() { Content = "Go to Source" };
     private readonly Button removeTool = ToolButtons.Of(IconKeys.Minimize, "Remove");
     private readonly StackPanel chosenPane;
     private readonly StackPanel addPane;
-    private readonly TextBox typed = new() { Classes = { StyleClasses.Search }, PlaceholderText = "An exception type: InvalidOperationException" };
+    private readonly TextBox typed = SearchBox.Of("Search exception types", "An exception type: InvalidOperationException");
     private readonly ListBox found = new() { Classes = { StyleClasses.Tree }, Height = 210 };
     private IReadOnlyList<string> known = [];
 
@@ -317,13 +312,13 @@ public sealed class BreakpointsWindow : UserControl
         });
         ToolWindows.ListMenus.Attach(list, () => Chosen is not { } breakpoint ? [] :
         [
-            ToolWindows.ListMenus.Item("Go to Source", "F4", GoTo, enabled: breakpoint is LineBreakpoint),
-            ToolWindows.ListMenus.Item(breakpoint.Enabled ? "Disable" : "Enable", null, () =>
+            ToolWindows.ListMenus.Source(GoTo, breakpoint is LineBreakpoint ? null : Refusals.BreakpointOnNoLine),
+            ToolWindows.ListMenus.Item(breakpoint.Enabled ? "Disable" : "Enable", () =>
             {
                 store.Update(breakpoint, !breakpoint.Enabled, breakpoint.Suspend, breakpoint.Condition, breakpoint.HitCondition, breakpoint.LogMessage);
                 Fill(breakpoint);
             }),
-            ToolWindows.ListMenus.Item("Remove", "Delete", RemoveChosen, enabled: Removable(breakpoint)),
+            ToolWindows.ListMenus.Remove("Remove Breakpoint", RemoveChosen, Removable(breakpoint) ? null : Refusals.BreakpointKept),
         ]);
         // Escape closes it wherever the focus is in it, as a dialog's does.
         AddHandler(KeyDownEvent, (_, e) =>
@@ -334,7 +329,7 @@ public sealed class BreakpointsWindow : UserControl
                 e.Handled = true;
             }
         }, RoutingStrategies.Bubble);
-        AttachedToVisualTree += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(() => list.Focus(), Avalonia.Threading.DispatcherPriority.Loaded);
+        AttachedToVisualTree += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(() => ListKeys.Hold(list), Avalonia.Threading.DispatcherPriority.Loaded);
         properties.Submitted += (_, _) => properties.Apply(store);
         properties.Dismissed += (_, _) => Close();
 
@@ -348,24 +343,24 @@ public sealed class BreakpointsWindow : UserControl
         answers.HorizontalAlignment = HorizontalAlignment.Right;
         addPane = new StackPanel
         {
-            Spacing = 8,
+            Spacing = Gaps.Normal,
             IsVisible = false,
             Children =
             {
-                new TextBlock { Text = "Add CLR Exception Breakpoints", FontWeight = FontWeight.SemiBold },
+                new TextBlock { Classes = { StyleClasses.PaneTitle }, Text = "Add CLR Exception Breakpoints" },
                 typed,
                 Framed(found),
                 answers,
             },
         };
-        chosenPane = new StackPanel { Spacing = 10, Children = { title, properties } };
+        chosenPane = new StackPanel { Spacing = Gaps.Wide, Children = { title, properties } };
 
-        Grid body = new() { ColumnDefinitions = new ColumnDefinitions("310,*"), ColumnSpacing = 14, Height = 340 };
+        Grid body = new() { ColumnDefinitions = new ColumnDefinitions("310,*"), ColumnSpacing = Gaps.Wide, Height = 340 };
         DockPanel listSide = new()
         {
             Children =
             {
-                Docked(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, Margin = new Thickness(0, 0, 0, 4), Children = { add, removeTool } }, Dock.Top),
+                Docked(new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gaps.Hair, Margin = new Thickness(0, 0, 0, Gaps.Tight), Children = { add, removeTool } }, Dock.Top),
                 Framed(list),
             },
         };
@@ -377,19 +372,19 @@ public sealed class BreakpointsWindow : UserControl
         Content = new Border
         {
             Classes = { StyleClasses.Popup },
-            Padding = new Thickness(14, 12),
+            Padding = PopupFrame.Inset,
             Child = new StackPanel
             {
-                Spacing = 10,
+                Spacing = Gaps.Wide,
                 Children =
                 {
-                    new TextBlock { Text = "Breakpoints", Classes = { StyleClasses.PopupTitle } },
+                    new TextBlock { Text = "Breakpoints", Classes = { StyleClasses.PaneTitle } },
                     body,
                     new DockPanel
                     {
                         Children =
                         {
-                            Docked(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { goTo, done } }, Dock.Right),
+                            Docked(new StackPanel { Orientation = Orientation.Horizontal, Spacing = Gaps.Normal, Children = { goTo, done } }, Dock.Right),
                             remove,
                         },
                     },
@@ -454,7 +449,7 @@ public sealed class BreakpointsWindow : UserControl
                 Content = new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
-                    Spacing = 6,
+                    Spacing = Gaps.Small,
                     Children =
                     {
                         new TextBlock { Text = name, VerticalAlignment = VerticalAlignment.Center },
@@ -477,7 +472,7 @@ public sealed class BreakpointsWindow : UserControl
         ExceptionBreakpoint added = store.AddException(type);
         addPane.IsVisible = false;
         Fill(added);
-        list.Focus();
+        ListKeys.Hold(list);
     }
 
     private void OnTypedKeyDown(object? sender, KeyEventArgs e)
@@ -490,7 +485,7 @@ public sealed class BreakpointsWindow : UserControl
                 break;
             case Key.Escape:
                 ShowChosen();
-                list.Focus();
+                ListKeys.Hold(list);
                 e.Handled = true;
                 break;
             case Key.Up or Key.Down or Key.PageUp or Key.PageDown when ListKeys.Move(found, e):
@@ -521,12 +516,19 @@ public sealed class BreakpointsWindow : UserControl
         goTo.IsEnabled = Chosen is LineBreakpoint;
     }
 
+    /// <summary>Takes the chosen breakpoint out, the keys going on to the row chosen next where the list had them, as its
+    /// rows are made again.</summary>
     private void RemoveChosen()
     {
         if (Chosen is { } breakpoint && Removable(breakpoint))
         {
+            bool keyed = list.IsKeyboardFocusWithin;
             store.Remove(breakpoint);
             Fill(null);
+            if (keyed)
+            {
+                ListKeys.Hold(list);
+            }
         }
     }
 
@@ -590,7 +592,7 @@ public sealed class BreakpointsWindow : UserControl
     /// <summary>A group's heading, one for each kind of breakpoint; it is never chosen.</summary>
     private static ListBoxItem Group(string name)
     {
-        TextBlock text = new() { Text = name, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 4, 0, 0) };
+        TextBlock text = new() { Classes = { StyleClasses.Strong }, Text = name, Margin = new Thickness(0, Gaps.Tight, 0, 0) };
         // Disabled, so neither a click nor the arrow keys choose it, but in the list's own colour rather than greyed.
         text.Bind(TextBlock.ForegroundProperty, text.GetResourceObservable(TokenKeys.Text));
         return new ListBoxItem { IsEnabled = false, Content = text };
@@ -598,7 +600,7 @@ public sealed class BreakpointsWindow : UserControl
 
     private ListBoxItem Item(Breakpoint breakpoint)
     {
-        CheckBox on = new() { IsChecked = breakpoint.Enabled, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 4, 0) };
+        CheckBox on = new() { IsChecked = breakpoint.Enabled, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(Gaps.Normal, 0, Gaps.Tight, 0) };
         on.IsCheckedChanged += (_, _) =>
         {
             if (on.IsChecked != breakpoint.Enabled)
@@ -617,7 +619,7 @@ public sealed class BreakpointsWindow : UserControl
             Content = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
-                Spacing = 6,
+                Spacing = Gaps.Small,
                 Children =
                 {
                     on,

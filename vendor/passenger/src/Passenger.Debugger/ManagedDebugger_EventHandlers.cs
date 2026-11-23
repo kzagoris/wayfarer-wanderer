@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Passenger.Core;
 using Passenger.Dap;
 using Passenger.Debugger.ExpressionEvaluator;
 using Passenger.Debugger.ExpressionEvaluator.Cil;
@@ -55,35 +56,116 @@ public partial class ManagedDebugger
         ReportTerminated();
     }
 
-    private void HandleThreadCreated(object? sender, CreateThreadCorDebugManagedCallbackEventArgs createThreadCorDebugManagedCallbackEventArgs)
+    private async Task HandleThreadCreated(CreateThreadCorDebugManagedCallbackEventArgs createThreadCorDebugManagedCallbackEventArgs)
     {
         ICorDebugThread corThread = createThreadCorDebugManagedCallbackEventArgs.Thread;
         NoteMainThread(corThread);
         _threads[corThread.Id] = new ThreadInfo(corThread);
-        if (EvalStatus.ThreadId is int evaluating && !EvalStatus.LetThreadsRun)
-        {
-            HoldDuringEvaluation(corThread, evaluating);
-        }
         if (_dataSlots.Any(slot => slot is not null))
         {
             // A thread made since a data breakpoint was set watches what the others do.
             ApplyDataRegisters(corThread.Id);
         }
         OnThreadStarted?.Invoke(corThread.Id);
+        (int Evaluating, string Named)? during = EvalStatus.ThreadId is int evaluating && !EvalStatus.LetThreadsRun && !HoldsNoneAtEvaluations
+            ? (evaluating, StartsTold([corThread]))
+            : null;
+        if (during is not null)
+        {
+            // Held by the evaluation's hold already when the runtime listed it before announcing it.
+            corThread.TrySetDebugState(CorDebugThreadState.THREAD_RUN);
+        }
+        else if (HoldsStartOf is { } held && corThread.GetThreadNameOrNull() == held)
+        {
+            Hold(corThread, "held where it was announced, a test's hold");
+            _logger?.Invoke($"Held: thread {corThread.Id}, {held}, where it was announced, at its first instruction, a test's hold");
+        }
         Continue(clearVariables: false);
+        if (during is { } evaluation)
+        {
+            await HoldPastItsStartAsync(corThread, evaluation.Evaluating, evaluation.Named).ConfigureAwait(false);
+        }
     }
 
-    /// <summary>A thread made while an evaluation runs its own thread alone, which the evaluation's hold of every other thread
-    /// came too early for: held as they are until the evaluation ends, when every thread is let go again. Left running, it
-    /// would pass a breakpoint whose event waits for the evaluation's end and run on, so the stop shown later is not where
-    /// the thread is.</summary>
-    private void HoldDuringEvaluation(ICorDebugThread thread, int evaluating)
+    /// <summary>Every thread but the evaluation's, held while it runs alone, but the runtime's tiering worker
+    /// (<see cref="RuntimeThreads"/>), which runs none of the program's code and is never told to the debugger as one that
+    /// does (one the debugger cannot tell, through a relay to a device, is held with the rest), and a thread at its first
+    /// instruction, held once past it (<see cref="LeaveStartsRunning"/>). A thread whose event waits to be handled is held
+    /// again by itself (<see cref="HoldWaiting"/>).</summary>
+    private void HoldOthersDuringEvaluation(ICorDebugThread evaluating)
+    {
+        ICorDebugProcess process = evaluating.Process;
+        if (HoldsNoneAtEvaluations)
+        {
+            _logger?.Invoke($"Held none: every other thread is left running during the evaluation on thread {evaluating.Id}, a test's hold");
+        }
+        else
+        {
+            process.SetAllThreadsDebugState(CorDebugThreadState.THREAD_SUSPEND, evaluating);
+            LeaveTieringWorkerRunning(process);
+            LeaveStartsRunning(evaluating);
+        }
+        HoldWaiting(evaluating.Id);
+    }
+
+    private void LeaveTieringWorkerRunning(ICorDebugProcess process)
+    {
+        if (_throughRelay || process.TryGetID(out uint processId) is not Cor.S_OK)
+        {
+            return;
+        }
+        RuntimeThreads runtime = _runtimeThreads is { } known && known.ProcessId == (int)processId ? known : _runtimeThreads = new RuntimeThreads((int)processId);
+        foreach (ICorDebugThread thread in process.EnumerateThreads())
+        {
+            int id = thread.Id;
+            if (!_threads.ContainsKey(id) && runtime.IsTieringWorker(process, thread) && thread.TrySetDebugState(CorDebugThreadState.THREAD_RUN) is Cor.S_OK
+                && _leftRunning.Add(id))
+            {
+                _logger?.Invoke($"Left running during evaluations: thread {id}, the runtime's tiering worker");
+            }
+        }
+    }
+
+    /// <summary>Each thread whose event was put off, held where the event found it by itself, beside the hold of every
+    /// thread an evaluation takes: the runtime's hold of every thread once missed one, and a thread whose event waits,
+    /// let run, would pass that place and more, the event then tried where it had gone on to.</summary>
+    private void HoldWaiting(int evaluating)
+    {
+        foreach (ICorDebugThread thread in _deferredEvents.Concat(_behindStep).Select(WaitingThread).OfType<ICorDebugThread>().DistinctBy(thread => thread.Id))
+        {
+            if (thread.Id != evaluating)
+            {
+                Hold(thread, $"its event waits while an evaluation runs on thread {evaluating}");
+            }
+        }
+    }
+
+    /// <summary>The thread an event put off is about, which stands where the event found it until it is handled.</summary>
+    private static ICorDebugThread? WaitingThread(CorDebugManagedCallbackEventArgs callbackEvent) => callbackEvent switch
+    {
+        BreakpointCorDebugManagedCallbackEventArgs hit => hit.Thread,
+        StepCompleteCorDebugManagedCallbackEventArgs step => step.Thread,
+        BreakCorDebugManagedCallbackEventArgs pause => pause.Thread,
+        DataBreakpointCorDebugManagedCallbackEventArgs write => write.Thread,
+        DeferredExceptionStop exception => exception.Thread,
+        _ => null,
+    };
+
+    /// <summary>Holds one thread until the threads are let go again, saying so only where it could not be held.</summary>
+    private void Hold(ICorDebugThread thread, string why)
     {
         int held = thread.TrySetDebugState(CorDebugThreadState.THREAD_SUSPEND);
-        _logger?.Invoke(held is Cor.S_OK
-            ? $"Held: thread {thread.Id}, made during an evaluation on thread {evaluating}"
-            : $"Thread {thread.Id}, made during an evaluation on thread {evaluating}, could not be held: 0x{held:X8}");
+        if (held is not Cor.S_OK)
+        {
+            _logger?.Invoke($"Thread {thread.Id}, {why}, could not be held: 0x{held:X8}");
+        }
     }
+
+    /// <summary>The runtime's own threads left running during an evaluation, each said once in the engine's log.</summary>
+    private readonly HashSet<int> _leftRunning = [];
+
+    /// <summary>What tells the program's runtime's own threads, made for the program as it is first held.</summary>
+    private RuntimeThreads? _runtimeThreads;
 
     /// <summary>Notes the thread running Main. The runtime announces it first, but to a debugger that takes hold once
     /// the program is under way it lists the threads in the order they were made, and Windows makes the finalizer's
@@ -161,8 +243,10 @@ public partial class ManagedDebugger
             return;
         }
 
-        // Unoptimized code (a Debug build's, Edit and Continue's) is the user's; emitted code, with no source, never.
-        bool isUserCode = !emitted && corModule.JITCompilerFlags is CorDebugJITCompilerFlags.CORDEBUG_JIT_DISABLE_OPTIMIZATION or CorDebugJITCompilerFlags.CORDEBUG_JIT_ENABLE_ENC;
+        // Unoptimized code (Debug's, Edit and Continue's, the folder's own Release build's) is the user's; emitted or carried in, never.
+        bool builtUnoptimized = Unoptimized(corModule);
+        bool isUserCode = !emitted && !(AssemblyNameOf(metadataReader) is { } assembly && _carried.Contains(assembly))
+            && (builtUnoptimized || OwnUnoptimized(corModule, metadataReader, moduleName));
         if (_justMyCode && isUserCode && metadataReader.HasSymbols)
         {
             // The module is the user's, but not the methods its own code says are not: steppers pass over them.
@@ -176,7 +260,10 @@ public partial class ManagedDebugger
             }
         }
 
-        ModuleInfo moduleInfo = new ModuleInfo(corModule, modulePath, metadataReader, isUserCode, emitted ? new CORDB_ADDRESS(_lastEmittedModuleKey--) : null);
+        ModuleInfo moduleInfo = new ModuleInfo(corModule, modulePath, metadataReader, isUserCode, emitted ? new CORDB_ADDRESS(_lastEmittedModuleKey--) : null)
+        {
+            BuiltOptimized = isUserCode && !builtUnoptimized,
+        };
         _modules[corModule] = moduleInfo;
         if (!emitted)
         {
@@ -194,6 +281,7 @@ public partial class ManagedDebugger
             // Made with CoreLib, which loads before any stop.
             RuntimeAssemblyPrimitiveTypeClasses runtimeAssemblyPrimitiveTypeClasses = new RuntimeAssemblyPrimitiveTypeClasses(CorElementToValueClassMap, CorVoidClass, CorDecimalClass);
             _expressionEvaluator = new CilExpressionEvaluator(runtimeAssemblyPrimitiveTypeClasses, this);
+            _coreLibCame.TrySetResult();
         }
 
         OnModuleLoaded?.Invoke(modulePath, Path.GetFileName(modulePath), modulePath);
@@ -212,6 +300,32 @@ public partial class ManagedDebugger
         }
 
         Continue(clearVariables: false);
+    }
+
+    /// <summary>Whether the runtime compiles a module's code unoptimized, as a debugger steps through it and reads it.</summary>
+    private static bool Unoptimized(ICorDebugModule module) =>
+        module.JITCompilerFlags is CorDebugJITCompilerFlags.CORDEBUG_JIT_DISABLE_OPTIMIZATION or CorDebugJITCompilerFlags.CORDEBUG_JIT_ENABLE_ENC;
+
+    /// <summary>Whether a module built optimized is the folder's own, its symbols naming a source file under a folder the
+    /// client named (<see cref="Own"/>), and the runtime now compiles it unoptimized, as it is asked to as the module loads.
+    /// One whose code was compiled before the debugger came keeps it, and no step stops there: said once in the Debug
+    /// console.</summary>
+    private bool OwnUnoptimized(ICorDebugModule module, ModuleMetadataReader reader, string moduleName)
+    {
+        if (_ownFolders.Count == 0 || !reader.HasSymbols || !reader.GetSourceFiles().Any(file => _ownFolders.Any(folder => PathNames.IsUnder(file, folder))))
+        {
+            return false;
+        }
+        int set = module.Module2.TrySetJITCompilerFlags(CorDebugJITCompilerFlags.CORDEBUG_JIT_DISABLE_OPTIMIZATION);
+        if (set >= 0 && Unoptimized(module))
+        {
+            _logger?.Invoke($"  {moduleName} is the folder's own, built optimized: compiled unoptimized from here on");
+            return true;
+        }
+        _logger?.Invoke($"  {moduleName} is the folder's own, built optimized, and keeps the code compiled for it: 0x{set:X8}");
+        OnConsole?.Invoke($"{moduleName} is built optimized (a Release build), and its code was compiled before the debugger could have it compiled for debugging: "
+            + "steps pass over it and some of its locals cannot be read. Debug the program from its start to step through it.\n");
+        return false;
     }
 
     /// <summary>A type loaded: one emitted into a module made as the program runs adds to that module's metadata, which is
@@ -245,6 +359,7 @@ public partial class ManagedDebugger
         _logger?.Invoke($"Module unloaded: {moduleInfo.ModulePath} from 0x{(long)moduleInfo.BaseAddress:X}");
         moduleInfo.Dispose();
         ModuleSet_Version++;
+        SystemTypes.LetGo();
 
         foreach (BreakpointManager.BreakpointInfo breakpoint in _breakpointManager.GetAllBreakpoints())
         {
@@ -338,7 +453,7 @@ public partial class ManagedDebugger
             _entryBreakpoint = null;
             _stopAtEntry = false;
             EndStepForStop();
-            SourceInfo? sourceInfo = GetSourceInfoAtFrame(corThread.ActiveFrame, _justMyCode is false);
+            SourceInfo? sourceInfo = GetSourceInfoAtFrame(StoppedFrame(corThread), _justMyCode is false);
             if (sourceInfo is null)
             {
                 ReportStop(corThread.Id, StopReasons.Entry);
@@ -374,7 +489,7 @@ public partial class ManagedDebugger
                     _stepper = null;
                 }
 
-                SourceInfo? sourceInfo = GetSourceInfoAtFrame(corThread.ActiveFrame, _justMyCode is false);
+                SourceInfo? sourceInfo = GetSourceInfoAtFrame(StoppedFrame(corThread), _justMyCode is false);
                 if (sourceInfo is null)
                 {
                     // Into Task.NotifyDebuggerOfWaitCompletion, on toward the awaiting caller's next user code.
@@ -404,7 +519,7 @@ public partial class ManagedDebugger
         EndStepForStop();
         if (managedBreakpoint.IsFunctionBreakpoint)
         {
-            SourceInfo? sourceInfo = GetSourceInfoAtFrame(corThread.ActiveFrame, _justMyCode is false);
+            SourceInfo? sourceInfo = GetSourceInfoAtFrame(StoppedFrame(corThread), _justMyCode is false);
             // Told as a breakpoint's stop, not with the protocol's function breakpoint reason.
             if (sourceInfo is null)
             {
@@ -422,7 +537,7 @@ public partial class ManagedDebugger
         {
             throw new UnreachableException("Breakpoint was not resolved from PDB - this should never happen, as source breakpoints are only bound to resolved source locations");
         }
-        if (resolvedBreakpoint.Placed && corThread.ActiveFrame is { } shortOf && RangeOf(shortOf) is { } shortRange)
+        if (resolvedBreakpoint.Placed && StoppedFrame(corThread) is { } shortOf && RangeOf(shortOf) is { } shortRange)
         {
             _stoppedShort = (corThread.Id, shortRange, resolvedBreakpoint);
         }
@@ -481,11 +596,26 @@ public partial class ManagedDebugger
             return;
         }
         TakeBehindStep();
-        if (_returnGuard is ({ } guard, { } guarded) && _stepper is { } lost && guarded == lost && stepCompleteEventArgs.Stepper == guard)
+        if (_unwinding is { Guard: { } unwound } following && stepCompleteEventArgs.Stepper == unwound)
         {
-            _logger?.Invoke($"The step on thread {corThread.Id} ends where its guard's step out did, its frame having returned to native code");
+            FollowUnwinding(corThread, following);
+            Continue(clearVariables: false);
+            return;
+        }
+        if (_returnGuard is ({ } guard, { } guarded, bool runsOn) && _stepper is { } lost && guarded == lost && stepCompleteEventArgs.Stepper == guard)
+        {
             _returnGuard = null;
             lost.TryDeactivate();
+            if (runsOn)
+            {
+                _logger?.Invoke($"The step on thread {corThread.Id} ends as its frame returns to code that is not the user's, none of theirs below it: the program runs on");
+                _stepper = null;
+                EndStepForStop();
+                EndReturnWatch();
+                Continue(clearVariables: true);
+                return;
+            }
+            _logger?.Invoke($"The step on thread {corThread.Id} ends where its guard's step out did, its frame having returned to native code");
             _stepper = guard;
         }
         if (stepCompleteEventArgs.Stepper != _stepper)
@@ -493,6 +623,17 @@ public partial class ManagedDebugger
             // A step that had completed when a stop (another thread's, a pause) ended it: its end, queued behind, stops nothing.
             _logger?.Invoke($"The end of a step on thread {corThread.Id} that a stop ended meanwhile is let go");
             Continue(clearVariables: false);
+            return;
+        }
+        if (_unwinding is { } unwinding && unwinding.Thread == corThread.Id && LaterTurn(corThread, unwinding) is { } through)
+        {
+            _logger?.Invoke($"The step on thread {corThread.Id} reaches the user's code through a new call of {through}, which it had returned from: "
+                + "a later turn of what called its frame, not the step's, so the program runs on");
+            stepCompleteEventArgs.Stepper.TryDeactivate();
+            _stepper = null;
+            EndStepForStop();
+            EndReturnWatch();
+            Continue(clearVariables: true);
             return;
         }
         EndReturnGuard();
@@ -504,7 +645,7 @@ public partial class ManagedDebugger
             Continue(clearVariables: true);
             return;
         }
-        ICorDebugILFrame ilFrame = (ICorDebugILFrame)corThread.ActiveFrame;
+        ICorDebugFrame? landed = StoppedFrame(corThread);
         // An async step's breakpoint at an await, which the step ran to, was not hit: the async step is over.
         _asyncStepper?.ClearActiveAsyncStep();
         ICorDebugStepper stepper = stepCompleteEventArgs.Stepper;
@@ -513,16 +654,32 @@ public partial class ManagedDebugger
         EndReturnWatch();
         // The statement is left without its Smart Step Into target entered (not called, or called on another thread).
         EndSmartStep();
+        if (landed is not ICorDebugILFrame ilFrame)
+        {
+            // Out of the thread's managed code (past its first method's end): nothing of it is left to stop in.
+            _logger?.Invoke($"The step on thread {corThread.Id} ended outside managed code: the program runs on");
+            Continue(clearVariables: true);
+            return;
+        }
         if (stepCompleteEventArgs.Reason is CorDebugStepReason.STEP_RETURN)
         {
-            // Back in a caller; reading a value type's return runs the program, so the frame is read again.
+            // Back in a caller; reading a struct's return runs the program, so the frame is read again.
             await TakeValueReturnedTo(corThread, ilFrame);
-            ilFrame = (ICorDebugILFrame)corThread.ActiveFrame;
+            ilFrame = StoppedFrame(corThread) as ICorDebugILFrame ?? ilFrame;
         }
         if (_unboxed is not null)
         {
             await BoxUnboxed(corThread);
-            ilFrame = (ICorDebugILFrame)corThread.ActiveFrame;
+            ilFrame = StoppedFrame(corThread) as ICorDebugILFrame ?? ilFrame;
+        }
+        if (EvalStatus.Abandoned.ContainsKey(corThread.Id))
+        {
+            // A box's evaluation left running holds the thread, so no stepper could go on from here: the step stops where it ended.
+            _logger?.Invoke($"The step on thread {corThread.Id} stops where it ended, the box's evaluation left running above it");
+            SourceInfo? held = FindModule(ilFrame.Function.Module) is null ? null : GetSourceInfoAtFrame(ilFrame, _justMyCode is false);
+            _steppedIntoHidden = IsHiddenFrame(ilFrame) ? corThread.Id : null;
+            ReportStop(corThread.Id, StopReasons.Step, held?.FilePath, held?.StartLine ?? 0, held?.StartColumn ?? 0, null);
+            return;
         }
         ModuleInfo? module = FindModule(ilFrame.Function.Module);
         if (module is not null && module.MetadataReader.IsCurrentSequencePointHidden(ilFrame.Function.Token, ilFrame.IP.pnOffset, ModuleMetadataReader.VersionOf(ilFrame)))
@@ -610,8 +767,8 @@ public partial class ManagedDebugger
     }
 
     /// <summary>An event that came while an evaluation ran: the evaluated code's own is let go, since an evaluation never
-    /// stops part way; another thread's was queued with the event the evaluation began from, and waits, its thread
-    /// suspended where the event found it, until the evaluation's own stop is over. True when the event was either.</summary>
+    /// stops part way; another thread's waits, its thread held where the event found it (<see cref="HoldPutOff"/>), until
+    /// the evaluation's own stop is over. True when the event was either.</summary>
     private bool PutOffDuringEvaluation(CorDebugManagedCallbackEventArgs callbackEvent, ICorDebugThread thread)
     {
         if (EvalStatus.Abandoned.ContainsKey(thread.Id))
@@ -648,10 +805,18 @@ public partial class ManagedDebugger
         {
             _logger?.Invoke($"Put off: {callbackEvent.GetType().Name} on thread {thread.Id}, during an evaluation on thread {evaluating}");
             _deferredEvents.Enqueue(callbackEvent);
+            HoldPutOff(thread, evaluating);
         }
         _process!.Continue(false);
         return true;
     }
+
+    /// <summary>The thread of an event put off during an evaluation, held where the event found it until the event is
+    /// handled. The runtime sends no event from a thread an evaluation's hold reached, so one sent while the evaluation
+    /// runs is from a thread the hold missed: let run, it would pass that place and more, its event then tried where it
+    /// had gone on to.</summary>
+    private void HoldPutOff(ICorDebugThread thread, int evaluating) =>
+        Hold(thread, $"its event put off during an evaluation on thread {evaluating}");
 
     private void HandleBreak(object? sender, BreakCorDebugManagedCallbackEventArgs breakEventArgs)
     {
@@ -734,6 +899,18 @@ public partial class ManagedDebugger
                         _asyncStepper?.CaughtOn(corThread, caughtIn);
                     }
                     bool seen = _exceptionStates.TryGetValue(threadId, out ExceptionPropagationState? state);
+                    if (UnhandledThroughAwaits(corThread, exceptionEventArgs.Frame, exceptionEventArgs.NOffset) is { } goesOn)
+                    {
+                        // Caught only to fault a task nothing awaiting it catches: told once, where it was thrown, its frames still there.
+                        _exceptionStates.Remove(threadId);
+                        bool told = EndsUnhandledAlready(corThread);
+                        EndsUnhandled(corThread);
+                        bool unhandled = goesOn is Passenger.Dap.ExceptionScenarios.Unhandled;
+                        shouldStop = !told && (unhandled ? _exceptionRules is null : _justMyCode && MatchesExceptionBreakpoint(ExceptionBreakpointFilter.UserUnhandled, exceptionType));
+                        rules = told ? [] : MatchingRules(exceptionType, !seen || state!.ThrownInUserCode, goesOn);
+                        breakMode = unhandled ? ExceptionBreakMode.Unhandled : ExceptionBreakMode.UserUnhandled;
+                        break;
+                    }
                     shouldStop = _justMyCode && handlerIsUserCode is false && seen && state!.HasReachedUserCode && MatchesExceptionBreakpoint(ExceptionBreakpointFilter.UserUnhandled, exceptionType);
                     // Without Just My Code every frame is the user's, so an exception is handled in user code or not at all.
                     bool handledInUserCode = !_justMyCode || handlerIsUserCode;
@@ -759,9 +936,11 @@ public partial class ManagedDebugger
             case CorDebugExceptionCallbackType.DEBUG_EXCEPTION_UNHANDLED:
                 {
                     bool seen = _exceptionStates.Remove(threadId, out ExceptionPropagationState? state);
+                    // One told already where it was thrown, ending through what awaited it, has nothing new to tell.
+                    bool told = EndsUnhandledAlready(corThread);
                     // A client that gives no exception breakpoints has every unhandled exception stop; one that does, where they say.
-                    shouldStop = _exceptionRules is null;
-                    rules = MatchingRules(exceptionType, seen ? state!.ThrownInUserCode : !_justMyCode || IsUserCodeFrame(exceptionEventArgs.Frame),
+                    shouldStop = !told && _exceptionRules is null;
+                    rules = told ? [] : MatchingRules(exceptionType, seen ? state!.ThrownInUserCode : !_justMyCode || IsUserCodeFrame(exceptionEventArgs.Frame),
                         Passenger.Dap.ExceptionScenarios.Unhandled);
                     breakMode = ExceptionBreakMode.Unhandled;
                     break;
@@ -780,6 +959,10 @@ public partial class ManagedDebugger
             {
                 _logger?.Invoke($"Put off: a stop at an exception on thread {corThread.Id}, during an evaluation on thread {EvalStatus.ThreadId} or a stop shown");
                 _deferredEvents.Enqueue(new DeferredExceptionStop(corThread, breakMode, handler, exceptionType, shouldStop, rules, stepPast));
+                if (EvalStatus.ThreadId is int evaluating)
+                {
+                    HoldPutOff(corThread, evaluating);
+                }
             }
             _process!.Continue(false);
             return;

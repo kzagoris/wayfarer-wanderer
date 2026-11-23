@@ -53,7 +53,7 @@ public static class ProjectEdits
     public static bool RemovesCompiled(string project, string folder) => Read(new ProjectText(project).Text) is not { Root.Name.LocalName: "Project" } xml || Removes(xml, folder);
 
     private static bool Removes(XmlText xml, string folder) => xml.Root.Elements().Where(g => ProjectItems.IsItemGroup(g) && !ProjectItems.Conditioned(g)).SelectMany(g => g.Elements())
-        .Any(e => e.Name.LocalName == "Compile" && !ProjectItems.Conditioned(e) && e.Attribute("Remove")?.Value == ItemPaths.Under(folder));
+        .Any(e => e.Name.LocalName == MSBuildNames.Compile && !ProjectItems.Conditioned(e) && e.Attribute("Remove")?.Value == ItemPaths.Under(folder));
 
     /// <summary>A package reference added as dotnet add package writes one, its version given (none under central package
     /// management, whose Directory.Packages.props holds it): after the project's last package reference that every build
@@ -87,12 +87,12 @@ public static class ProjectEdits
             Referenced(xml, references, $"<PackageReference Include=\"{XmlEntities.Encode(id, '"')}\" />");
             return (xml.Text, false);
         }
-        if (reference.Attribute("VersionOverride") is not null)
+        if (reference.Attribute(MSBuildNames.VersionOverride) is not null)
         {
-            xml.SetAttribute(reference, "VersionOverride", version);
+            xml.SetAttribute(reference, MSBuildNames.VersionOverride, version);
             return (xml.Text, true);
         }
-        if (reference.Elements().FirstOrDefault(e => e.Name.LocalName == "VersionOverride" && !e.HasElements) is { } element)
+        if (reference.Elements().FirstOrDefault(e => e.Name.LocalName == MSBuildNames.VersionOverride && !e.HasElements) is { } element)
         {
             xml.Replace(element, $"<VersionOverride>{XmlEntities.Encode(version)}</VersionOverride>");
             return (xml.Text, true);
@@ -100,12 +100,68 @@ public static class ProjectEdits
         return (text, false);
     }
 
+    /// <summary>A project file's text with a package referenced in some of its frameworks alone, as dotnet add package
+    /// --framework writes it: for each a reference in the item group of its condition, the project's own, else a new one after
+    /// its last group of package references (else before &lt;/Project&gt;), with <paramref name="version"/> (none under central
+    /// package management), a VersionOverride where <paramref name="overriding"/>. Else why not: the text does not read as
+    /// XML, or a framework's group references the package already.</summary>
+    public static (string? Text, string? Why) WithFrameworkPackage(string text, string id, string? version, bool overriding, IReadOnlyList<string> frameworks)
+    {
+        if (Read(text) is not { } xml)
+        {
+            return (null, "the project does not read as XML");
+        }
+        string versioned = version is null ? string.Empty : $" {(overriding ? MSBuildNames.VersionOverride : MSBuildNames.Version)}=\"{XmlEntities.Encode(version, '"')}\"";
+        string element = $"<PackageReference Include=\"{XmlEntities.Encode(id, '"')}\"{versioned} />";
+        foreach (string framework in frameworks)
+        {
+            XElement? group = xml.Root.Elements().FirstOrDefault(g => ProjectItems.IsItemGroup(g) && ForFramework(g, framework));
+            if (group?.Elements().Any(e => e.Name.LocalName == MSBuildNames.PackageReference && Names(e, id)) == true)
+            {
+                return (null, $"it references {id} for {framework} already");
+            }
+            if (group?.Elements().LastOrDefault(e => e.Name.LocalName == MSBuildNames.PackageReference) is { } last)
+            {
+                xml.After(last, element);
+            }
+            else if (group is not null)
+            {
+                xml.Append(group, element, ownLine: true);
+            }
+            else
+            {
+                string condition = XmlEntities.Encode(FrameworkCondition(framework, " == "), '"');
+                string outer = xml.IndentIn(xml.Root);
+                string written = $"<ItemGroup Condition=\"{condition}\">{xml.NewLine}{outer}{xml.Unit}{element}{xml.NewLine}{outer}</ItemGroup>";
+                if (xml.Root.Elements().LastOrDefault(g => ProjectItems.IsItemGroup(g) && g.Elements().Any(e => e.Name.LocalName == MSBuildNames.PackageReference)) is { } referencing)
+                {
+                    xml.After(referencing, written);
+                }
+                else
+                {
+                    xml.Append(xml.Root, written, ownLine: true);
+                }
+            }
+        }
+        return (xml.Text, null);
+    }
+
+    /// <summary>Whether an item group's condition holds for one framework alone, as dotnet add package --framework writes
+    /// it ('$(TargetFramework)' == 'net10.0', spaces and letter case aside).</summary>
+    private static bool ForFramework(XElement group, string framework) =>
+        group.Attributes().FirstOrDefault(a => a.Name.LocalName.Equals("Condition", StringComparison.OrdinalIgnoreCase)) is { } condition
+        && string.Concat(condition.Value.Where(c => !char.IsWhiteSpace(c))).Equals(FrameworkCondition(framework, "=="), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The condition an item group takes for one framework, as dotnet add package --framework writes it, its
+    /// operator spaced as <paramref name="equals"/> says.</summary>
+    private static string FrameworkCondition(string framework, string equals) => $"'$({MSBuildNames.TargetFramework})'{equals}'{framework}'";
+
     /// <summary>A Directory.Packages.props' text with its PackageVersion of a package set to a version, as dotnet add
     /// package sets it (its Version attribute, else element); null where it has none for the package or does not read as
     /// XML. The PackageVersion at <paramref name="line"/> (MSBuild's, from 1) where one is, else its first.</summary>
     public static string? WithPackageVersion(string text, string id, string version, int line = 0)
     {
-        if (Read(text) is not { } xml || Item(xml, "PackageVersion", id, line) is not { } held)
+        if (Read(text) is not { } xml || Item(xml, MSBuildNames.PackageVersion, id, line) is not { } held)
         {
             return null;
         }
@@ -124,7 +180,7 @@ public static class ProjectEdits
     /// Directory.Packages.props, a PackageReference's in a project or what it imports (<paramref name="item"/>), its Version
     /// attribute, else element; null where the text has no such item with a version or does not read as XML. The item at
     /// <paramref name="line"/> (MSBuild's, from 1) where one is, else its first.</summary>
-    public static string? VersionWritten(string text, string item, string id, int line = 0)
+    public static string? VersionWritten(string text, [IdentifierOf(typeof(MSBuildNames))] string item, string id, int line = 0)
     {
         if (Read(text) is not { } xml || Item(xml, item, id, line) is not { } held)
         {
@@ -168,7 +224,7 @@ public static class ProjectEdits
     }
 
     /// <summary>The item of a type naming a package at a line where one is, else its first.</summary>
-    private static XElement? Item(XmlText xml, string item, string id, int line)
+    private static XElement? Item(XmlText xml, [IdentifierOf(typeof(MSBuildNames))] string item, string id, int line)
     {
         XElement[] held = [.. xml.Root.Descendants().Where(e => e.Name.LocalName == item && Names(e, id))];
         return held.FirstOrDefault(e => ((IXmlLineInfo)e).LineNumber == line) ?? held.FirstOrDefault();
@@ -211,7 +267,7 @@ public static class ProjectEdits
             {
                 if (overriding)
                 {
-                    xml.RenameAttribute(reference, "Version", "VersionOverride");
+                    xml.RenameAttribute(reference, MSBuildNames.Version, MSBuildNames.VersionOverride);
                 }
                 else
                 {
@@ -537,11 +593,11 @@ public static class ProjectEdits
                         }
                     }
                     continue;
-                case "HintPath" when !item.HasElements:
+                case MSBuildNames.HintPath when !item.HasElements:
                     Follow(xml.InnerOf(item), '\0');
                     continue;
             }
-            Follow(xml.ValueOf(item, "HintPath"));
+            Follow(xml.ValueOf(item, MSBuildNames.HintPath));
             string? own = null;
             foreach (string kind in item.Attributes().Select(a => a.Name.LocalName).Where(n => n is "Include" or "Update" or "Remove" or "Exclude").ToList())
             {
@@ -563,8 +619,8 @@ public static class ProjectEdits
             // What the item names beside it, relative to its file: where that is now, from where its file is now.
             string was = Path.GetDirectoryName(Full(before, own))!;
             string at = Path.GetDirectoryName(Moved(Full(before, own)))!;
-            IEnumerable<((int Start, int Length)? Span, char? Quote)> related = ((string[])["DependentUpon", "LastGenOutput"]).Select(n => (xml.ValueOf(item, n), (char?)null))
-                .Concat(item.Elements().Where(e => e.Name.LocalName is "DependentUpon" or "LastGenOutput" && !e.HasElements).Select(e => (xml.InnerOf(e), (char?)'\0')));
+            IEnumerable<((int Start, int Length)? Span, char? Quote)> related = ((string[])[MSBuildNames.DependentUpon, "LastGenOutput"]).Select(n => (xml.ValueOf(item, n), (char?)null))
+                .Concat(item.Elements().Where(e => e.Name.LocalName is MSBuildNames.DependentUpon or "LastGenOutput" && !e.HasElements).Select(e => (xml.InnerOf(e), (char?)'\0')));
             foreach (((int Start, int Length)? named, char? quote) in related)
             {
                 if (named is not { } span)
@@ -721,11 +777,11 @@ public static class ProjectEdits
     private static List<(XElement Element, string? Path)> References(XmlText xml, string project)
     {
         string folder = Path.GetDirectoryName(project)!;
-        return [.. xml.Root.Descendants().Where(e => e.Name.LocalName == "ProjectReference" && e.Attribute("Include") is not null)
+        return [.. xml.Root.Descendants().Where(e => e.Name.LocalName == MSBuildNames.ProjectReference && e.Attribute("Include") is not null)
             .Select(e => (e, ProjectItems.PathOf(folder, e.Attribute("Include")!.Value) is { Glob: false } named ? PathNames.Canonical(named.Path) : null))];
     }
 
-    private static List<XElement> PackageReferences(XmlText xml) => [.. xml.Root.Descendants().Where(e => e.Name.LocalName == "PackageReference")];
+    private static List<XElement> PackageReferences(XmlText xml) => [.. xml.Root.Descendants().Where(e => e.Name.LocalName == MSBuildNames.PackageReference)];
 
     /// <summary>Whether an item names a package, in any letter case.</summary>
     private static bool Names(XElement item, string id) => string.Equals(((string?)item.Attribute("Include"))?.Trim(), id, StringComparison.OrdinalIgnoreCase);
@@ -747,7 +803,7 @@ public static class ProjectEdits
     /// <summary>A package reference's package and the version it writes (its Version attribute, else element); null for
     /// one that writes none.</summary>
     private static (string Id, string Version)? Versioned(XElement reference) =>
-        ((string?)reference.Attribute("Include"))?.Trim() is { Length: > 0 } id && ProjectItems.Value(reference, "Version")?.Trim() is { Length: > 0 } version
+        ((string?)reference.Attribute("Include"))?.Trim() is { Length: > 0 } id && ProjectItems.Value(reference, MSBuildNames.Version)?.Trim() is { Length: > 0 } version
             ? (id, version) : null;
 
     /// <summary>The project's own property groups that no condition holds, in the file's order.</summary>

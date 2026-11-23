@@ -46,11 +46,11 @@ public sealed class PostfixTemplatesPane : ListPane
         Border framed = new() { Classes = { StyleClasses.Framed }, Child = tree };
         about = new StackPanel
         {
-            Spacing = 6,
-            Children = { new TextBlock { Text = "Description:" }, description, new TextBlock { Text = "Before:", Margin = new Thickness(0, 8, 0, 0) }, before,
-                new TextBlock { Text = "After:", Margin = new Thickness(0, 8, 0, 0) }, after },
+            Spacing = FormRows.Between,
+            Children = { FormRows.Of("Description", description, top: true), FormRows.Of("Before", before), FormRows.Of("After", after) },
         };
-        StackPanel options = new() { Spacing = 6, Margin = new Thickness(0, 0, 0, 10), Children = { EnableBox, AutopopupBox } };
+        FormRows.Scope(about);
+        StackPanel options = new() { Spacing = Gaps.Small, Margin = new Thickness(0, 0, 0, Gaps.Wide), Children = { EnableBox, AutopopupBox } };
         SetDock(options, Dock.Top);
         Children.Add(options);
         Children.Add(framed);
@@ -126,16 +126,16 @@ public sealed class PostfixTemplatesPane : ListPane
         StackPanel language = new()
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 6,
-            Children = { all, new TextBlock { Text = Language, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center } },
+            Spacing = Gaps.Small,
+            Children = { all, new TextBlock { Classes = { StyleClasses.PaneTitle }, Text = Language, VerticalAlignment = VerticalAlignment.Center } },
         };
-        CheckBox on = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
-        TextBlock name = new TextBlock { FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) }.InCodeFont();
+        CheckBox on = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, Gaps.Small, 0) };
+        TextBlock name = new TextBlock { Classes = { StyleClasses.Code }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, Gaps.Small, 0) };
         TextBlock example = new() { Classes = { StyleClasses.Muted }, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
         SetDock(on, Dock.Left);
         SetDock(name, Dock.Left);
         // The example takes what the row leaves, so a long one ends in an ellipsis rather than cut at the frame.
-        DockPanel line = new() { Margin = new Thickness(20, 0, 0, 0), Children = { on, name, example } };
+        DockPanel line = new() { Margin = new Thickness(Gaps.Page, 0, 0, 0), Children = { on, name, example } };
         Panel row = new() { Children = { language, line } };
         bool setting = false;
         all.IsCheckedChanged += (_, _) =>
@@ -171,5 +171,5 @@ public sealed class PostfixTemplatesPane : ListPane
         });
     }
 
-    private static TextBox Code() => new TextBox { IsReadOnly = true, FontSize = 12.5, Classes = { StyleClasses.Search }, Focusable = false }.InCodeFont();
+    private static TextBox Code() => new TextBox { IsReadOnly = true, Classes = { StyleClasses.Code }, Focusable = false };
 }

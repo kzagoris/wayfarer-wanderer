@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -25,19 +26,24 @@ public sealed class HiddenTabsPopup : SearchPopup<HiddenTab>
     }
 
     /// <summary>A tab's row: its icon, its title and its file's folder, muted.</summary>
-    protected override Control Row()
+    protected override Control Row() => TabRow<HiddenTab>((tab, icon, name, folder) =>
     {
-        RowIcon icon = new() { VerticalAlignment = VerticalAlignment.Center };
-        TextBlock name = new() { VerticalAlignment = VerticalAlignment.Center };
-        TextBlock folder = MutedText.Of(string.Empty);
-        StackPanel row = new() { Orientation = Orientation.Horizontal, Spacing = 8, Height = ListRow.Height, Children = { icon, name, folder } };
-        return row.Showing<HiddenTab>(tab =>
-        {
-            icon.Data = tab.Icon;
-            icon.Foreground = tab.IconBrush;
-            name.Text = tab.Name;
-            folder.Text = tab.Folder;
-        });
+        icon.Data = tab.Icon;
+        icon.Foreground = tab.IconBrush;
+        name.Text = tab.Name;
+        folder.Text = tab.Folder;
+    });
+
+    /// <summary>A row of a list of tabs (the hidden tabs', the Switcher's): an icon, a name and its detail at the row's end,
+    /// which <paramref name="show"/> fills from each item the list hands the row.</summary>
+    internal static Control TabRow<T>(Action<T, RowIcon, TextBlock, TextBlock> show)
+        where T : class
+    {
+        RowIcon icon = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, Gaps.Normal, 0), [DockPanel.DockProperty] = Dock.Left };
+        TextBlock name = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+        TextBlock after = ListRow.DetailText();
+        DockPanel row = new() { Height = ListRow.Height, Children = { icon, after, name } };
+        return row.Showing<T>(item => show(item, icon, name, after));
     }
 }
 

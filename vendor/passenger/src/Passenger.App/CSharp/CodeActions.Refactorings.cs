@@ -200,7 +200,7 @@ internal sealed partial class CodeActions
         IReadOnlyList<LspLocation> declared = await lsp.DefinitionAsync(caret);
         if (declared.Count != 1)
         {
-            return (null, declared.Count == 0 ? "Nothing to delete here: put the caret on a name" : $"Safe Delete cannot delete a symbol declared in {declared.Count} places");
+            return (null, declared.Count == 0 ? "Nothing to delete here: put the caret on a name" : $"Safe Delete cannot delete a symbol declared in {Numbers.Said(declared.Count)} places");
         }
         string path = DocumentUris.ToPath(declared[0].Uri);
         string? root = context.CSharp?.Session?.Folder;
@@ -264,15 +264,15 @@ internal sealed partial class CodeActions
             string shown = PathNames.Shown(path, root);
             (int line, string used) = preview(path, use.Range.Start);
             rows.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
-            TextBlock where = new() { Text = $"{shown}:{line + 1}", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 1, 12, 1) };
+            TextBlock where = new() { Text = $"{shown}:{line + 1}", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, Gaps.Wide, 0) };
             TextBlock code = new TextBlock
             {
                 Text = used,
-                FontSize = 12,
+                Classes = { StyleClasses.Code },
                 Foreground = InfoCard.Brush(TokenKeys.TextMuted),
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 VerticalAlignment = VerticalAlignment.Center,
-            }.InCodeFont();
+            };
             Grid.SetRow(where, row);
             Grid.SetRow(code, row);
             Grid.SetColumn(code, 1);
@@ -281,7 +281,7 @@ internal sealed partial class CodeActions
         }
         int count = doomed.Uses.Count;
         string text = $"The {doomed.Removal.Kind} '{doomed.Removal.Name}' has {Plural.Of(count, "usage")} that would no longer compile once it is deleted:";
-        ScrollViewer list = new() { MaxHeight = 220, Content = rows, Margin = new Thickness(0, 0, 0, 4) };
+        ScrollViewer list = new() { MaxHeight = 220, Content = rows, Margin = new Thickness(0, 0, 0, Gaps.Tight) };
         return await new ConfirmDialog("Safe Delete", text, "Delete Anyway", detail: list).ShowDialog<bool>(owner);
     }
 

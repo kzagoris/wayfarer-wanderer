@@ -25,7 +25,7 @@ internal sealed class CilExpressionEvaluator(RuntimeAssemblyPrimitiveTypeClasses
                 ICorDebugHandleValue handle = handles.CreateOwnedHandle(reference);
                 return new EvaluationResult { Value = handle, OwnedResultHandle = handles.DetachIfOwned(handle) };
             }
-            if (ManagedDebugger.ReturnValueIndex(expression) is int index && debugger.TryGetReturnedValue(context.ThreadId, index, out ICorDebugHandleValue? returned) && returned is not null)
+            if (ManagedDebugger.ReturnValueIndex(expression) is int index && await debugger.ReturnedValueAsync(context.ThreadId, index) is (true, { } returned))
             {
                 // What a call returned, named alone: the value itself, as the exception is, with no code compiled to reach it.
                 using EvaluationHandleScope handles = new EvaluationHandleScope();
@@ -47,6 +47,7 @@ internal sealed class CilExpressionEvaluator(RuntimeAssemblyPrimitiveTypeClasses
             return new EvaluationResult
             {
                 Value = interpretationResult.Value, OwnedResultHandle = interpretationResult.OwnedResultHandle, Declared = DeclaredOf(compiled), Text = interpretationResult.Text,
+                Void = interpretationResult.Void,
             };
         }
         catch (Exception ex)
@@ -146,6 +147,10 @@ internal sealed class EvaluationResult : IDisposable
     /// <summary>A string the evaluation made that the program could not be given, as it runs no code where it is stopped: the
     /// value, where <see cref="Value"/> is null.</summary>
     public string? Text { get; init; }
+
+    /// <summary>Whether the expression ran and has no value at all, a call of a method that returns nothing, where
+    /// <see cref="Value"/> is null.</summary>
+    public bool Void { get; init; }
     public ICorDebugHandleValue? OwnedResultHandle
     {
         init => _ownedResultHandle = value;

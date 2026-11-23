@@ -2,8 +2,9 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Passenger.Profiler;
+using Passenger.App.ToolWindows;
 using Passenger.Core;
+using Passenger.Profiler;
 
 namespace Passenger.App.Profiling;
 
@@ -41,7 +42,7 @@ public sealed class FramesView : DockPanel
     private readonly TextBlock summary;
     private readonly TreeRows<LayoutRow> rows = [];
     private readonly TreeList table;
-    private readonly TextBlock placeholder;
+    private readonly EmptyState placeholder;
     private readonly BandOverTable shown;
     private IReadOnlyList<UiFrame> frames = [];
     private double origin;
@@ -54,7 +55,7 @@ public sealed class FramesView : DockPanel
         StackPanel legend = FramesTable.Legend([("Measure", TokenKeys.Graph_0), ("Arrange", TokenKeys.Graph_1), ("Render", TokenKeys.Graph_2), ("Other UI work", TokenKeys.TextMuted),
             ("Compositor", TokenKeys.Graph_3)]);
         summary = FramesTable.Muted(string.Empty);
-        summary.Margin = new Thickness(12, 6, 12, 6);
+        summary.Margin = new Thickness(Gaps.Wide, Gaps.Small, Gaps.Wide, Gaps.Small);
         summary.TextWrapping = TextWrapping.Wrap;
         ColumnTitles titles = ColumnTitles.OfNumbers(("Control", 0), ("Own time", NumberWidth), ("Measures", NumberWidth), ("Measure time", NumberWidth),
             ("Arranges", NumberWidth), ("Arrange time", NumberWidth + 16));
@@ -120,7 +121,7 @@ public sealed class FramesView : DockPanel
         new(frame.MeasureMs, TokenKeys.Graph_0),
         new(frame.ArrangeMs, TokenKeys.Graph_1),
         new(frame.RecordMs, TokenKeys.Graph_2),
-        new(Math.Max(0, frame.DurationMs - frame.LayoutMs - frame.RecordMs), TokenKeys.TextMuted, 0.35),
+        FramePart.Rest(Math.Max(0, frame.DurationMs - frame.LayoutMs - frame.RecordMs)),
         new(frame.CompositeMs, TokenKeys.Graph_3),
     ];
 
@@ -163,15 +164,15 @@ public sealed class FramesView : DockPanel
             return string.Empty;
         }
         UiFrame longest = all.MaxBy(f => f.DurationMs)!;
-        return $"{all.Count:N0} {Plural.Noun(all.Count, "frame")}: {UiFrames.MedianMs(all):0.0} ms on the UI thread at the median, {longest.DurationMs:0.0} ms at the longest (frame {longest.Number}); "
-            + $"measuring {all.Sum(f => f.MeasureMs):N1} ms, arranging {all.Sum(f => f.ArrangeMs):N1} ms, rendering {all.Sum(f => f.RecordMs):N1} ms, the compositor {all.Sum(f => f.CompositeMs):N1} ms in all. "
+        return $"{Numbers.Said(all.Count)} {Plural.Noun(all.Count, "frame")}: {Numbers.Fixed(UiFrames.MedianMs(all), 1)} ms on the UI thread at the median, {Numbers.Fixed(longest.DurationMs, 1)} ms at the longest (frame {longest.Number}); "
+            + $"measuring {Numbers.Fixed(all.Sum(f => f.MeasureMs), 1)} ms, arranging {Numbers.Fixed(all.Sum(f => f.ArrangeMs), 1)} ms, rendering {Numbers.Fixed(all.Sum(f => f.RecordMs), 1)} ms, the compositor {Numbers.Fixed(all.Sum(f => f.CompositeMs), 1)} ms in all. "
             + "Choose a frame for its own.";
     }
 
     private string Said(UiFrame frame) =>
-        $"Frame {frame.Number} at {frame.StartMs - origin:N0} ms: {frame.DurationMs:0.0} ms on the UI thread, {frame.MeasurePasses:N0} {Plural.Noun(frame.MeasurePasses, "measure pass", "measure passes")} and "
-        + $"{frame.ArrangePasses:N0} {Plural.Noun(frame.ArrangePasses, "arrange pass", "arrange passes")} ({frame.Measures:N0} {Plural.Noun(frame.Measures, "measure")}, {frame.Arranges:N0} {Plural.Noun(frame.Arranges, "arrange")}); "
-        + $"measuring {frame.MeasureMs:0.0} ms, arranging {frame.ArrangeMs:0.0} ms, rendering {frame.RecordMs:0.0} ms, then the compositor {frame.CompositeMs:0.0} ms.";
+        $"Frame {frame.Number} at {Numbers.Fixed(frame.StartMs - origin, 0)} ms: {Numbers.Fixed(frame.DurationMs, 1)} ms on the UI thread, {Numbers.Said(frame.MeasurePasses)} {Plural.Noun(frame.MeasurePasses, "measure pass", "measure passes")} and "
+        + $"{Numbers.Said(frame.ArrangePasses)} {Plural.Noun(frame.ArrangePasses, "arrange pass", "arrange passes")} ({Numbers.Said(frame.Measures)} {Plural.Noun(frame.Measures, "measure")}, {Numbers.Said(frame.Arranges)} {Plural.Noun(frame.Arranges, "arrange")}); "
+        + $"measuring {Numbers.Fixed(frame.MeasureMs, 1)} ms, arranging {Numbers.Fixed(frame.ArrangeMs, 1)} ms, rendering {Numbers.Fixed(frame.RecordMs, 1)} ms, then the compositor {Numbers.Fixed(frame.CompositeMs, 1)} ms.";
 
 
     /// <summary>A control's row opened: its XAML, or its place in the Live Visual Tree; false for a type's row.</summary>
@@ -189,25 +190,25 @@ public sealed class FramesView : DockPanel
     /// time and counts in their columns.</summary>
     private Control RowOf(ColumnTitles titles)
     {
-        (StackPanel named, RowIcon chevron, TextBlock name) = FramesTable.Named<LayoutRow>(Toggle);
+        (StackPanel named, RowExpander chevron, TextBlock name) = FramesTable.Named<LayoutRow>(Toggle);
         TextBlock[] numbers = [FramesTable.Number(), FramesTable.Number(), FramesTable.Number(), FramesTable.Number(), FramesTable.Number()];
         Grid row = titles.Row([named, .. numbers]);
         return row.Showing<LayoutRow>(shown =>
         {
-            chevron.IsVisible = shown.Cost.Controls.Count > 0;
-            chevron.Turned = shown.IsExpanded;
+            chevron.Expands = shown.Cost.Controls.Count > 0;
+            chevron.IsOpen = shown.IsExpanded;
             name.Text = shown.Cost.Name;
-            name.FontWeight = shown.Depth == 0 ? FontWeight.SemiBold : FontWeight.Normal;
+            name.Classes.Set(StyleClasses.Strong, shown.Depth == 0);
             ToolTip.SetTip(name, shown.Cost.Control is { } control
                 ? $"{control.FullType}{(control.File is { } file ? $"\n{Path.GetFileName(file)}:{LineOf?.Invoke(control) ?? control.Line}" : string.Empty)}"
                 : Plural.Of(shown.Cost.Controls.Count, "control"));
-            named.Margin = new Thickness(shown.Depth * 14, 0, 0, 0);
+            named.Margin = new Thickness(shown.Depth * Gaps.Indent, 0, 0, 0);
             LayoutWork work = shown.Cost.Work;
-            FramesTable.Put(numbers[0], $"{work.SelfMs:N1} ms");
-            FramesTable.Put(numbers[1], $"{work.Measures:N0}");
-            FramesTable.Put(numbers[2], $"{work.MeasureMs:N1} ms");
-            FramesTable.Put(numbers[3], $"{work.Arranges:N0}");
-            FramesTable.Put(numbers[4], $"{work.ArrangeMs:N1} ms");
+            FramesTable.Put(numbers[0], $"{Numbers.Fixed(work.SelfMs, 1)} ms");
+            FramesTable.Put(numbers[1], Numbers.Said(work.Measures));
+            FramesTable.Put(numbers[2], $"{Numbers.Fixed(work.MeasureMs, 1)} ms");
+            FramesTable.Put(numbers[3], Numbers.Said(work.Arranges));
+            FramesTable.Put(numbers[4], $"{Numbers.Fixed(work.ArrangeMs, 1)} ms");
         });
     }
 }

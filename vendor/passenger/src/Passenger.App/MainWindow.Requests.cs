@@ -56,6 +56,7 @@ public partial class MainWindow
         requestLog = new RequestLog(RouteReached);
         Dock.Add(new Docking.ToolWindow(ToolWindowIds.Requests, "Requests", IconKeys.Endpoints, MakeRequests, Docking.ToolAnchor.BottomRight)
         {
+            Serves = ToolWindowServes.WebApps,
             Action = AppActions.ShowRequests,
             Menus = [new MenuPlace("Tools", 0, 4)],
         });
@@ -217,7 +218,7 @@ public partial class MainWindow
                     LiveRequests live = target.Place is { } place
                         ? await LiveRequests.AttachAsync(target.Process, place, told => log.Hear(told, target.Name, target.Project), asked.Token)
                         : await LiveRequests.AttachAsync(target.Process, told => log.Hear(told, target.Name, target.Project),
-                            _ => RequestLog.Following = ProgramStarts.Waiting(target.Name, "following its requests"), asked.Token);
+                            wait => RequestLog.Following = wait.Saying(target.Name, "following its requests"), asked.Token);
                     followedRequests[target.Key] = (target, live);
                     IdeErrors.Observe(live.Ended.ContinueWith(_ => UiThread.Post(() =>
                     {
@@ -309,9 +310,9 @@ public partial class MainWindow
             {
                 said.Append("\n  ").Append(string.Join(' ', command.Text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)))
                     .Append(string.Create(CultureInfo.InvariantCulture, $" ({command.Milliseconds:0.#} ms"))
-                    .Append(command.Rows is { } rows and >= 0 ? $", {rows} rows changed" : command.Reads is { } reads ? $", {reads} reads" : string.Empty)
+                    .Append(command.Rows is { } rows and >= 0 ? $", {Numbers.Said(rows)} rows changed" : command.Reads is { } reads ? $", {Numbers.Said(reads)} reads" : string.Empty)
                     .Append(command.Parameters is { Length: > 0 } parameters ? $", {parameters}" : string.Empty)
-                    .Append(command.Repeated ? $", run {command.Runs} times in this request" : string.Empty)
+                    .Append(command.Repeated ? $", run {Numbers.Said(command.Runs)} times in this request" : string.Empty)
                     .Append(command.Slow ? ", slow" : string.Empty)
                     .Append(command.Error is { } failed ? $", failed: {failed}" : string.Empty).Append(')');
             }
@@ -417,7 +418,7 @@ public partial class MainWindow
     /// <summary>An EF Core query's SQL the debugger read (#420) in a read-only tab, as a command's opens: one copy for each
     /// text, so the same SQL opened again shows the tab it has.</summary>
     private void OpenQuerySql(string sql) =>
-        OpenSql($"query-{Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(sql)))[..16]}", sql, "The query's SQL");
+        OpenSql($"query-{FileNames.Hash(sql, 16)}", sql, "The query's SQL");
 
     /// <summary>SQL opened whole in a read-only tab, from a copy under the state's cache (<see cref="RequestLog.IsCommandCopy"/>).</summary>
     private void OpenSql(string name, string text, string what)

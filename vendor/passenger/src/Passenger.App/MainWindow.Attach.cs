@@ -226,6 +226,11 @@ public partial class MainWindow
     private async Task Reattach()
     {
         DotnetProcess last = attachedTo[^1];
+        using Working? looking = BeginWork(AppActions.ReattachToProcess, $"Looking for {last.Program} to attach to…");
+        if (looking is null)
+        {
+            return;
+        }
         status.Text = $"Looking for {last.Program} to attach to";
         IReadOnlyList<DotnetProcess> running = await AttachableAsync();
         List<DotnetProcess> candidates = running.FirstOrDefault(p => p.Id == last.Id && Same(p, last)) is { } same ? [same]
@@ -233,15 +238,17 @@ public partial class MainWindow
             : [.. running.Where(p => p.Program == last.Program && p.Container == last.Container)];
         if (candidates is [{ } only])
         {
-            if (await AttachAsync(only) is { } problem)
+            string? problem = await AttachAsync(only);
+            if (problem is not null)
             {
                 status.Text = problem;
             }
+            looking.Tell(problem is null, problem ?? $"Attached to {only.Program}");
             return;
         }
         status.Text = candidates.Count == 0
             ? $"Reattach to Process: no .NET process named {last.Program} is running{(last.Container is { } container ? $" in {container}" : string.Empty)}"
-            : $"Reattach to Process: {candidates.Count} programs are named {last.Program}; choose one";
+            : $"Reattach to Process: {Numbers.Said(candidates.Count)} programs are named {last.Program}; choose one";
         ShowAttachToProcess(last.Program);
     }
 

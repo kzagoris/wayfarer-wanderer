@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Globalization;
+using System.IO.Enumeration;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
@@ -119,10 +120,6 @@ public sealed record DotnetProcess(int Id, string Name, string CommandLine, stri
 /// since no process debugs itself.</summary>
 public static partial class DotnetProcesses
 {
-    /// <summary>The runtime's debugger transport (dbgshim's handshake and ICorDebug's channel) on macOS and Linux.</summary>
-    [GeneratedRegex(@"^clr-debug-pipe-(?<id>\d+)-(?<started>\d+)-in$")]
-    private static partial Regex Transport();
-
     /// <summary>A diagnostic port's pipe on Windows.</summary>
     [GeneratedRegex(@"^dotnet-diagnostic-(?<id>\d+)$")]
     private static partial Regex DiagnosticPort();
@@ -205,6 +202,53 @@ public static partial class DotnetProcesses
         }
     }
 
+    /// <summary>The start the runtime names a process's socket and pipes for (<see cref="RuntimeFiles"/>): on macOS the second
+    /// it started, on Linux its start in clock ticks since boot; null for one gone, a zombie or unreadable, and on Windows.</summary>
+    internal static unsafe long? StartKey(int id)
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            byte* info = stackalloc byte[BsdInfoSize];
+            return ProcPidInfo(id, ProcPidTbsdInfo, 0, info, BsdInfoSize) == BsdInfoSize ? *(long*)(info + BsdStartOffset) : null;
+        }
+        return ProcStat.Of(id) is { State: not 'Z' } stat ? stat.Started : null;
+    }
+
+    /// <summary>The processes of process group <paramref name="group"/> now, on macOS and Linux; none elsewhere. Linux keeps
+    /// no list of a group's processes, so there each process /proc lists is asked its group, a call that reads no file and
+    /// allocates nothing.</summary>
+    internal static unsafe IReadOnlyList<int> InGroup(int group)
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            const int GroupOnly = 2;
+            int[] ids = new int[1024];
+            fixed (int* buffer = ids)
+            {
+                int bytes = ProcListPids(GroupOnly, (uint)group, buffer, ids.Length * sizeof(int));
+                return bytes <= 0 ? [] : [.. ids.Take(Math.Min(bytes / sizeof(int), ids.Length)).Where(id => id > 0)];
+            }
+        }
+        if (!OperatingSystem.IsLinux())
+        {
+            return [];
+        }
+        List<int> found = [];
+        foreach (int id in Processes)
+        {
+            if (id > 0 && GroupOf(id) == group)
+            {
+                found.Add(id);
+            }
+        }
+        return found;
+    }
+
+    /// <summary>The id of each process /proc lists, read from each folder's name where it lies; 0 for every other name.</summary>
+    private static FileSystemEnumerable<int> Processes => new("/proc",
+        static (ref FileSystemEntry entry) => int.TryParse(entry.FileName, NumberStyles.None, CultureInfo.InvariantCulture, out int id) ? id : 0,
+        new EnumerationOptions { AttributesToSkip = 0 });
+
     /// <summary>A variable of the environment a process started with, as the system keeps it (KERN_PROCARGS2 on macOS, /proc
     /// on Linux), which it gives for a process of the same user; null where the process has none, or it cannot be read (gone,
     /// another user's, a program of the system's own, Windows).</summary>
@@ -257,22 +301,20 @@ public static partial class DotnetProcesses
                 ? *(uint*)(info + ShortBsdStatusOffset) == ZombieStatus
                 : Marshal.GetLastPInvokeError() == NoSuchProcess;
         }
-        try
-        {
-            string stat = File.ReadAllText($"/proc/{id}/stat");
-            return stat.LastIndexOf(')') is int end and >= 0 && end + 2 < stat.Length && stat[end + 2] == 'Z';
-        }
-        catch (Exception unread) when (unread is IOException or UnauthorizedAccessException)
-        {
-            return false;
-        }
+        return ProcStat.Of(id) is { State: 'Z' };
     }
 
-    /// <summary>Why macOS lets no other program read a process's memory (a dump, a heap's snapshot), even a program of its
-    /// own user's: its executable is signed with the hardened runtime and without the get-task-allow entitlement, as an app
-    /// notarized for release is (Godot's own builds among them). Null where it may be read, it cannot be asked, or off macOS.</summary>
+    /// <summary>Why a process's memory (a dump, a heap's snapshot) is read only through its own runtime: on Windows, it runs
+    /// as a 32-bit program (<see cref="Runs32Bit"/>), whose runtime's reader a 64-bit Passenger cannot load; on macOS, no
+    /// other program may read it, even a program of its own user's, its executable signed with the hardened runtime and
+    /// without the get-task-allow entitlement, as an app notarized for release is (Godot's own builds among them). Null
+    /// where it may be read or it cannot be asked.</summary>
     public static unsafe string? WhyUnreadable(int id)
     {
+        if (OperatingSystem.IsWindows())
+        {
+            return Runs32Bit(id) ? $"process {id} {RunsAs32Bit}, whose runtime's reader of its memory this 64-bit {Product.Name} cannot load" : null;
+        }
         if (!OperatingSystem.IsMacOS())
         {
             return null;
@@ -433,6 +475,29 @@ public static partial class DotnetProcesses
         return started;
     }
 
+    /// <summary>Whether a terminal's shell has the terminal to itself, no program it started running in front of it: on
+    /// macOS and Linux its process group is the terminal's foreground one (a job it runs takes the terminal while it runs),
+    /// on Windows it runs no program it started. Null where the system will not say (the process gone, no terminal). Off
+    /// the UI thread: on Windows each process's parent is a call into the system.</summary>
+    public static unsafe bool? ShellInFront(int shell)
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            byte* info = stackalloc byte[BsdInfoSize];
+            if (ProcPidInfo(shell, ProcPidTbsdInfo, 0, info, BsdInfoSize) != BsdInfoSize)
+            {
+                return null;
+            }
+            uint front = *(uint*)(info + BsdTerminalGroupOffset);
+            return front == 0 ? null : front == *(uint*)(info + BsdGroupOffset);
+        }
+        if (OperatingSystem.IsWindows())
+        {
+            return StartedBy(shell).Count == 0;
+        }
+        return ProcStat.Of(shell) is { TerminalGroup: > 0 } stat ? stat.TerminalGroup == stat.Group : null;
+    }
+
     /// <summary>How many parents up from a process its ancestor is, or null when it is none of its nearest few.</summary>
     private static int? Depth(int id, int ancestor)
     {
@@ -465,27 +530,36 @@ public static partial class DotnetProcesses
             {
                 return ParentMac(id);
             }
-            string stat = File.ReadAllText($"/proc/{id}/stat");
-            // The fields after the name, which may hold spaces and parentheses itself: the parent is the 4th field.
-            return int.Parse(stat[(stat.LastIndexOf(')') + 2)..].Split(' ')[1], CultureInfo.InvariantCulture);
+            return ProcStat.Of(id)?.Parent;
         }
-        catch (Exception gone) when (gone is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or FormatException
-            or IndexOutOfRangeException)
+        catch (Exception gone) when (gone is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
         {
             return null;
         }
     }
 
-    /// <summary>Each process the runtime's pipes name, with the start its transport's pipes were made for (none on Windows,
-    /// whose pipes go with their process).</summary>
+    /// <summary>Each process whose runtime opened a debugger's transport, with the start its pipes were made for: on macOS
+    /// and Linux each process the system lists whose pipe of its id and start (<see cref="RuntimeFiles"/>) is in the
+    /// temporary folder, asked by that name, so the folder's other files, killed programs' among them, are never read; on
+    /// Windows each diagnostic port's pipe, which goes with its process.</summary>
     private static IEnumerable<(int Id, long? Started)> Candidates()
     {
-        string folder = OperatingSystem.IsWindows() ? @"\\.\pipe\" : Path.GetTempPath();
-        Regex named = OperatingSystem.IsWindows() ? DiagnosticPort() : Transport();
+        if (!OperatingSystem.IsWindows())
+        {
+            string folder = Path.GetTempPath();
+            foreach (int id in Listed())
+            {
+                if (StartKey(id) is long started && File.Exists(Path.Combine(folder, string.Create(CultureInfo.InvariantCulture, $"clr-debug-pipe-{id}-{started}-in"))))
+                {
+                    yield return (id, started);
+                }
+            }
+            yield break;
+        }
         string[] names;
         try
         {
-            names = Directory.GetFiles(folder);
+            names = Directory.GetFiles(@"\\.\pipe\");
         }
         catch (Exception unreadable) when (unreadable is IOException or UnauthorizedAccessException)
         {
@@ -493,10 +567,48 @@ public static partial class DotnetProcesses
         }
         foreach (string name in names)
         {
-            if (named.Match(Path.GetFileName(name)) is { Success: true } match && int.TryParse(match.Groups["id"].ValueSpan, CultureInfo.InvariantCulture, out int id))
+            if (DiagnosticPort().Match(Path.GetFileName(name)) is { Success: true } match && int.TryParse(match.Groups["id"].ValueSpan, CultureInfo.InvariantCulture, out int id))
             {
-                yield return (id, match.Groups["started"].Success && long.TryParse(match.Groups["started"].ValueSpan, CultureInfo.InvariantCulture, out long started) ? started : null);
+                yield return (id, null);
             }
+        }
+    }
+
+    /// <summary>Each process whose runtime has its files (<see cref="RuntimeFiles"/>) in this process's temporary folder, its
+    /// diagnostic socket or its debugger's pipe, with the start they are named for: asked by those names, as
+    /// <see cref="Candidates"/> asks, so the folder's other files are never read. None on Windows.</summary>
+    internal static IEnumerable<(int Id, long Started)> WithRuntimeFiles()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            yield break;
+        }
+        string folder = Path.GetTempPath();
+        foreach (int id in Listed())
+        {
+            if (StartKey(id) is long started
+                && (File.Exists(Path.Combine(folder, string.Create(CultureInfo.InvariantCulture, $"dotnet-diagnostic-{id}-{started}-socket")))
+                    || File.Exists(Path.Combine(folder, string.Create(CultureInfo.InvariantCulture, $"clr-debug-pipe-{id}-{started}-in")))))
+            {
+                yield return (id, started);
+            }
+        }
+    }
+
+    /// <summary>Every process the system lists now, on macOS and Linux.</summary>
+    private static unsafe IReadOnlyList<int> Listed()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            return [.. Processes.Where(id => id > 0)];
+        }
+        const int AllProcesses = 1;
+        // Room for those started since the system said how many there are.
+        int[] ids = new int[ProcListPids(AllProcesses, 0, null, 0) / sizeof(int) + 64];
+        fixed (int* buffer = ids)
+        {
+            int bytes = ProcListPids(AllProcesses, 0, buffer, ids.Length * sizeof(int));
+            return bytes <= 0 ? [] : [.. ids.Take(Math.Min(bytes / sizeof(int), ids.Length)).Where(id => id > 0)];
         }
     }
 
@@ -538,6 +650,8 @@ public static partial class DotnetProcesses
     private const int NoSuchProcess = 3;
 
     private const int BsdUidOffset = 20;
+    private const int BsdGroupOffset = 100;
+    private const int BsdTerminalGroupOffset = 112;
     private const int BsdStartOffset = 120;
 
     private static unsafe int? ParentMac(int id)
@@ -649,10 +763,7 @@ public static partial class DotnetProcesses
     private static DotnetProcess? ReadLinux(int id, long? started)
     {
         string folder = $"/proc/{id}";
-        string stat = File.ReadAllText($"{folder}/stat");
-        // The fields after the name, which may hold spaces and parentheses itself: the start is the 22nd field.
-        string[] fields = stat[(stat.LastIndexOf(')') + 2)..].Split(' ');
-        if (started is long expected && (fields.Length < 20 || fields[19] != expected.ToString(CultureInfo.InvariantCulture)))
+        if (started is long expected && ProcStat.Of(id)?.Started != expected)
         {
             return null;
         }
@@ -716,16 +827,31 @@ public static partial class DotnetProcesses
             // Protected, or another user's the system will not describe: listed by its id, as the debugger may still be let in.
             return new DotnetProcess(id, id.ToString(CultureInfo.InvariantCulture), string.Empty, string.Empty, false);
         }
-        string name = ImagePath(process) is { } path ? Path.GetFileName(path) : $"{id}";
+        string name = Kernel32.ExecutableOf(process) is { } path ? Path.GetFileName(path) : $"{id}";
         (string user, bool mine) = Owner(process);
-        return new DotnetProcess(id, name, WindowsCommandLine(process) ?? string.Empty, user, mine);
+        return new DotnetProcess(id, name, WindowsCommandLine(process) ?? string.Empty, user, mine)
+        {
+            WhyNot = Kernel32.Runs32Bit(process) == true ? Undebugged32Bit : null,
+        };
     }
 
-    private static unsafe string? ImagePath(SafeProcessHandle process)
+    /// <summary>How a 32-bit program runs on 64-bit Windows, as what Passenger cannot do with one says it.</summary>
+    public const string RunsAs32Bit = "runs as a 32-bit (x86) program";
+
+    /// <summary>Why the debugger attaches to no 32-bit program: the runtime's debugging library it loads is of the program's
+    /// own processor, and Passenger's debugger is a 64-bit program.</summary>
+    public const string Undebugged32Bit = $"it {RunsAs32Bit}, and the debugger, a 64-bit program, loads only a 64-bit runtime's debugging library";
+
+    /// <summary>Whether a process runs as a 32-bit program on 64-bit Windows (an x86 program's apphost, or the x86 dotnet);
+    /// false where it does not, it is gone or Windows will not say, and off Windows.</summary>
+    public static bool Runs32Bit(int id)
     {
-        char* buffer = stackalloc char[32768];
-        uint length = 32768;
-        return QueryFullProcessImageName(process, 0, buffer, &length) ? new string(buffer, 0, (int)length) : null;
+        if (!OperatingSystem.IsWindows())
+        {
+            return false;
+        }
+        using SafeProcessHandle process = Kernel32.OpenProcess(Kernel32.ProcessQueryLimitedInformation, false, (uint)id);
+        return !process.IsInvalid && Kernel32.Runs32Bit(process) == true;
     }
 
     /// <summary>The command line as the program was given it (NtQueryInformationProcess, Windows 8.1 on): a UNICODE_STRING
@@ -770,6 +896,13 @@ public static partial class DotnetProcesses
     [LibraryImport("libc", EntryPoint = "proc_pidinfo", SetLastError = true)]
     private static unsafe partial int ProcPidInfo(int pid, int flavor, ulong argument, byte* buffer, int size);
 
+    [LibraryImport("libc", EntryPoint = "proc_listpids")]
+    private static unsafe partial int ProcListPids(int type, uint argument, int* buffer, int size);
+
+    /// <summary>getpgid: a process's group, or -1 for one gone.</summary>
+    [LibraryImport("libc", EntryPoint = "getpgid")]
+    private static partial int GroupOf(int pid);
+
     [LibraryImport("libc", EntryPoint = "sysctl")]
     private static unsafe partial int SysCtl(int* name, uint length, byte* old, nuint* oldLength, byte* value, nuint valueLength);
 
@@ -783,10 +916,6 @@ public static partial class DotnetProcesses
     [LibraryImport("dbghelp.dll", EntryPoint = "MiniDumpWriteDump", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool MiniDumpWriteDump(SafeProcessHandle process, uint id, SafeFileHandle file, uint type, IntPtr exception, IntPtr stream, IntPtr callback);
-
-    [LibraryImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static unsafe partial bool QueryFullProcessImageName(SafeProcessHandle process, uint flags, char* name, uint* size);
 
     [LibraryImport("advapi32.dll", EntryPoint = "OpenProcessToken")]
     [return: MarshalAs(UnmanagedType.Bool)]

@@ -71,6 +71,14 @@ public static class AdapterProgram
             Passenger.Debugger.Extensions.EvaluationTimeout = AdapterEnvironment.EvaluationTimeout;
             Passenger.Debugger.ManagedDebugger.LateYield = AdapterEnvironment.LateYield;
             Passenger.Debugger.ManagedDebugger.FailAtModule = AdapterEnvironment.FailAtModule;
+            Passenger.Debugger.ManagedDebugger.HoldsNoneAtEvaluations = AdapterEnvironment.HoldNone;
+            Passenger.Debugger.ManagedDebugger.HoldsBoxes = AdapterEnvironment.HoldBox;
+            Passenger.Debugger.ManagedDebugger.HoldsAsyncSteps = AdapterEnvironment.HoldAsyncStep;
+            Passenger.Debugger.ManagedDebugger.HoldsFirstLambda = AdapterEnvironment.HoldLambda;
+            Passenger.Debugger.ManagedDebugger.HoldsLetGo = AdapterEnvironment.HoldLetGo;
+            Passenger.Debugger.ManagedDebugger.FailsHandling = AdapterEnvironment.FailHandling;
+            Passenger.Debugger.ManagedDebugger.HoldsStartOf = AdapterEnvironment.HoldStart;
+            Passenger.Debugger.Decompilation.SymbolCache.Held = AdapterEnvironment.HoldDecompile;
             _ = Passenger.Core.Waits.Scale;
         }
         catch (FormatException error)
@@ -98,10 +106,11 @@ public static class AdapterProgram
         }
 
         // A fault in work nothing awaits, as it happens: on the error stream, and in the engine's log when it is kept.
-        Passenger.Core.UnawaitedWork.Install(error =>
+        Passenger.Core.UnawaitedWork.Install((error, observedAt) =>
         {
-            Console.Error.WriteLine($"Error: {error}");
-            Log($"Error: {error}");
+            string details = Passenger.Core.UnawaitedWork.Details(error, observedAt);
+            Console.Error.WriteLine($"Error: {details}");
+            Log($"Error: {details}");
         });
         Log("Starting");
         // No program the adapter launches may hold the protocol: on macOS and Linux it is given descriptors 0, 1 and 2 as its own.

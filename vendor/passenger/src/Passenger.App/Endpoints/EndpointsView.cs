@@ -47,7 +47,7 @@ public sealed class EndpointsView : DockPanel
     public sealed record ProjectRow(string Path, string Name);
 
     private readonly ListBox list;
-    private readonly TextBlock placeholder;
+    private readonly EmptyState placeholder;
     private readonly ComboBox environments;
     private readonly EndpointsParts parts;
     private readonly Dictionary<(string File, string Request), bool> outcomes = [];
@@ -75,28 +75,26 @@ public sealed class EndpointsView : DockPanel
         ListKeys.Act(list, new ListActs { Open = GoToChosen, Source = GoToChosen, Enter = SendChosen });
         ListMenus.Attach(list, () => list.SelectedItem is WebRoute route ?
         [
-            .. RouteRequests.Sendable(route) ? (IEnumerable<MenuItem>)[ListMenus.Item("Send Request", "Enter", () => RouteSendRequested?.Invoke(this, route))] : [],
-            ListMenus.Item("Go to Route", "F4", () => RouteGoToRequested?.Invoke(this, route)),
+            .. RouteRequests.Sendable(route) ? (IEnumerable<MenuItem>)[ListMenus.Open("Send Request", () => RouteSendRequested?.Invoke(this, route))] : [],
+            ListMenus.Source(() => RouteGoToRequested?.Invoke(this, route)),
             new Separator(),
             parts.Item(AppActions.GenerateOpenApiRequests),
             parts.Item(AppActions.NameOpenApiDocument),
         ] : list.SelectedItem is ProjectRow ? [parts.Item(AppActions.GenerateOpenApiRequests), parts.Item(AppActions.NameOpenApiDocument)]
         : list.SelectedItem is not EndpointRequest chosen ? [] :
         [
-            ListMenus.Item("Test", "Enter", () => IdeErrors.Observe(TestAsync(chosen))),
-            ListMenus.Item("Interactive Test…", null, () => InteractiveRequested?.Invoke(this, chosen)),
-            ListMenus.Item("Go to Request", "F4", GoToChosen),
+            ListMenus.Open("Test", () => IdeErrors.Observe(TestAsync(chosen))),
+            ListMenus.Item("Interactive Test…", () => InteractiveRequested?.Invoke(this, chosen)),
+            ListMenus.Source(GoToChosen),
         ]);
-        placeholder = new TextBlock { Text = "No requests: add an .http file (GET https://…)", Classes = { StyleClasses.EmptyText } };
+        placeholder = new EmptyState { Text = "No requests: add an .http file (GET https://…)" };
 
-        environments = new ComboBox { MinWidth = 140, VerticalAlignment = VerticalAlignment.Center };
+        environments = new ToolDropDown("None") { VerticalAlignment = VerticalAlignment.Center };
         environments.SelectionChanged += (_, _) => EnvironmentChanged?.Invoke(this, EventArgs.Empty);
         ToolTip.SetTip(environments, $"The environment of {HttpVariables.PublicFile} whose variables the requests use");
         Button refresh = ToolButtons.Of(AppActions.EndpointsRefresh, IconKeys.Rerun, "Read the .http files again", action => ActionRequested?.Invoke(this, action));
-        TextBlock label = new() { Text = "Environment", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
-        StackPanel bar = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 4), Spacing = 4, Children = { label, environments, refresh } };
-        DockPanel.SetDock(bar, Dock.Top);
-        Children.Add(bar);
+        // The shared bar, whose parts take a row of their own where the window is too narrow for them, never running past it.
+        Children.Add(ToolBars.Top(new ToolFlow { Margin = new Thickness(Gaps.Normal, Gaps.Hair), Spacing = Gaps.Tight, Children = { ToolDropDown.Labelled("Environment", environments), refresh } }));
 
         Grid panes = new() { RowDefinitions = new RowDefinitions("*,1,*") };
         Panel top = new() { Children = { list, placeholder } };
@@ -307,6 +305,7 @@ public sealed class EndpointsView : DockPanel
             if (call is null)
             {
                 shown.Refused(problem!);
+                Told(false, problem!);
                 return EndpointSent.Refused;
             }
             EndpointGrants grants = parts.Grants();
@@ -315,6 +314,7 @@ public sealed class EndpointsView : DockPanel
                 if (owner is null)
                 {
                     shown.Refused($"Not sent: nothing could ask whether {call.Host} may have what it reads");
+                    Told(false, shown.Summary);
                     return EndpointSent.Withheld;
                 }
                 testing.Say($"Waiting for your answer: may {request.Title} send what it reads to {call.Host}?");
@@ -333,6 +333,7 @@ public sealed class EndpointsView : DockPanel
                 if (!allowed)
                 {
                     shown.Refused($"Not sent: what it reads was not allowed to go to {call.Host}");
+                    Told(false, shown.Summary);
                     return EndpointSent.Withheld;
                 }
                 grants.Allow(call, question.Always.IsChecked == true);
@@ -345,11 +346,14 @@ public sealed class EndpointsView : DockPanel
                 ? await of(sent, mine.Token) : null;
             IReadOnlyList<SchemaBreak> breaks = document is null ? [] : OpenApiSources.Check(document, call.Method, call.Url, response);
             shown.Show(response, [.. criteria.Select(c => c.Check(response))], breaks);
+            Told(shown.Passed, response.Error is { } error ? $"{request.Title} failed: {error}"
+                : $"{request.Title}: {response.Status} {response.Reason} in {Durations.Said(response.Elapsed)}{(shown.Passed ? string.Empty : ", not as its checks expect")}");
             return EndpointSent.Answered;
         }
         catch (OperationCanceledException)
         {
             shown.Refused("Stopped before an answer came");
+            Told(false, shown.Summary);
             return EndpointSent.Withheld;
         }
         finally
@@ -358,6 +362,13 @@ public sealed class EndpointsView : DockPanel
             {
                 sending = null;
             }
+        }
+
+        // What it came to, said in the status bar in place of its last stage, and to an agent's action.
+        void Told(bool passed, string said)
+        {
+            testing.Tell(passed, said);
+            parts.Say(said);
         }
     }
 
@@ -444,9 +455,9 @@ public sealed class EndpointsView : DockPanel
     /// muted); a route's method, template, what declares it (muted) and Send where a request can reach it.</summary>
     private Control Row()
     {
-        RowIcon headingIcon = new() { Width = 14, Height = 14, Margin = new Thickness(0, 0, 6, 0) };
-        TextBlock headingName = new() { FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-        StackPanel heading = new() { Orientation = Orientation.Horizontal, Height = ListRow.Height, Margin = new Thickness(8, 0), Children = { headingIcon, headingName } };
+        RowIcon headingIcon = new() { Margin = new Thickness(0, 0, Gaps.Small, 0) };
+        TextBlock headingName = new() { Classes = { StyleClasses.Strong }, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+        StackPanel heading = new() { Orientation = Orientation.Horizontal, Height = ListRow.Height, Margin = new Thickness(Gaps.Normal, 0), Children = { headingIcon, headingName } };
         Panel row = new();
         (DockPanel request, Action<EndpointRequest> showRequest) = RequestRow(row);
         (DockPanel route, Action<WebRoute> showRoute) = RouteRow(row);
@@ -500,18 +511,18 @@ public sealed class EndpointsView : DockPanel
         test.Name = "endpointTest";
         ((PathIcon)test.Content!).Bind(PathIcon.ForegroundProperty, test.GetResourceObservable(TokenKeys.Run));
         interactive.Name = "endpointInteractive";
-        StackPanel buttons = new() { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center, Children = { test, interactive } };
+        StackPanel buttons = new() { Orientation = Orientation.Horizontal, Spacing = Gaps.Hair, VerticalAlignment = VerticalAlignment.Center, Children = { test, interactive } };
         DockPanel.SetDock(buttons, Dock.Right);
-        RowIcon outcome = new() { Width = 12, Height = 12, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
+        RowIcon outcome = new() { Margin = new Thickness(0, 0, Gaps.Small, 0), VerticalAlignment = VerticalAlignment.Center };
         DockPanel.SetDock(outcome, Dock.Left);
         Border method = MethodTag(string.Empty);
         DockPanel.SetDock(method, Dock.Left);
         TextBlock title = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
         // A named request shows its URL after the name, muted, ending in an ellipsis first.
-        TextBlock url = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, FontSize = 12, Margin = new Thickness(8, 0, 0, 0) };
+        TextBlock url = new() { Classes = { StyleClasses.Caption }, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(Gaps.Normal, 0, 0, 0) };
         url.Classes.Add(StyleClasses.Muted);
         // The title takes what the row leaves, so a narrow window ends it in an ellipsis and keeps the buttons.
-        DockPanel line = new() { Height = ListRow.Height, Margin = new Thickness(22, 0, 4, 0), Children = { buttons, outcome, method, title, url } };
+        DockPanel line = new() { Height = ListRow.Height, Margin = new Thickness(Gaps.Indent + Gaps.Small, 0, Gaps.Tight, 0), Children = { buttons, outcome, method, title, url } };
         string? methodColour = MethodColour(string.Empty);
         return (line, request =>
         {
@@ -547,9 +558,9 @@ public sealed class EndpointsView : DockPanel
         // The template first: what declares it takes the room it leaves, and goes before the template ends in an ellipsis.
         TextBlock template = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
         DockPanel.SetDock(template, Dock.Left);
-        TextBlock kind = new() { VerticalAlignment = VerticalAlignment.Center, FontSize = 12, Margin = new Thickness(8, 0, 4, 0), TextAlignment = TextAlignment.Right, TextTrimming = TextTrimming.CharacterEllipsis };
+        TextBlock kind = new() { Classes = { StyleClasses.Caption }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(Gaps.Normal, 0, Gaps.Tight, 0), TextAlignment = TextAlignment.Right, TextTrimming = TextTrimming.CharacterEllipsis };
         kind.Classes.Add(StyleClasses.Muted);
-        DockPanel line = new() { Height = ListRow.Height, Margin = new Thickness(22, 0, 4, 0), Children = { send, method, template, kind } };
+        DockPanel line = new() { Height = ListRow.Height, Margin = new Thickness(Gaps.Indent + Gaps.Small, 0, Gaps.Tight, 0), Children = { send, method, template, kind } };
         string? methodColour = MethodColour(string.Empty);
         return (line, route =>
         {
@@ -564,7 +575,7 @@ public sealed class EndpointsView : DockPanel
     /// <summary>Shows a method in a tag <see cref="MethodTag"/> made, its colour bound anew only for another colour.</summary>
     private static void ShowMethod(Border tag, ref string? colour, string method)
     {
-        TextBlock text = (TextBlock)tag.Child!;
+        TextBlock text = Tags.WordsOf(tag);
         text.Text = method;
         text.Resource(TextBlock.ForegroundProperty, ref colour, MethodColour(method));
     }
@@ -572,9 +583,11 @@ public sealed class EndpointsView : DockPanel
     /// <summary>A method's tag, in its method's colour.</summary>
     internal static Border MethodTag(string method)
     {
-        TextBlock text = new TextBlock { Text = method, FontSize = 11, FontWeight = FontWeight.Bold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }.InCodeFont();
+        Border tag = Tags.Method(method);
+        TextBlock text = Tags.WordsOf(tag);
         text.Bind(TextBlock.ForegroundProperty, text.GetResourceObservable(MethodColour(method)));
-        return new Border { Classes = { StyleClasses.Tag }, MinWidth = 52, Padding = new Thickness(4, 1), Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center, Child = text };
+        tag.Margin = new Thickness(0, 0, Gaps.Normal, 0);
+        return tag;
     }
 
     /// <summary>The colour a method's tag shows its name in.</summary>

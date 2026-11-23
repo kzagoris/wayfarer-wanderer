@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Passenger.App.Editors;
 using Passenger.Core;
 using Passenger.Editor;
 using Passenger.Lsp;
@@ -8,9 +9,10 @@ using Passenger.Text;
 
 namespace Passenger.App;
 
-/// <summary>The status bar's path: the active file's folders and name, then the type and member the caret is in, from
-/// the language server's outline (asked again as editing pauses); a click on a member goes to it, on the file or a
-/// folder shows it in the Explorer.</summary>
+/// <summary>The status bar's path: the active file's folders and name, then, where the navigation bar over the editor
+/// does not name them (<see cref="Passenger.App.Editors.EditorArea.NamesWhereInBar"/>), the type and member the caret
+/// is in, from the language server's outline (asked again as editing pauses, and as the bar is turned off); a click on a
+/// member goes to it, on the file or a folder shows it in the Explorer.</summary>
 public partial class MainWindow
 {
     private readonly PathCrumbs breadcrumbs = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Avalonia.Thickness(0, 0, 18, 0) };
@@ -37,7 +39,7 @@ public partial class MainWindow
     private void AddBreadcrumbs()
     {
         BreadcrumbHost.Children.Add(breadcrumbs);
-        outlineAgain = new Debounce(TimeSpan.FromMilliseconds(400), OutlineAsync);
+        outlineAgain = new Debounce(TypingPauses.Outline, OutlineAsync);
         Editors.ActiveChanged += (_, _) =>
         {
             outline = [];
@@ -46,6 +48,13 @@ public partial class MainWindow
             OutlineLater();
         };
         Editors.CaretMoved += (_, _) => ShowBreadcrumbs();
+        Editors.NavigationBarChanged += (_, _) =>
+        {
+            outline = [];
+            outlined = null;
+            ShowBreadcrumbs();
+            OutlineWhenUnseen();
+        };
         Editors.Opened += (_, document) => document.Text.Changed += (_, _) =>
         {
             if (Editors.Active == document)
@@ -61,7 +70,7 @@ public partial class MainWindow
     private void OutlineLater()
     {
         if (Editors.Active is { } document && (session.CSharp?.For(document)?.Lsp is not null
-            || StartsLanguageServer && document.Language.Service == Languages.LanguageService.CSharp))
+            || StartsLanguageServer && document.Language.Service == Languages.LanguageService.CSharp) && !Editors.NamesWhereInBar(document))
         {
             outlineAgain?.Restart();
         }
@@ -85,10 +94,21 @@ public partial class MainWindow
         {
             return;
         }
+        if (Editors.NamesWhereInBar(document))
+        {
+            // The bar names them now: the server came to have the file it outlines.
+            if (outlined is not null)
+            {
+                outline = [];
+                outlined = null;
+                ShowBreadcrumbs();
+            }
+            return;
+        }
         try
         {
             IReadOnlyList<DocumentSymbol> found = await lsp.OutlineAsync();
-            if (asked == outlining && Editors.Active == document)
+            if (asked == outlining && Editors.Active == document && !Editors.NamesWhereInBar(document))
             {
                 outline = found;
                 outlined = document.Path;
@@ -109,7 +129,7 @@ public partial class MainWindow
         if (Editors.Active is { Tool: null } document)
         {
             wanted.AddRange(FileCrumbs(document.Path));
-            if (outlined == document.Path)
+            if (outlined == document.Path && !Editors.NamesWhereInBar(document))
             {
                 ServerLines lines = ServerLines.Of(document.Text.Snapshot);
                 int line = lines.PositionOf(Editors.CodeEditor.Selections.Primary.Caret).Line;
@@ -142,7 +162,7 @@ public partial class MainWindow
             between.IsVisible = i > 0;
             crumb.IsVisible = true;
             crumb.Content = part.Target is null ? part.Text : NameOf(part.Text);
-            crumb.Opacity = part.Muted ? 0.75 : 1;
+            ListRow.Dim(crumb, part.Muted);
         }
         for (int i = wanted.Count; i < crumbButtons.Count; i++)
         {

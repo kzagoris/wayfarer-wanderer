@@ -29,6 +29,7 @@ public partial class MainWindow
         {
             settingsStore.LookAgain();
             SystemMotion.LookAgain();
+            SystemContrast.LookAgain();
         };
         Themes.SaidChanged += OnThemesSaid;
         Themes.FontsChanged += OnThemeFonts;
@@ -122,6 +123,7 @@ public partial class MainWindow
         {
             ApplyTo(group.Editor, next);
         }
+        Editors.ShowsNavigationBar = next.ShowNavigationBar;
         FollowViewSettings(visualSettings, next);
         FollowArrangement(next);
         FollowTitleBar(next);
@@ -194,6 +196,7 @@ public partial class MainWindow
         FollowVimMappings(next.VimMode);
         assist.Templates = CSharp.TemplateSet.Of(next);
         assist.CompletionParentheses = next.CompletionParentheses;
+        assist.FormatOnType = next.FormatOnType;
         assist.XamlFormat = next.XamlFormat;
         assist.GDScriptFormat = (next.GDScriptFormat, next.GDScriptFormatOnSave);
         assist.ReformatsOnSave = next.ReformatOnSave;

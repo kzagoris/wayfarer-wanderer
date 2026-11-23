@@ -28,8 +28,8 @@ public sealed partial class PassengerTools
         "branches yours and theirs are (in a rebase yours is the branch being rebased) and whether each side modified or " +
         "deleted each file in conflict; vcs_resolve resolves them. underWay names a merge, rebase, cherry-pick or revert still " +
         "in progress, its conflicts resolved or not, or a rebase stopped at an edit, break or exec, where vcs_commit commits " +
-        "and amends. With path, a folder's changes alone, or a file's since the last commit as a unified diff: the editor's " +
-        "text when it is open (unsaved changes included), else the file on disk.")]
+        "and amends. staged says how much of a change git's index holds: part or whole. With path, a folder's changes alone, or a file's since the last commit as a unified diff: the editor's " +
+        "text when it is open (unsaved changes included), else the file on disk, then what the index holds of it apart.")]
     public Task<object> VcsStatus(string? path = null, CancellationToken cancel = default) => OnUi<object>(cancel, async () =>
     {
         VcsController vcs = Session.Vcs;
@@ -77,7 +77,10 @@ public sealed partial class PassengerTools
 
         VcsChange Listed(ListedChange c) => c.Files is { } files
             ? new VcsChange(Relative(c.Change.Path) + Path.DirectorySeparatorChar, "unversioned", null) { Files = files }
-            : new VcsChange(Relative(c.Change.Path), c.Change.Kind.ToString().ToLowerInvariant(), c.Change.From is { } from ? Relative(from) : null, c.Change.Uncommittable);
+            : new VcsChange(Relative(c.Change.Path), c.Change.Kind.ToString().ToLowerInvariant(), c.Change.From is { } from ? Relative(from) : null, c.Change.Uncommittable)
+            {
+                Staged = c.Change.HoldsStaged ? c.Change.Staged.ToString().ToLowerInvariant() : null,
+            };
     }
 
     [McpServerTool(Name = McpTools.VcsResolve, Title = "Resolve a conflict", Destructive = true), Description(
@@ -110,36 +113,46 @@ public sealed partial class PassengerTools
     /// <summary>vcs_status of a file: its changes since the last commit, as the repository was read just before.</summary>
     private async Task<string> VcsDiffAsync(string full, CancellationToken cancel)
     {
-        string name = Session.Folder is { } folder && PathNames.Relative(full, folder) is { } below ? below : full;
+        FileChange? change = Session.Vcs.Changes.FirstOrDefault(c => PathNames.Same(c.Path, full));
+        string name = Named(full);
+        // A renamed file's diff names where it was as well as where it is.
+        string? from = change?.From is { } origin ? Named(origin) : null;
         // Git's own words for a change of mode come first, as its diff says it.
-        string? mode = Session.Vcs.Changes.FirstOrDefault(c => PathNames.Same(c.Path, full))?.Mode?.Unified;
+        string? mode = change?.Mode?.Unified;
         if (await Session.Vcs.BinaryChangeAsync(full) is { } binary)
         {
-            return Joined(mode, binary.Same ? null : binary.Unified(name));
+            return Joined(mode, binary.Same ? null : binary.Unified(name, from));
         }
         string head = await Session.Vcs.HeadTextAsync(full) ?? string.Empty;
         string? encoding = await Session.Vcs.EncodingChangeAsync(full);
+        bool breaksAlike = await Session.Vcs.BreaksStoredAlikeAsync(full);
         Passenger.App.Editors.OpenTexts texts = Editors.Texts();
         // Reading and comparing a large file would hold the person's window: the thread pool does both.
         (string diff, string? separators) = await BackgroundWork.Run(() =>
         {
             string mine = texts.Text(full) ?? string.Empty;
-            return (LineDiff.Unified(head, mine, name), LineDiff.SeparatorChanges(head, mine));
+            return (LineDiff.Unified(head, mine, name, from), LineDiff.SeparatorChanges(head, mine, breaksAlike));
         }, cancel);
-        return Joined(mode, encoding, separators, diff.Length == 0 ? null : diff);
+        // What git's index holds of it, where it holds a change the person or a tool staged.
+        string? staged = change is { HoldsStaged: true } && await Session.Vcs.IndexTextAsync(full) is { } index
+            ? await BackgroundWork.Run(() => LineDiff.Unified(head, index, name, from), cancel) : null;
+        return Joined(mode, encoding, separators, diff.Length == 0 ? null : diff, staged is { Length: > 0 } ? $"Staged, git's index against the last commit:\n{staged}" : null);
+
+        string Named(string path) => Session.Folder is { } folder && PathNames.Relative(path, folder) is { } below ? below : path;
 
         static string Joined(params string?[] parts) => parts.OfType<string>().ToArray() is { Length: > 0 } said ? string.Join('\n', said) : "No changes";
     }
 
     [McpServerTool(Name = McpTools.VcsCommit, Title = "Commit", Destructive = true), Description(
-        "Commits the paths given, else every changed file but the unversioned (saved first), with message; amend changes the " +
+        "Commits the paths given (a folder's, every change under it, new files too), else what git's index holds where it holds staged changes, else every changed file but the unversioned (saved first), with message; amend changes the " +
         "last commit (with paths [], its message alone), push pushes after; signed as git's config says and signed off as the Commit window's Sign-off is, " +
-        "as the window commits. lines maps a modified file to the lines of the changes of it to commit (\"3,12-14\", as vcs_status's diff " +
-        "numbers it now), each change they touch whole, the rest left uncommitted; with lines and no paths, only its files. With movesFirst, where git would no " +
+        "as the window commits. lines maps a modified file to its lines to commit (\"3,12-14\", as vcs_status's diff " +
+        "numbers it now), each changed line they name (a deletion beside one whole), the rest left uncommitted; with lines and no paths, only its files. " +
+        "stage true stages the paths and lines given into git's index instead (false unstages them), each one Undo in the window. With movesFirst, where git would no " +
         "longer see a moved file as moved once committed with its edits, the moves go first in a commit of their own with that message, as the Commit window offers. " +
         "Returns the commit (the moves' before it, where made) and how the push went; a push the remote refuses is an error with git's reason, the commit made all the same.")]
-    public Task<string> VcsCommit(string message, IReadOnlyList<string>? paths = null, Dictionary<string, string>? lines = null, bool amend = false, bool push = false,
-        string? movesFirst = null, CancellationToken cancel = default) => OnUi(cancel, async () =>
+    public Task<string> VcsCommit(string? message = null, IReadOnlyList<string>? paths = null, Dictionary<string, string>? lines = null, bool amend = false, bool push = false,
+        string? movesFirst = null, bool? stage = null, CancellationToken cancel = default) => OnUi(cancel, async () =>
     {
         if (movesFirst?.Trim().Length == 0)
         {
@@ -152,8 +165,28 @@ public sealed partial class PassengerTools
         List<FileChange> passed = paths is null && lines is not { Count: > 0 } ? [.. vcs.Changes.Where(c => c.Kind is not ChangeKind.Unversioned && c.Uncommittable is not null)] : [];
         List<FileChange> chosen = paths is null
             ? lines is { Count: > 0 } ? [] : [.. vcs.Changes.Where(c => c.Kind is not ChangeKind.Unversioned && c.Uncommittable is null)]
-            : [.. paths.Select(given => Resolve(given)).Select(p => vcs.Changes.FirstOrDefault(c => c.Path == p) ?? throw new ArgumentException($"{Relative(p)} has no changes to commit"))];
+            : [];
+        foreach (string given in paths ?? [])
+        {
+            string full = Path.TrimEndingDirectorySeparator(Resolve(given));
+            if (vcs.Changes.FirstOrDefault(c => PathNames.Same(c.Path, full)) is { } file)
+            {
+                chosen.Add(file);
+                continue;
+            }
+            // A folder's path is every change under it, as vcs_status lists them there, its new files among them.
+            FileChange[] under = [.. vcs.Changes.Where(c => PathNames.IsUnder(c.Path, full) || c.From is { } from && PathNames.IsUnder(from, full))];
+            if (under.Length == 0)
+            {
+                throw new ArgumentException($"{Relative(full)} has no changes to commit");
+            }
+            chosen.AddRange(under.Where(c => c.Uncommittable is null));
+            passed.AddRange(under.Where(c => c.Uncommittable is not null));
+        }
+        chosen = [.. chosen.Distinct()];
+        passed = [.. passed.Distinct()];
         Dictionary<string, PartialCommit> partial = new(PathNames.Comparer);
+        Dictionary<FileChange, PartialCommit> parts = [];
         List<string> left = [.. passed.Select(c => $"{Relative(c.Path)} ({c.Uncommittable})")];
         foreach ((string given, string ranges) in lines ?? [])
         {
@@ -170,14 +203,27 @@ public sealed partial class PassengerTools
             if (await ChosenChangesAsync(vcs, change, ranges) is { } some)
             {
                 partial[full] = some;
-                int rest = some.Diff.Hunks.Count - some.Hunks.Count;
+                parts[change] = some;
+                int rest = some.Diff.Hunks.Count(h => !some.Hunks.Contains(h));
                 left.Add($"{Plural.Of(rest, "change")} of {Relative(full)}");
             }
+        }
+        if (stage is { } staging)
+        {
+            return await StagedForAgentAsync(vcs, [.. chosen.Where(c => !parts.ContainsKey(c))], parts, staging);
+        }
+        // With nothing named, what the index holds goes in where it holds staged changes, as the Commit window commits.
+        if (paths is null && lines is not { Count: > 0 } && vcs.HoldsStaged)
+        {
+            chosen = [.. vcs.Changes.Where(c => c.Staged != StagedState.None && c.Kind is not (ChangeKind.Unversioned or ChangeKind.Conflicted))];
+            passed = [];
         }
         // The moves go first only where git would lose one, as the Commit window offers it.
         string? first = movesFirst is not null && !amend && (await vcs.LostMovesAsync(chosen, partial)).Count > 0 ? movesFirst : null;
         AgentCall.Say($"Committing {Plural.Of(chosen.Count, "file")}{(first is null ? string.Empty : ", their moves first")}{(push ? " and pushing" : string.Empty)}");
-        CommitResult result = await vcs.CommitAsync(chosen, message, amend, push, ask: false, signing: new CommitSigning(SignOff: vcs.SignOff), partial: partial, movesFirst: first);
+        bool index = paths is null && lines is not { Count: > 0 } && vcs.HoldsStaged;
+        CommitResult result = await vcs.CommitAsync(chosen, message ?? string.Empty, amend, push, ask: false, signing: new CommitSigning(SignOff: vcs.SignOff),
+            partial: index ? null : partial, movesFirst: index ? null : first, staged: index);
         if (!result.Commit.Succeeded)
         {
             // A rebase stopped for conflicts goes on by its own action, which an agent runs by its id.
@@ -203,6 +249,32 @@ public sealed partial class PassengerTools
         };
     });
 
+    /// <summary>vcs_commit's stage: the files named staged or unstaged whole, and the lines named of each file, each one command
+    /// of Undo in the window, said as the window says it.</summary>
+    private async Task<string> StagedForAgentAsync(VcsController vcs, IReadOnlyList<FileChange> whole, IReadOnlyDictionary<FileChange, PartialCommit> parts, bool stage)
+    {
+        if (vcs.WhyNotStage([.. whole, .. parts.Keys]) is { } refused)
+        {
+            throw new ArgumentException(refused);
+        }
+        string verb = stage ? "Stage" : "Unstage";
+        List<string> said = [];
+        if (whole.Count > 0)
+        {
+            string[] paths = [.. whole.SelectMany(c => c.From is { } from ? new[] { c.Path, from } : [c.Path])];
+            said.Add(Done(await window.IndexChangedAsync($"{verb} {Plural.Listed([.. whole.Select(c => c.Name)])}", paths, () => vcs.StageAsync(whole, stage))));
+        }
+        foreach ((FileChange change, PartialCommit chosen) in parts)
+        {
+            string[] paths = change.From is { } from ? [change.Path, from] : [change.Path];
+            said.Add(Done(await window.IndexChangedAsync($"{verb} {VcsController.Said(chosen.Diff, chosen.Hunks)} of {change.Name}", paths,
+                () => stage ? vcs.StageChangesAsync(change.Path, chosen) : vcs.UnstageChangesAsync(change, chosen.Diff, chosen.Hunks))));
+        }
+        return string.Join("; ", said);
+
+        static string Done(VcsOutcome outcome) => outcome.Succeeded ? outcome.Message : throw new InvalidOperationException(outcome.Message);
+    }
+
     /// <summary>The changes of a file that vcs_commit's lines touch, as the Commit window's partial commit chooses them, of
     /// the file's text as the editor holds it (saved before the commit): null where they touch all of them. Refused, saying
     /// why, where the file's changes cannot go in apart or the lines touch none of them.</summary>
@@ -225,7 +297,7 @@ public sealed partial class PassengerTools
         }
         (IReadOnlyList<DiffHunk> hunks, string? why) = PartialCommit.Touched(diff, ranges);
         return why is not null ? throw new ArgumentException($"{name}: {why} (vcs_status {name} shows them)")
-            : hunks.Count == diff.Hunks.Count ? null : new PartialCommit(diff, hunks, change.From);
+            : hunks.SequenceEqual(diff.Hunks) ? null : new PartialCommit(diff, hunks, change.From);
     }
 
     [McpServerTool(Name = McpTools.VcsLog, Title = "The history", ReadOnly = true), Description(
@@ -240,7 +312,7 @@ public sealed partial class PassengerTools
         Git repository = Session.Vcs.Repository ?? throw new InvalidOperationException(Session.Vcs.NoRepository);
         if (count < 1)
         {
-            throw new ArgumentException($"count is {count}: vcs_log lists 1 or more", nameof(count));
+            throw new ArgumentException($"count is {Numbers.Said(count)}: vcs_log lists 1 or more", nameof(count));
         }
         int most = Math.Min(count, 500);
         (int, int)? lines = (startLine, endLine) switch
@@ -374,7 +446,7 @@ public sealed partial class PassengerTools
             {
                 throw new InvalidOperationException(byCommit
                     ? $"No stash in the list has commit {commit}: it was popped or dropped since the list was read, or never was a stash"
-                    : $"No stash {index}; there are {before.Count}");
+                    : $"No stash {index}; there are {Numbers.Said(before.Count)}");
             }
             // Refused before anything is saved: a stash or unstash of a file stored through a filter that cannot run here.
             if (action == "push")
@@ -503,10 +575,17 @@ public sealed partial class PassengerTools
         "files it changed (the project, its packages.lock.json, and Directory.Packages.props under central package management), " +
         "and as nuget_search says them whether that version is vulnerable, with the version that fixes it, or deprecated. " +
         "Moving one of EF Core's packages moves the project's others with it (with); another maker's provider it leaves behind " +
-        "stays as it is, said with the version that fits.")]
-    public Task<PackageChange> NuGetInstall(string project, string id, string? version = null, bool remove = false, CancellationToken cancel = default) => OnUi(cancel, async () =>
+        "stays as it is, said with the version that fits. With framework, a reference in that framework alone, as fixing a " +
+        "vulnerable version it gets through other packages does, the others' references as they were.")]
+    public Task<PackageChange> NuGetInstall(string project, string id, string? version = null, bool remove = false,
+        [Description("A framework the project builds for, or several separated by ;")] string? framework = null, CancellationToken cancel = default) => OnUi(cancel, async () =>
     {
         ProjectModel chosen = Project(project);
+        string[] frameworks = framework?.Split([';', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
+        if (remove && frameworks.Length > 0)
+        {
+            throw new ArgumentException("remove takes the package out of every framework: omit framework");
+        }
         if (remove)
         {
             AgentCall.Follow(window.Actions.Work, FolderPackages.Changing);
@@ -518,6 +597,10 @@ public sealed partial class PassengerTools
         string at = version ?? offered?.FirstOrDefault() ?? throw new ArgumentException($"{feeds.Name} has no package {id}");
         AgentCall.Say(null);
         AgentCall.Follow(window.Actions.Work, FolderPackages.Changing);
+        if (frameworks.Length > 0)
+        {
+            return await WarnedAsync(new PackageChange(id, at, chosen.Name, Changed(await Session.Packages.InstallAsync(chosen, id, at, frameworks: frameworks))), feeds, offered, cancel);
+        }
         EfUpdate weighed = await window.Migrations.UpdateAsync(chosen, id, at, null, cancel);
         PackageChange done = weighed.AsAsked
             ? new PackageChange(id, at, chosen.Name, Changed(await Session.Packages.InstallAsync(chosen, id, at))) { Said = weighed.Said }
@@ -774,7 +857,7 @@ public sealed partial class PassengerTools
             [{ } only] => only,
             [] when there.Count > 0 => throw new InvalidOperationException($"No program in {container} can be profiled: {there[0].WhyNot}"),
             [] => throw new InvalidOperationException($"No .NET program runs in a container named {container}; debug_state of processes lists those there are"),
-            _ => throw new InvalidOperationException($"{reachable.Count} .NET programs run in {container} ({string.Join(", ", reachable.Select(p => p.Program))}): "
+            _ => throw new InvalidOperationException($"{Numbers.Said(reachable.Count)} .NET programs run in {container} ({string.Join(", ", reachable.Select(p => p.Program))}): "
                 + "attach the debugger to the one to profile (debug_attach), then profile with attach alone"),
         };
     }
@@ -861,14 +944,14 @@ public sealed partial class PassengerTools
 
     [McpServerTool(Name = McpTools.TerminalRun, Title = "Run in the terminal", Destructive = true), Description(
         "Types a command into a shell of the agents' own in the IDE's Terminal window (its Agent Shell tab, started if need be) " +
-        "and presses Enter, then waits until the shell prompts again or the output has been quiet for 2 s, and returns what " +
-        "it printed. While a terminal configuration's program this agent ran (run) runs in its tab, the line goes to it.")]
+        "and presses Enter, then waits up to waitSeconds for the shell to prompt again and returns what it printed, saying so " +
+        "where the command still runs. While a terminal configuration's program this agent ran (run) runs in its tab, the line goes to it.")]
     public Task<string> TerminalRun(string command, int waitSeconds = 15, CancellationToken cancel = default) => OnUi(cancel, async () =>
     {
         (TerminalSession shell, SemaphoreSlim turn) = await TerminalTurnAsync(cancel);
         try
         {
-            return Masked(await TypedAsync(shell, command, waitSeconds, cancel));
+            return Masked(await TypedAsync(shell, command, waitSeconds, atShell: shell == window.TerminalPanel.AgentShell, cancel));
         }
         finally
         {
@@ -906,9 +989,11 @@ public sealed partial class PassengerTools
         }
     }
 
-    /// <summary>Types a command into a terminal and presses Enter, then answers what it printed once the terminal prompts
-    /// again, has been quiet for 2 s, or <paramref name="waitSeconds"/> have passed.</summary>
-    private static async Task<string> TypedAsync(TerminalSession shell, string command, int waitSeconds, CancellationToken cancel)
+    /// <summary>Types a command into a terminal and presses Enter, then answers what it printed once it has ended (the
+    /// terminal prompts again, or its program ended), or once <paramref name="waitSeconds"/> have passed, saying then that it
+    /// still runs. A shell (<paramref name="atShell"/>) prompting otherwise than it did (a cd's new folder) has ended the
+    /// command once quiet with nothing it started in front of it (<see cref="DotnetProcesses.ShellInFront"/>).</summary>
+    private static async Task<string> TypedAsync(TerminalSession shell, string command, int waitSeconds, bool atShell, CancellationToken cancel)
     {
         TerminalScreen screen = shell.Screen;
         // By its number, which stays the line's own as the scrollback's oldest drop past its limit.
@@ -916,11 +1001,14 @@ public sealed partial class PassengerTools
         string prompt = ToolWindows.TerminalPanel.Prompt(screen);
         int version = screen.Version;
         shell.Write(command + "\r");
-        AgentCall.Say($"Waiting up to {Math.Clamp(waitSeconds, 1, 600)} s for the terminal's command to finish");
-        Deadline until = Deadline.In(TimeSpan.FromSeconds(Math.Clamp(waitSeconds, 1, 600)));
+        TimeSpan limit = TimeSpan.FromSeconds(Math.Clamp(waitSeconds, 1, 600));
+        AgentCall.Say($"Waiting up to {Durations.Said(limit)} for the terminal's command to finish");
+        Deadline until = Deadline.In(limit);
         long last = Stopwatch.GetTimestamp();
+        long looked = last;
         bool answered = false;
-        while (!until.Passed)
+        bool ended = false;
+        while (!ended && !until.Passed && shell.IsRunning)
         {
             await Task.Delay(100, cancel);
             if (screen.Version != version)
@@ -930,11 +1018,20 @@ public sealed partial class PassengerTools
                 answered = true;
                 continue;
             }
-            // Its prompt back below it ends a command; one that leaves another prompt (a cd) or none (a server) ends once quiet.
-            bool prompted = prompt.Length > 0 && screen.ScreenTop + screen.CursorRow > before && ToolWindows.TerminalPanel.Prompt(screen) == prompt;
-            if (answered && Stopwatch.GetElapsedTime(last) > (prompted ? TimeSpan.FromMilliseconds(200) : TimeSpan.FromSeconds(2)))
+            string now = ToolWindows.TerminalPanel.Prompt(screen);
+            if (!answered || screen.ScreenTop + screen.CursorRow <= before || now.Trim().Length == 0)
             {
-                break;
+                continue;
+            }
+            TimeSpan quiet = Stopwatch.GetElapsedTime(last);
+            if (prompt.Length > 0 && now == prompt)
+            {
+                ended = quiet > TimeSpan.FromMilliseconds(200);
+            }
+            else if (atShell && quiet > TimeSpan.FromSeconds(2) && Stopwatch.GetElapsedTime(looked) > TimeSpan.FromSeconds(1) && shell.ProcessId is int id)
+            {
+                looked = Stopwatch.GetTimestamp();
+                ended = await BackgroundWork.Run(() => DotnetProcesses.ShellInFront(id), cancel) == true;
             }
         }
         long end = screen.ScreenTop + screen.CursorRow;
@@ -943,7 +1040,9 @@ public sealed partial class PassengerTools
         {
             lines.Add(screen.LineAt(line).Text());
         }
-        return string.Join('\n', lines).TrimEnd();
+        string printed = string.Join('\n', lines).TrimEnd();
+        return ended || !shell.IsRunning ? printed
+            : $"{printed}\nStill running after {Durations.Said(limit)}: {McpTools.Output} of terminal shows what it prints from here, and the next {McpTools.TerminalRun}'s line goes to it";
     }
 
     /// <summary>The shell of the agents' own (<see cref="ToolWindows.TerminalPanel.AgentShell"/>) at its first prompt, one
@@ -1029,6 +1128,9 @@ public sealed record VcsChange(string Path, string Kind, string? From, string? U
 {
     /// <summary>A folder of untracked files listed as one: how many files it holds.</summary>
     public int? Files { get; init; }
+
+    /// <summary>How much of the change git's index holds, part or whole; null for none (or its move alone).</summary>
+    public string? Staged { get; init; }
 }
 
 /// <summary>A commit as vcs_log lists it; with a path, what it did there.</summary>

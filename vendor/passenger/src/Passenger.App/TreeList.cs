@@ -3,6 +3,8 @@ using Avalonia.Automation;
 using Avalonia.Automation.Peers;
 using Avalonia.Automation.Provider;
 using Avalonia.Controls;
+using Passenger.Core;
+using Passenger.Editor;
 
 namespace Passenger.App;
 
@@ -215,7 +217,7 @@ public class TreeList : ListBox
                 return words;
             }
             string level = $"level {place.Level}";
-            string said = PlaceToldApart ? level : $"{level}, {place.Position} of {place.Size}";
+            string said = PlaceToldApart ? level : $"{level}, {place.Position} of {Numbers.Said(place.Size)}";
             return string.IsNullOrWhiteSpace(words) ? said : $"{words}, {said}";
         }
 
@@ -223,7 +225,8 @@ public class TreeList : ListBox
         protected override object? GetProviderCore(Type providerType) =>
             providerType == typeof(IExpandCollapseProvider) && ExpandCollapseState == ExpandCollapseState.LeafNode ? null : base.GetProviderCore(providerType);
 
-        /// <summary>Tells a reader whether the row is open now, where that changed, and gives the system its place again.</summary>
+        /// <summary>Tells a reader whether the row is open now, where that changed, and gives the system its place again: a
+        /// row come to have nothing under it, as its container now shows a row with none, gives no open state to tell.</summary>
         internal void Tell()
         {
             Place();
@@ -232,7 +235,7 @@ public class TreeList : ListBox
             {
                 ExpandCollapseState was = told;
                 told = now;
-                RaisePropertyChangedEvent(ExpandCollapsePatternIdentifiers.ExpandCollapseStateProperty, was, now);
+                PeerChanges.Tell(this, ExpandCollapsePatternIdentifiers.ExpandCollapseStateProperty, was, now);
             }
         }
 
