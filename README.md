@@ -48,6 +48,32 @@ markers and listed. Afterwards run
 to refresh the lock files, then build, test and commit. After editing the keep
 rules, `prune` deletes what they no longer keep.
 
+### Shell copies
+
+`update` never touches the shell files Wayfarer adapted by hand from
+Passenger.App (`src/WayfarerWanderer.App/Shell/` and a few files beside it).
+Each starts with a stamp naming the upstream commit and the file(s) it was
+copied from, such as
+`// From Passenger 2044e49b src/Passenger.App/ActionButtons.cs, MIT ...`.
+`copies` lists the files whose originals upstream has changed since their
+stamp. By default it compares them with the copy's recorded commit, so it shows
+what a finished `update` left behind. It reads the mirror as it is, and
+`--fetch` refreshes the mirror first.
+
+```sh
+python3 tools/import-passenger.py copies [--to v0.5.0]          # files behind, largest change first
+python3 tools/import-passenger.py copies --diff FILE [--to REF]  # upstream's change to FILE's originals
+python3 tools/import-passenger.py copies --restamp FILE [--to REF]
+```
+
+To port a file, take the largest one in the list and read its `--diff`, which
+shows upstream's change from the file's stamp to the target. Carry over what
+applies to Wayfarer, build and test, then run `--restamp` with the same `--to`.
+That moves the file's stamp to the target, leaving the rest of the header and
+the line endings as they were, and drops the file from the list. When upstream
+renamed or deleted an origin, the listing says so, and `--restamp` reminds you
+to correct the stamp's path by hand. `--json` prints the listing as JSON.
+
 ### No "Passenger" in the window
 
 Wayfarer never shows the word "Passenger". `NoPassengerInUiTests` reads every
