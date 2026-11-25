@@ -189,6 +189,42 @@ public sealed class ChoiceSetting<T> : Setting where T : struct, Enum
         set(settings, choices.Select(c => c.Value).FirstOrDefault(v => !EqualityComparer<T>.Default.Equals(v, get(settings))));
 }
 
+/// <summary>A program to start, by its command line (its path, then its arguments), or null for the one found: a line
+/// naming no program is refused.</summary>
+public sealed class ProgramSetting(Func<AppSettings, string?> get, Func<AppSettings, string?, AppSettings> set, Func<string> found, SettingRow row) : Setting(row)
+{
+    /// <summary>Why a line naming no program is refused.</summary>
+    private const string NamesNone = "names no program to start: the program's path comes first, its arguments after it";
+
+    public override Control Editor(AppSettings now, Action<Func<AppSettings, AppSettings>> change)
+    {
+        TextBox line = new() { Text = get(now) ?? string.Empty, PlaceholderText = found() };
+        TextBlock problem = new() { TextWrapping = TextWrapping.Wrap, HorizontalAlignment = HorizontalAlignment.Left };
+        problem.Classes.Add(StyleClasses.Error);
+        Said();
+        line.TextChanged += (_, _) =>
+        {
+            change(s => set(s, string.IsNullOrWhiteSpace(line.Text) ? null : line.Text.Trim()));
+            Said();
+        };
+        return new StackPanel { Spacing = Gaps.Tight, MaxWidth = OptionRow.EditorWidth, Children = { line, problem } };
+
+        void Said()
+        {
+            problem.IsVisible = Terminal.CommandLine.NamesNoProgram(line.Text);
+            problem.Text = problem.IsVisible ? $"This {NamesNone}" : null;
+        }
+    }
+
+    public override AppSettings Clamp(AppSettings settings) => string.IsNullOrWhiteSpace(get(settings)) ? set(settings, null) : settings;
+
+    public override AppSettings Other(AppSettings settings) => set(settings, get(settings) is null ? "program" : null);
+
+    public override string? Refused(AppSettings was, AppSettings now) => get(now) is { } line && line != get(was) && Terminal.CommandLine.NamesNoProgram(line)
+        ? $"{Row!.Label} {line.Trim()} ({SettingsDialog.PlaceOfPage(Row.Page)}) {NamesNone}"
+        : null;
+}
+
 /// <summary>One of an enum's values that a theme may give and the person's own choice wins over, edited by a drop-down: its
 /// first choice follows the theme (naming what that gives now), then the values by the names Settings gives them. Left
 /// unchosen it stays unset, and a value this build does not know follows the theme again.</summary>

@@ -55,6 +55,7 @@ public sealed partial class EditorWindow : Window
         AddSwitcher();
         AddDeclarations();
         AddReadAsText();
+        AddActiveEditor();
         AddFindInFiles();
         AddAccessibility();
         AddToolWindows(new Grid { Children = { EditorWithBar(), Welcome } });

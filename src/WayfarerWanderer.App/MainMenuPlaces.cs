@@ -40,6 +40,12 @@ public static class MainMenuPlaces
 
         // View: Tool Windows (0, 0) lists the dock's windows as it opens.
         [AppActions.ReadAsText] = [new("View", 1, 0)],
+        // View's Active Editor (2, 0): the file shown's wrapping and whitespace, the editor's font size.
+        [AppActions.SoftWrap] = [new("View/Active Editor", 0, 0)],
+        [AppActions.ShowWhitespaces] = [new("View/Active Editor", 0, 1)],
+        [AppActions.IncreaseFontSize] = [new("View/Active Editor", 1, 0)],
+        [AppActions.DecreaseFontSize] = [new("View/Active Editor", 1, 1)],
+        [AppActions.ResetFontSize] = [new("View/Active Editor", 1, 2)],
 
         // Navigate: Back and Forward, the Go to popups, the recent files.
         [AppActions.Back] = [new("Navigate", 0, 0)],

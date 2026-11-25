@@ -1,6 +1,7 @@
 using Passenger.Editor;
 using Passenger.Text;
 using WayfarerWanderer.App.Shell.Languages;
+using WayfarerWanderer.App.Shell.Settings;
 using SyntaxLanguage = WayfarerWanderer.App.Shell.Languages.Language;
 
 namespace WayfarerWanderer.App;
@@ -17,9 +18,17 @@ public sealed partial class EditorWindow
     private void ShowDocument(string path, TextDocument document, SelectionSet? selections = null, Avalonia.Vector scroll = default)
     {
         Shown held = Hold(path, document);
-        Editor.Show(document, selections ?? SelectionSet.Single(0), scroll, decorated: held.Decorations);
+        Editor.Show(document, selections ?? SelectionSet.Single(0), scroll, wrapped: held.SoftWrap, decorated: held.Decorations);
         Editor.Highlighter = held.Colours;
+        Editor.ShowWhitespaces = held.ShowWhitespaces;
+        Editor.Markup = MarkupOf(held.Language);
     }
+
+    /// <summary>The markup whose tags Enter indents by and typing closes (Settings' Close tags): XML's for XML.</summary>
+    private static MarkupKind MarkupOf(SyntaxLanguage? language) => language == SyntaxLanguage.Xml ? MarkupKind.Xml : MarkupKind.None;
+
+    /// <summary>The shown file's own view of it, while a file is shown.</summary>
+    private Shown? ShownView => Editor.IsVisible && SourcePath is not null ? shown.GetValueOrDefault(Editor.Document) : null;
 
     /// <summary>The decorations an open text is drawn with, which hold its change bars.</summary>
     private DocumentDecorations? Decorated(TextDocument document) => shown.GetValueOrDefault(document)?.Decorations;
@@ -31,6 +40,7 @@ public sealed partial class EditorWindow
         if (ReferenceEquals(Editor.Document, document))
         {
             Editor.Highlighter = held.Colours;
+            Editor.Markup = MarkupOf(held.Language);
         }
     }
 
@@ -63,7 +73,13 @@ public sealed partial class EditorWindow
         SyntaxLanguage language = SyntaxLanguage.ForPath(path);
         if (!shown.TryGetValue(document, out Shown? held))
         {
-            shown[document] = held = new Shown(new DocumentDecorations(document));
+            // A file opens wrapped where Settings' masks match its name, its whitespace shown where Settings shows it.
+            AppSettings settings = SettingsKept.Effective;
+            shown[document] = held = new Shown(new DocumentDecorations(document), kind => SettingsKept.Value.FoldsByDefault(kind))
+            {
+                SoftWrap = settings.WrapsFile(path),
+                ShowWhitespaces = settings.ShowWhitespaces,
+            };
             // An address written in a comment or string is underlined, and Go to Declaration follows it.
             held.Decorations.SetAddresses(WrittenLink);
         }
@@ -74,10 +90,18 @@ public sealed partial class EditorWindow
         return held;
     }
 
-    /// <summary>One open text's decorations, which every showing of it draws, and what its language gives it.</summary>
-    private sealed class Shown(DocumentDecorations decorations)
+    /// <summary>One open text's decorations, which every showing of it draws, what its language gives it, and whether it is
+    /// shown wrapped and with its whitespace (View, Active Editor). Its first folds fold as Settings' Code Folding says.</summary>
+    private sealed class Shown(DocumentDecorations decorations, Func<FoldKind, bool> foldsByDefault)
     {
         public DocumentDecorations Decorations { get; } = decorations;
+
+        public bool SoftWrap { get; set; }
+
+        public bool ShowWhitespaces { get; set; }
+
+        /// <summary>Whether the text's first folds came, which alone fold by default: a region made later stays open.</summary>
+        private bool foldedByDefault;
 
         public SyntaxLanguage? Language { get; private set; }
 
@@ -120,6 +144,16 @@ public sealed partial class EditorWindow
                 return;
             }
             IReadOnlyList<FoldRegion> found = folds.Folds;
+            if (!foldedByDefault)
+            {
+                foldedByDefault = true;
+                List<int> starts = [.. found.Where(r => foldsByDefault(r.Kind)).Select(r => r.Start)];
+                if (starts.Count > 0)
+                {
+                    Decorations.SetFoldRegions(FoldList.Of(found).FoldedAt(starts));
+                    return;
+                }
+            }
             List<int>? folded = null;
             foreach (FoldRegion region in Decorations.FoldRegions)
             {

@@ -1,5 +1,6 @@
 // From Passenger 8a1df7e4 src/Passenger.App/Settings/SettingsDialog.cs, MIT (notices/Passenger/LICENSE): its Appearance,
-// System Settings, Trusted Folders and Keymap pages; the .NET, MCP, template, code style and tool pages cut.
+// System Settings, Trusted Folders, Editor, Code Folding, Terminal, Version Control, Keymap and Diagnostics pages; the
+// .NET, MCP, template, code style and tool pages cut.
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -20,13 +21,21 @@ public sealed partial class SettingsDialog : IdeWindow
     public const string SystemPage = "System Settings";
     public const string AccessibilityPage = "Accessibility";
     public const string EditorPage = "Editor";
+    public const string CodeFoldingPage = "Code Folding";
+    public const string TerminalPage = "Terminal";
+    public const string VersionControlPage = "Version Control";
+    public const string DiagnosticsPage = "Diagnostics";
     public const string KeymapPage = "Keymap";
+
+    /// <summary>The words every Code Folding row is found by.</summary>
+    internal const string FoldingWords = "fold by default folding collapse collapsed open opening region";
 
     /// <summary>A page as a message sends a person to it, by its name above as the dialog lists it:
     /// "Settings | Appearance".</summary>
     public static string PlaceOfPage(string page) => $"Settings | {page}";
 
-    private static readonly string[] Order = [Appearance, SystemPage, AccessibilityPage, TrustPage, EditorPage, KeymapPage];
+    private static readonly string[] Order =
+        [Appearance, SystemPage, AccessibilityPage, TrustPage, EditorPage, CodeFoldingPage, TerminalPage, VersionControlPage, KeymapPage, DiagnosticsPage];
 
     /// <summary>Puts what the options changed in force: from the settings as they were applied last, to the options'.</summary>
     private readonly Action<AppSettings, AppSettings> apply;
@@ -204,11 +213,52 @@ public sealed partial class SettingsDialog : IdeWindow
         AddThemes();
         Add(Declared.WindowFontFamily);
         Add(Declared.DisplayScale);
-        Add(Declared.EditorFontFamily);
-        Add(Declared.CaretWidth);
-        Add(Declared.ShowNavigationBar);
         Add(Declared.MainMenuBar);
         Add(Declared.EditorTabs);
+        Add(Declared.ToolWindowLook);
+        Add(Declared.ClosedToolWindows);
+        Add(Declared.FindResults);
+
+        Add(Declared.EditorFontFamily);
+        Add(Declared.EditorFontSize);
+        Add(Declared.EditorLineSpacing);
+        Add(Declared.CaretWidth);
+        Add(Declared.Ligatures);
+        Add(Declared.ShowLineNumbers);
+        Add(Declared.ShowNavigationBar);
+        Add(Declared.RainbowBraces);
+        Add(Declared.CloseTags);
+        TextBox masks = new() { Text = Working.SoftWrapFiles, PlaceholderText = "No files", IsEnabled = Working.SoftWrap };
+        ToolTip.SetTip(masks, "Use * and ? as wildcards and ; to separate patterns");
+        masks.TextChanged += (_, _) => Change(s => s with { SoftWrapFiles = masks.Text ?? string.Empty });
+        CheckBox wrapFiles = Check(Working.SoftWrap, v =>
+        {
+            Change(s => s with { SoftWrap = v });
+            masks.IsEnabled = v;
+        });
+        DockPanel.SetDock(wrapFiles, Dock.Left);
+        Add(EditorPage, "Soft-wrap these files", new DockPanel { HorizontalSpacing = 8, MaxWidth = OptionRow.EditorWidth, Children = { wrapFiles, masks } },
+            "soft wrap wrapping long lines width markdown text files masks",
+            "A file whose name matches opens with its lines wrapped at the editor's width; View | Active Editor | Soft-Wrap turns it on or off for one.");
+        Add(Declared.SoftWrapIndent);
+        Add(Declared.ShowWhitespaces);
+        Add(Declared.WheelZoom);
+
+        Add(Declared.FoldComments);
+        Add(Declared.FoldXmlTags);
+
+        Add(Declared.TerminalFontSize);
+        Add(Declared.TerminalFontFamily);
+        Add(Declared.TerminalCursorStyle);
+        Add(Declared.TerminalCursorBlinking);
+        Add(Declared.TerminalCopyOnSelection);
+        Add(Declared.TerminalShell);
+
+        Add(Declared.OpenDiffsIn);
+        Add(Declared.DiffHighlighting);
+
+        Add(Declared.TraceProtocols);
+        Add(Declared.LogEveryProgram);
 
         Add(Declared.FollowSystemContrast);
         Add(Declared.StatePalette);
