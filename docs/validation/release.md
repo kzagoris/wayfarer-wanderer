@@ -42,3 +42,15 @@ executed tests as a failure.
 macOS, Windows ARM64, Linux and Linux musl remain unverified on this
 workstation; their packaging commands are implemented but must be executed on
 matching targets before those targets can be marked supported.
+
+## GitHub release
+
+Run the Release workflow manually. Its default rehearsal builds Windows x64 only.
+Choose linux-x64, osx-arm64, or all to exercise other packages. Each platform
+job has a 30-minute timeout and retains its downloads for two days. Windows
+ships Setup and its Velopack update feed. Linux ships the installable tarball.
+The Apple Silicon DMG uses ad hoc signing. The Windows installer is unsigned.
+
+To publish, add release notes in `docs/release-notes/X.Y.Z.md`, match
+`Directory.Build.props` to that version, and tag the commit `vX.Y.Z`.
+Dispatch Release from that tag with target `all` and publish enabled.

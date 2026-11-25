@@ -57,11 +57,11 @@ def main():
     test_filters = {
         "shared-editor": "EditorHostTests|EditorWindowTests|EditorPinUpgradeTests",
         "import": "WorkspaceImportTests",
-        "rename": "MixedRenameTests",
+        "rename": "EditorWindowTests.AStaleModelTurnsRenameOffKeepsEditsAndARepairTurnsItBackOn|ExplorerActionsTests.RenameMovesTheFileAndTheEditorFollowsIt",
         "debug": "JvmDebugTests",
         "existing-projects": "DevelopmentLoopTests",
         "new-projects": "NewProjectTests",
-        "recovery": "RecoveryTests",
+        "recovery": "WorkspaceImportTests.AnAbsentToolingJvmFailsTheImportWithItsRecovery",
     }
 
     for selector in selected:
@@ -104,7 +104,7 @@ def main():
             parser.error(f"packaged app does not exist: {app}")
         case_file = results / "release-case.json"
         case_file.write_text(json.dumps({"name": "release-smoke", "selectors": selected}), encoding="utf-8")
-        code = run([str(app), "--acceptance", str(case_file), "--results", str(results)], cwd=ROOT, log=log)
+        code = run([str(app), "--acceptance", str(case_file), "--results", str(results)], cwd=results, log=log)
         report["cases"].append({"name": "packaged-app", "exitCode": code, "log": str(log)})
         report["success"] &= code == 0
 

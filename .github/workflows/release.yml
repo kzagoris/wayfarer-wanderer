@@ -1,0 +1,166 @@
+name: Release
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Platforms to build
+        type: choice
+        options: [win-x64, linux-x64, osx-arm64, all]
+      publish:
+        description: Publish from a version tag (requires all platforms)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: ${{ fromJSON(inputs.target == 'all' && '["win-x64","linux-x64","osx-arm64"]' || format('["{0}"]', inputs.target)) }}
+    runs-on: ${{ fromJSON('{"win-x64":"windows-latest","linux-x64":"ubuntu-24.04","osx-arm64":"macos-15"}')[matrix.rid] }}
+    timeout-minutes: 30
+    env:
+      RID: ${{ matrix.rid }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Validate publication request
+        if: inputs.publish
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' Directory.Build.props)
+          [[ "$TARGET" == all && "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" == "v$version" && "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test -s "docs/release-notes/$version.md"
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
+        with:
+          global-json-file: global.json
+          dotnet-version: 10.0.x
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Test
+        run: |
+          python tools/build-jvm-host.py --test
+          dotnet restore WayfarerWanderer.slnx --locked-mode --configfile vendor/passenger/nuget.config
+          dotnet test WayfarerWanderer.slnx --no-restore
+      - name: Package
+        run: |
+          case "$RID" in
+            win-x64) file=WayfarerWanderer-windows-x64.exe ;;
+            linux-x64) file=WayfarerWanderer-linux-x64.tar.gz ;;
+            osx-arm64) file=WayfarerWanderer-macos-arm64.dmg ;;
+          esac
+          python tools/package-release.py --rid "$RID" --output "artifacts/package/$file"
+          mkdir downloads
+          cp "artifacts/package/$file" downloads/
+          if [[ "$RID" == win-x64 ]]; then
+            cp artifacts/package/releases.win-x64.json artifacts/package/*-full.nupkg downloads/
+          fi
+      - name: Check the packaged version and project host
+        shell: pwsh
+        run: |
+          $publish = "artifacts/publish/WayfarerWanderer.App/release_$env:RID"
+          $assembly = (Resolve-Path "$publish/WayfarerWanderer.App.dll").Path
+          $version = ([xml](Get-Content Directory.Build.props -Raw)).Project.PropertyGroup.Version
+          $actual = [Diagnostics.FileVersionInfo]::GetVersionInfo($assembly).ProductVersion
+          if ($actual -ne "$version+$env:GITHUB_SHA") { throw "Unexpected product version $actual" }
+          if (!(Test-Path "$publish/jvm-host/host.jar")) { throw "Missing JVM project host" }
+      - name: Install on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = Start-Process ./downloads/WayfarerWanderer-windows-x64.exe -ArgumentList '--silent' -Wait -PassThru
+          if ($setup.ExitCode) { throw "Setup exited with $($setup.ExitCode)" }
+          "INSTALLED_APP=$env:LOCALAPPDATA/WayfarerWanderer/current/WayfarerWanderer.App.exe" >> $env:GITHUB_ENV
+      - name: Install on Linux
+        if: runner.os == 'Linux'
+        run: |
+          cd "$RUNNER_TEMP"
+          tar -xzf "$GITHUB_WORKSPACE"/downloads/*.tar.gz
+          sh install.sh
+          echo "INSTALLED_APP=$HOME/.local/bin/wayfarer-wanderer" >> "$GITHUB_ENV"
+      - name: Install on macOS
+        if: runner.os == 'macOS'
+        run: |
+          mount="$RUNNER_TEMP/image"
+          hdiutil attach downloads/*.dmg -mountpoint "$mount" -nobrowse
+          ditto "$mount/WayfarerWanderer.app" "$RUNNER_TEMP/WayfarerWanderer.app"
+          hdiutil detach "$mount"
+          echo "INSTALLED_APP=$RUNNER_TEMP/WayfarerWanderer.app/Contents/MacOS/WayfarerWanderer" >> "$GITHUB_ENV"
+      - name: Run installed acceptance
+        run: |
+          dotnet restore WayfarerWanderer.slnx --locked-mode --configfile vendor/passenger/nuget.config
+          python tools/acceptance.py --app "$INSTALLED_APP"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: validation-${{ matrix.rid }}
+          path: artifacts/test-results/acceptance/
+          retention-days: 2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: package-${{ matrix.rid }}
+          path: downloads/
+          if-no-files-found: error
+          retention-days: 2
+  assemble:
+    if: inputs.target == 'all'
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: package-*
+          merge-multiple: true
+          path: downloads
+      - name: Verify downloads
+        run: |
+          cd downloads
+          version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' ../Directory.Build.props)
+          file="WayfarerWanderer-$version-win-x64-full.nupkg"
+          jq -e --arg v "$version" --arg f "$file" --arg hash "$(sha256sum "$file" | cut -d' ' -f1)" '.Assets | length == 1 and .[0].Version == $v and .[0].FileName == $f and (.[0].SHA256 | ascii_downcase) == $hash' releases.win-x64.json
+          diff <(printf '%s\n' "$file" releases.win-x64.json WayfarerWanderer-{windows-x64.exe,macos-arm64.dmg,linux-x64.tar.gz} | sort) <(ls -1 | sort)
+          sha256sum * > ../SHA256SUMS
+          mv ../SHA256SUMS .
+          sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: verified-release
+          path: downloads/
+          retention-days: 2
+  publish:
+    if: inputs.publish
+    needs: assemble
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: verified-release
+          path: downloads
+      - name: Publish the verified files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd downloads
+          sha256sum -c SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" ./* --verify-tag --notes-file "../docs/release-notes/${GITHUB_REF_NAME#v}.md"

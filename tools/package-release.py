@@ -67,20 +67,22 @@ def linux(publish, output):
 
 
 def windows(publish, output, rid):
-    vpk = shutil.which("vpk")
-    prefix = [vpk] if vpk is not None else ["dotnet", "tool", "run", "vpk"]
-    if vpk is None:
-        command(["dotnet", "tool", "restore"])
-    command([*prefix, "pack", "--packId", "WayfarerWanderer", "--packVersion", version(),
+    command(["dotnet", "tool", "restore"])
+    command(["dotnet", "tool", "run", "vpk", "pack", "--packId", "WayfarerWanderer", "--packVersion", version(),
              "--packDir", publish, "--mainExe", "WayfarerWanderer.App.exe",
-             "--outputDir", output.parent, "--runtime", rid])
+             "--outputDir", output.parent, "--runtime", rid, "--channel", rid, "--noPortable"])
+    setup, = output.parent.glob("*-Setup.exe")
+    setup.replace(output)
 
 
 def macos(publish, output):
     hdiutil = shutil.which("hdiutil")
     if hdiutil is None:
         raise SystemExit("hdiutil is required for the macOS DMG")
-    bundle = output.parent / "WayfarerWanderer.app"
+    staging = output.parent / "mac-package"
+    if staging.exists():
+        shutil.rmtree(staging)
+    bundle = staging / "WayfarerWanderer.app"
     contents = bundle / "Contents"
     macos_dir = contents / "MacOS"
     resources = contents / "Resources"
@@ -101,16 +103,17 @@ def macos(publish, output):
         '<plist version="1.0"><dict><key>CFBundleExecutable</key>'
         '<string>WayfarerWanderer</string><key>CFBundleIdentifier</key>'
         '<string>org.wayfarer.WayfarerWanderer</string><key>CFBundleName</key>'
-        '<string>Wayfarer Wanderer</string></dict></plist>\n',
+        f'<string>Wayfarer Wanderer</string><key>CFBundleShortVersionString</key><string>{version()}</string><key>CFBundleVersion</key><string>{version()}</string></dict></plist>\n',
         encoding="utf-8",
     )
-    command([hdiutil, "create", "-volname", "Wayfarer Wanderer", "-srcfolder", bundle, "-ov", "-format", "UDZO", output])
+    command(["codesign", "--force", "--deep", "--sign", "-", bundle])
+    command([hdiutil, "create", "-volname", "Wayfarer Wanderer", "-srcfolder", staging, "-ov", "-format", "UDZO", output])
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rid", required=True, choices=(
-        "win-x64", "win-arm64", "osx-x64", "osx-arm64", "linux-x64", "linux-arm64", "linux-musl-x64", "linux-musl-arm64"
+        "win-x64", "osx-arm64", "linux-x64"
     ))
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
