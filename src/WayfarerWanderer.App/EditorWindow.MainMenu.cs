@@ -111,7 +111,7 @@ public sealed partial class EditorWindow
         ++workspaceRequest;
         ResetSemanticSession();
         ForgetPlaces();
-        Forget(session.Root);
+        ResetOpenDocuments();
         Session = null;
         await session.DisposeAsync();
         Unwatch();

@@ -13,9 +13,24 @@ public sealed partial class OpenDocument(string path, TextDocument text, FileTex
     private IReadOnlyList<ChangeMark> changeMarks = [];
     private IReadOnlyList<string?> gutterAnnotations = [];
     private DocumentDecorations? decorations;
+    private string filePath = path;
 
     /// <summary>The file's path, which follows a move.</summary>
-    public string Path { get; set; } = path;
+    public string Path
+    {
+        get => filePath;
+        set
+        {
+            if (filePath != value)
+            {
+                filePath = value;
+                PathChanged?.Invoke(this, EventArgs.Empty);
+            }
+        }
+    }
+
+    /// <summary>Raised when the file's path changes (a rename or move).</summary>
+    public event EventHandler? PathChanged;
 
     public TextDocument Text { get; } = text;
 

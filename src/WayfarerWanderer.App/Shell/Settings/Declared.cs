@@ -51,6 +51,11 @@ public static class Declared
         new(D.Appearance, "Show main menu as a menu bar", "main menu bar hamburger file edit view toolbar ribbon menus",
             "File, Edit, View and the rest side by side on the toolbar rather than behind its button. Those the toolbar has no room for go behind the button after them."));
 
+    public static readonly ThemedChoiceSetting<EditorTabsPlace> EditorTabs = new(s => s.EditorTabs, s => s.TabsPlace(), (s, v) => s with { EditorTabs = v },
+        [(EditorTabsPlace.Top, "Top"), (EditorTabsPlace.Left, "Left"), (EditorTabsPlace.Right, "Right")],
+        new(D.Appearance, "Editor tabs", "editor tabs tab well strip placement position vertical side left right top layout arrangement",
+            "Where the editor's tabs stand: a row across its top, or a column down its left or right side, which fits more of them."));
+
     public static readonly ChoiceSetting<StatePalette> StatePalette = new(s => s.StatePalette, (s, v) => s with { StatePalette = v },
         [(Shell.StatePalette.Theme, "The theme's own"), (Shell.StatePalette.ColourBlindSafe, "Colour-blind safe")],
         new(D.AccessibilityPage, "Colours of states", "colour color blind blindness deuteranopia protanopia tritanopia red green palette diff test passed failed added changed conflict git accessibility",
@@ -123,6 +128,6 @@ public static class Declared
             "How broad the editor's caret is, and the terminal's Line and Underline cursors."), "px");
 
     public static readonly ToggleSetting ShowNavigationBar = new(s => s.ShowNavigationBar, (s, v) => s with { ShowNavigationBar = v },
-        new(D.EditorPage, "Show navigation bar", "breadcrumbs path package type member outline structure jump appearance",
-            "Over the editor, where its caret is: the file's folders and name, then a Java or Kotlin file's type and member, each listing what stands beside it."));
+        new(D.EditorPage, "Show navigation bar", "breadcrumbs path package namespace type member outline structure jump appearance",
+            "Over the editor, where its caret is: a Java or Kotlin file's package, type and member, each listing what stands beside it."));
 }

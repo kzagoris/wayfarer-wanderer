@@ -208,6 +208,7 @@ public sealed partial class SettingsDialog : IdeWindow
         Add(Declared.CaretWidth);
         Add(Declared.ShowNavigationBar);
         Add(Declared.MainMenuBar);
+        Add(Declared.EditorTabs);
 
         Add(Declared.FollowSystemContrast);
         Add(Declared.StatePalette);

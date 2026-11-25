@@ -196,9 +196,7 @@ public sealed class SymbolPopup : SearchPopup<SymbolRow>
             }
             else
             {
-                (string kind, string brush) = Badge(symbol.Kind);
-                letter.Text = kind;
-                badge.Resource(Border.BackgroundProperty, ref badgeBrush, brush);
+                ShowBadge(badge, letter, ref badgeBrush, symbol.Kind);
             }
             where.Text = symbol.Where ?? string.Empty;
             name.Text = symbol.Name;
@@ -206,6 +204,14 @@ public sealed class SymbolPopup : SearchPopup<SymbolRow>
             detail.Margin = new Thickness(symbol.Detail?.StartsWith(':') == true ? 0 : Gaps.Normal, 0, 0, 0);
             row.Margin = new Thickness(symbol.Depth * Gaps.Indent, 0, 0, 0);
         });
+    }
+
+    /// <summary>Sets a kind badge's letter and theme brush for <paramref name="kind"/>.</summary>
+    internal static void ShowBadge(Border badge, TextBlock letter, ref string? bound, SymbolKind kind)
+    {
+        (string text, string brush) = Badge(kind);
+        letter.Text = text;
+        badge.Resource(Border.BackgroundProperty, ref bound, brush);
     }
 
     /// <summary>The letter and colour of a symbol of each kind, as every badge has them (<see cref="KindBadges"/>).</summary>

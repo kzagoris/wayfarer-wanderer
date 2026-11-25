@@ -61,21 +61,13 @@ public sealed partial class GoToFilePopup : SearchPopup<FileHit>
     }
 
     /// <summary>A file's row: its icon, its name and its folder at the row's end, as every popup row's detail.</summary>
-    protected override Control Row()
+    protected override Control Row() => Editors.HiddenTabsPopup.TabRow<FileHit>((hit, icon, name, folder) =>
     {
-        // The hidden tabs' row upstream (HiddenTabsPopup.TabRow), which Wayfarer has no popup for.
-        RowIcon icon = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, Gaps.Normal, 0), [DockPanel.DockProperty] = Dock.Left };
-        TextBlock name = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-        TextBlock folder = ListRow.DetailText();
-        DockPanel row = new() { Height = ListRow.Height, Children = { icon, folder, name } };
-        return row.Showing<FileHit>(hit =>
-        {
-            icon.Data = hit.Icon;
-            icon.Foreground = hit.IconBrush;
-            name.Text = hit.Name;
-            folder.Text = hit.Folder;
-        });
-    }
+        icon.Data = hit.Icon;
+        icon.Foreground = hit.IconBrush;
+        name.Text = hit.Name;
+        folder.Text = hit.Folder;
+    });
 }
 
 /// <summary>One result: the file's name, the folder it is in, and its icon.</summary>

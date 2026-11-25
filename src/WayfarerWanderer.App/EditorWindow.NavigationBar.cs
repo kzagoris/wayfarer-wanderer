@@ -20,16 +20,12 @@ public sealed partial class EditorWindow
     /// <summary>The bar over the editor.</summary>
     public NavigationBar NavigationBar { get; private set; } = null!;
 
-    /// <summary>The editor with the bar docked over it, which the dock's centre holds.</summary>
+    /// <summary>The editor with its tab strip and navigation bar docked over it, which the dock's centre holds.</summary>
     private Control EditorWithBar()
     {
+        AddEditorTabs();
         NavigationBar = new NavigationBar(Editor) { IsOn = SettingsKept.Value.ShowNavigationBar };
         NavigationBar.ListAsked += (_, list) => ShowNavigationList(list);
-        NavigationBar.RevealAsked += (_, path) =>
-        {
-            ToolDock.Show(ToolWindowIds.Explorer);
-            Explorer.Reveal(path);
-        };
         Actions.Registry.Add(new IdeAction(A.JumpToNavigationBar, "Jump to Navigation Bar", NavigateGroup, _ => JumpToNavigationBar())
         {
             WhyNot = _ => SourcePath is null || !Editor.IsVisible ? "No file is open"
@@ -39,7 +35,7 @@ public sealed partial class EditorWindow
             Words = ["Breadcrumbs", "Navigation Bar", "Focus Breadcrumbs"],
         });
         DockPanel.SetDock(NavigationBar.Bar, Dock.Top);
-        return new DockPanel { Children = { NavigationBar.Bar, Editor } };
+        return new EditorDock(EditorTabs) { Children = { EditorTabs.TabStrip, NavigationBar.Bar, Editor } };
     }
 
     /// <summary>The bar shown or hidden as Settings now says, the status bar's path naming the outline where it no longer does.</summary>

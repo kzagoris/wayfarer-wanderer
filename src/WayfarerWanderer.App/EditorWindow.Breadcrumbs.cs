@@ -19,6 +19,7 @@ namespace WayfarerWanderer.App;
 public sealed partial class EditorWindow
 {
     private readonly PathCrumbs breadcrumbs = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Avalonia.Thickness(0, 0, 18, 0) };
+    private readonly Dictionary<TextDocument, (int Version, IReadOnlyList<SymbolRow> Rows)> cachedOutlines = [];
     private IReadOnlyList<SymbolRow> outline = [];
     private string? outlined;
     private Debounce? outlineAgain;
@@ -33,7 +34,7 @@ public sealed partial class EditorWindow
     private readonly List<(TextBlock Between, Button Crumb)> crumbButtons = [];
 
     /// <summary>The path shown, part by part.</summary>
-    public IReadOnlyList<string> Breadcrumbs => [.. shownCrumbs.Select(c => c.Target is null ? c.Text : NameOf(c.Text))];
+    public IReadOnlyList<string> Breadcrumbs => [.. shownCrumbs.Select(c => c.Target is null ? c.Text : Shell.Editors.NavigationBar.NameOf(c.Text))];
 
     /// <summary>How long editing pauses before the outline is asked for again.</summary>
     private static readonly TimeSpan OutlinePause = TimeSpan.FromMilliseconds(400);
@@ -44,11 +45,13 @@ public sealed partial class EditorWindow
         outlineAgain = new Debounce(OutlinePause, OutlineAsync);
     }
 
-    /// <summary>Another file shown, or none: its own parts at once, and its outline asked for.</summary>
+    /// <summary>Another file shown, or none: its own parts at once, its cached outline immediately if known, else asked at once.</summary>
     private void BreadcrumbsFollowFile()
     {
         TextDocument? text = Editor.IsVisible && SourcePath is not null ? Editor.Document : null;
-        if (!ReferenceEquals(text, followedText))
+        string? path = text is null ? null : SourcePath;
+        bool switched = !ReferenceEquals(text, followedText);
+        if (switched)
         {
             if (followedText is not null)
             {
@@ -59,13 +62,34 @@ public sealed partial class EditorWindow
             {
                 text.Changed += OnFollowedTextChanged;
             }
+            outlineAgain?.Stop();
             outline = [];
             outlined = null;
-            OutlineLater();
         }
-        NavigationBar.Show(text is null ? null : SourcePath, text is null || SourcePath is not { } path ? [] : [.. FileCrumbs(path).Select(c => (c.Text, c.Path))]);
+        NavigationBar.Show(path);
+        if (switched && text is not null && path is not null)
+        {
+            if (cachedOutlines.TryGetValue(text, out (int Version, IReadOnlyList<SymbolRow> Rows) cached))
+            {
+                outline = cached.Rows;
+                outlined = path;
+                NavigationBar.ShowOutline(path, outline);
+                if (cached.Version != text.Version && RunningServerFor(path) is not null)
+                {
+                    IdeErrors.Observe(OutlineAsync());
+                }
+            }
+            else if (RunningServerFor(path) is not null)
+            {
+                IdeErrors.Observe(OutlineAsync());
+            }
+        }
         ShowBreadcrumbs();
     }
+
+    private void ForgetOutline(TextDocument document) => cachedOutlines.Remove(document);
+
+    private void ClearOutlines() => cachedOutlines.Clear();
 
     private void OnFollowedTextChanged(object? sender, DocumentChangedEventArgs e) => OutlineLater();
 
@@ -100,13 +124,20 @@ public sealed partial class EditorWindow
         {
             return;
         }
+        TextDocument? document = Editor.IsVisible ? Editor.Document : null;
+        int version = document?.Version ?? 0;
         try
         {
             Jvm.JvmLanguageClient client = await LanguageClientAsync(path, semanticLifetime.Token);
             JsonElement answer = await client.RequestAsync("textDocument/documentSymbol", new { textDocument = new { uri = new Uri(path).AbsoluteUri } }, semanticLifetime.Token);
+            IReadOnlyList<SymbolRow> symbols = DocumentSymbols(answer, path);
+            if (document is not null)
+            {
+                cachedOutlines[document] = (version, symbols);
+            }
             if (asked == outlining && SourcePath == path)
             {
-                outline = DocumentSymbols(answer, path);
+                outline = symbols;
                 outlined = path;
                 NavigationBar.ShowOutline(path, outline);
                 ShowBreadcrumbs();
@@ -166,7 +197,7 @@ public sealed partial class EditorWindow
             Crumb part = wanted[i];
             between.IsVisible = i > 0;
             crumb.IsVisible = true;
-            crumb.Content = part.Target is null ? part.Text : NameOf(part.Text);
+            crumb.Content = part.Target is null ? part.Text : Shell.Editors.NavigationBar.NameOf(part.Text);
             ListRow.Dim(crumb, part.Muted);
         }
         for (int i = wanted.Count; i < crumbButtons.Count; i++)
@@ -191,9 +222,6 @@ public sealed partial class EditorWindow
         made.Add(new Crumb(parts[^1], path, null, Muted: false));
         return [.. made];
     }
-
-    /// <summary>A member's name as the path shows it: without the parameters or type its outline name may give.</summary>
-    private static string NameOf(string name) => name.IndexOfAny(['(', ':', '<']) is var cut and > 0 ? name[..cut].TrimEnd() : name;
 
     /// <summary>A button of the path and the mark before it, which a click on reads the part shown there when clicked.</summary>
     private void AddCrumbButton()

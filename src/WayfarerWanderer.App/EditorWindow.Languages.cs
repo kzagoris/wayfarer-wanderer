@@ -14,10 +14,10 @@ public sealed partial class EditorWindow
 
     /// <summary>Shows a file's text with what the language its path says gives it: a renamed file (Notes.txt to Notes.md)
     /// takes its new language's.</summary>
-    private void ShowDocument(string path, TextDocument document)
+    private void ShowDocument(string path, TextDocument document, SelectionSet? selections = null, Avalonia.Vector scroll = default)
     {
         Shown held = Hold(path, document);
-        Editor.Show(document, SelectionSet.Single(0), default, decorated: held.Decorations);
+        Editor.Show(document, selections ?? SelectionSet.Single(0), scroll, decorated: held.Decorations);
         Editor.Highlighter = held.Colours;
     }
 

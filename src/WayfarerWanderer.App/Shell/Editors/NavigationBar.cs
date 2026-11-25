@@ -1,7 +1,7 @@
 // From Passenger 8a1df7e4 src/Passenger.App/Editors/NavigationBar.cs, MIT (notices/Passenger/LICENSE): over Wayfarer's one
 // editor rather than each group's; its outline is the one the status bar's path asks the Java and Kotlin servers for
-// (EditorWindow.Breadcrumbs) rather than a file's own parse, and the file's path stands before it, alone where no server
-// outlines the file; without a screen reader's words, which Wayfarer has no announcer for yet.
+// (EditorWindow.Breadcrumbs) rather than a file's own parse; without a screen reader's words, which Wayfarer has no
+// announcer for yet.
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -10,7 +10,6 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Passenger.Editor;
 using Passenger.Text;
-using WayfarerWanderer.App.Shell.Explorer;
 using WayfarerWanderer.App.Shell.Navigation;
 using WayfarerWanderer.App.Shell.ToolWindows;
 
@@ -20,14 +19,12 @@ namespace WayfarerWanderer.App.Shell.Editors;
 /// opens, and what it opens under.</summary>
 public sealed record NavigationList(string Title, IReadOnlyList<SymbolRow> Rows, int Chosen, Control Under);
 
-/// <summary>The bar over the editor naming where its caret is: the file's last folders and its name, then where the caret
-/// is in the file's outline, outermost first (a Java or Kotlin file's type and member), each part a button listing what
-/// stands beside it to go to, and after them, where the caret is in none of what the innermost holds, a mark listing that.
-/// A folder's part shows it in the Project window, the file's lists the file's top level (shows it there too where the
-/// file has no outline). The bar follows the caret once it rests in another part, so a key moving within one costs
-/// nothing. Shown while the setting has it and a file is shown, a narrow editor shortening its parts, the outermost going
-/// first (<see cref="PathCrumbs"/>). Left and Right move along it, Down opens a part's list as Enter and Space do, Escape
-/// gives the editor the keys back.</summary>
+/// <summary>The bar over the editor naming where its caret is in the file's outline, outermost first (a Java or Kotlin
+/// file's package, type and member), each part a button listing what stands beside it to go to, and after them, where the
+/// caret is in none of what the innermost holds, a mark listing that. The bar follows the caret once it rests in another
+/// part, so a key moving within one costs nothing. Shown while the setting has it and the file has an outline with
+/// something in it, a narrow editor shortening its parts, the outermost going first (<see cref="PathCrumbs"/>). Left and
+/// Right move along it, Down opens a part's list as Enter and Space do, Escape gives the editor the keys back.</summary>
 public sealed class NavigationBar
 {
     /// <summary>What a screen reader calls the bar.</summary>
@@ -42,9 +39,8 @@ public sealed class NavigationBar
     private readonly Debounce follow;
     private bool on = true;
 
-    /// <summary>The file shown, null for none, and its path's parts: its folders, then itself.</summary>
+    /// <summary>The file shown, null for none.</summary>
     private string? file;
-    private (string Text, string Path)[] fileParts = [];
 
     private Outline<SymbolRow> outline = Outline<SymbolRow>.Empty;
 
@@ -87,9 +83,6 @@ public sealed class NavigationBar
     /// <summary>A part asked for its list, to show under it.</summary>
     public event EventHandler<NavigationList>? ListAsked;
 
-    /// <summary>A folder's part, or the part of a file with no outline, asked to be shown in the Project window.</summary>
-    public event EventHandler<string>? RevealAsked;
-
     /// <summary>Whether the setting shows the bar.</summary>
     public bool IsOn
     {
@@ -97,12 +90,12 @@ public sealed class NavigationBar
         set
         {
             on = value;
-            Bar.IsVisible = on && file is not null;
+            Bar.IsVisible = on && HasOutline;
         }
     }
 
-    /// <summary>The names the bar shows, the file's path first, then the outline's parts outermost first.</summary>
-    public IReadOnlyList<string> Shown => [.. fileParts.Select(p => p.Text), .. path.Select(row => row.Name)];
+    /// <summary>The names of the parts the path shows, outermost first.</summary>
+    public IReadOnlyList<string> Shown => [.. path.Select(row => row.Name)];
 
     /// <summary>Whether the bar shows and names where the caret is in the file's outline, so the status bar's path need not.</summary>
     public bool NamesOutline => Bar.IsVisible && HasOutline;
@@ -110,14 +103,14 @@ public sealed class NavigationBar
     /// <summary>Whether the bar has the shown file's outline, with something in it, shown or not.</summary>
     public bool HasOutline => outlined && outline.Rows.Count > 0;
 
-    /// <summary>The buttons the bar shows: the path's, its parts' in their order and then its last mark's where it shows one.</summary>
+    /// <summary>The buttons the bar shows: its parts' in their order and then its last mark's where it shows one.</summary>
     public IReadOnlyList<Button> Buttons => [.. parts.Where(p => p.Button.IsVisible).Select(p => p.Button)];
 
     /// <summary>Whether the bar's last mark lists what the innermost part holds (the file's top where it shows no part).</summary>
     public bool ListsMore => listed is not null;
 
-    /// <summary>The file the editor shows now, with its path's parts (its last folders, then itself); null for none.</summary>
-    public void Show(string? shown, IReadOnlyList<(string Text, string Path)> partsOfPath)
+    /// <summary>The file the editor shows now; null for none.</summary>
+    public void Show(string? shown)
     {
         if (shown != file)
         {
@@ -127,26 +120,27 @@ public sealed class NavigationBar
             awaited = -2;
         }
         file = shown;
-        fileParts = shown is null ? [] : [.. partsOfPath];
-        Bar.IsVisible = on && file is not null;
+        Bar.IsVisible = on && HasOutline;
         ShowPath(force: true);
     }
 
     /// <summary>The shown file's outline as its server read it, its rows in the file's order each under its container
-    /// (<see cref="SymbolRow.Depth"/>); none where no server outlines the file. A package's row is the file's own
-    /// context, which the path names already.</summary>
+    /// (<see cref="SymbolRow.Depth"/>); none where no server outlines the file.</summary>
     public void ShowOutline(string forFile, IReadOnlyList<SymbolRow>? rows)
     {
         if (forFile != file)
         {
             return;
         }
-        outline = rows is null ? Outline<SymbolRow>.Empty : OutlineOf([.. rows.Where(r => r.Kind is not (SymbolKind.Package or SymbolKind.Namespace or SymbolKind.Module))]);
+        outline = rows is null ? Outline<SymbolRow>.Empty : OutlineOf(rows);
         outlined = rows is not null;
+        Bar.IsVisible = on && HasOutline;
         ShowPath(force: true);
     }
 
-    /// <summary>Rows each under the last row before it a level up, as an outline.</summary>
+    /// <summary>Rows each under the last row before it a level up, as an outline. A file-level package or namespace
+    /// declaration that the language server reports as a sibling of its types (spanning only its own line, as Java and
+    /// Kotlin servers do) encloses the top-level declarations after it, as C#'s file-scoped namespace does in Passenger.</summary>
     public static Outline<SymbolRow> OutlineOf(IReadOnlyList<SymbolRow> rows)
     {
         List<Node> roots = [];
@@ -160,6 +154,13 @@ public sealed class NavigationBar
             }
             (open.Count > 0 ? open[^1].Children : roots).Add(node);
             open.Add(node);
+        }
+        if (roots.Count > 1 && roots[0].Children.Count == 0 && roots[0].Row.Kind is SymbolKind.Package or SymbolKind.Namespace or SymbolKind.Module)
+        {
+            Node scope = roots[0];
+            int endLine = rows.Max(r => Math.Max(r.Position.Line, r.EndLine ?? r.Position.Line));
+            scope = new Node(scope.Row with { EndLine = Math.Max(scope.Row.EndLine ?? scope.Row.Position.Line, endLine) }, [.. roots.Skip(1)]);
+            roots = [scope];
         }
         return Outline<SymbolRow>.Of<Node>(roots, n => n.Children, (n, _) => (n.Row, n.Row.Position.Line, Math.Max(n.Row.Position.Line, n.Row.EndLine ?? n.Row.Position.Line)));
     }
@@ -205,39 +206,28 @@ public sealed class NavigationBar
     {
         (int[] at, int? lists) = outlined && outline.Rows.Count > 0 ? Where(outline, editor.CaretPosition.Line) : ([], null);
         awaited = at.Length > 0 ? at[^1] : -1;
-        if (!force && lists == listed && at.AsSpan().SequenceEqual(pathAt) && Same(at))
+        if (!force && lists == listed && at.Length == path.Length && at.AsSpan().SequenceEqual(pathAt) && Same(at))
         {
             return;
         }
         pathAt = at;
         path = [.. at.Select(i => outline.Rows[i])];
         listed = lists;
-        int next = 0;
-        for (int i = 0; i < fileParts.Length; i++)
-        {
-            bool last = i == fileParts.Length - 1;
-            PartAt(next++).ShowFile(fileParts[i].Text, fileParts[i].Path, last, first: i == 0,
-                last && outlined && outline.Rows.Count > 0 ? ListTitle(outline, -1) : last ? "Show in the Project window" : $"Show {fileParts[i].Text} in the Project window");
-        }
         for (int i = 0; i < path.Length; i++)
         {
-            PartAt(next++).ShowRow(path[i], ListTitle(outline, outline.ParentOf(at[i])), first: next == 1);
+            PartAt(i).ShowRow(path[i], ListTitle(outline, outline.ParentOf(at[i])), first: i == 0);
         }
-        if (lists is { } parent && parent >= 0)
+        if (lists is { } parent)
         {
-            PartAt(next++).ShowMore(ListTitle(outline, parent));
+            PartAt(path.Length).ShowMore(ListTitle(outline, parent), after: path.Length > 0);
         }
-        for (int i = next; i < parts.Count; i++)
+        for (int i = path.Length + (lists is null ? 0 : 1); i < parts.Count; i++)
         {
             parts[i].Hide();
         }
 
         bool Same(int[] rows)
         {
-            if (rows.Length != path.Length)
-            {
-                return false;
-            }
             for (int i = 0; i < rows.Length; i++)
             {
                 if (!ReferenceEquals(outline.Rows[rows[i]], path[i]))
@@ -276,29 +266,14 @@ public sealed class NavigationBar
         return parts[index];
     }
 
-    /// <summary>A part's list or place: a folder shown in the Project window; the file's top level (the file shown there,
-    /// with no outline); the rows beside a row's own, it chosen; or those the last mark lists.</summary>
+    /// <summary>A part's list: the rows beside the part's own, it chosen; or those the last mark lists.</summary>
     private void Open(int index, Control under)
     {
-        int row = index - fileParts.Length;
-        if (row < 0)
-        {
-            bool isFile = index == fileParts.Length - 1;
-            if (isFile && outlined && outline.Rows.Count > 0)
-            {
-                Offer(outline, -1, pathAt.Length > 0 ? pathAt[0] : -1, under, keyed);
-            }
-            else
-            {
-                RevealAsked?.Invoke(this, fileParts[index].Path);
-            }
-            return;
-        }
-        if (!outlined || (row < pathAt.Length ? outline.ParentOf(pathAt[row]) : listed) is not { } parent)
+        if (!outlined || (index < pathAt.Length ? outline.ParentOf(pathAt[index]) : listed) is not { } parent)
         {
             return;
         }
-        Offer(outline, parent, row < pathAt.Length ? pathAt[row] : -1, under, keyed);
+        Offer(outline, parent, index < pathAt.Length ? pathAt[index] : -1, under, keyed);
     }
 
     /// <summary>Asks the window to list a row's own rows (the file's top level for -1) under a control, one of them chosen.</summary>
@@ -387,13 +362,15 @@ public sealed class NavigationBar
         }
     }
 
-    /// <summary>A part's mark and button: a folder's name, muted; the file's icon and name; a row's kind badge and name, its
-    /// tip and accessible words naming the list it opens; or, as the last mark, the mark alone, named by its list.</summary>
+    /// <summary>A member's name as the bar and status bar show it: without the parameters or type its outline name may give.</summary>
+    internal static string NameOf(string name) => name.IndexOfAny(['(', ':', '<']) is var cut and > 0 ? name[..cut].TrimEnd() : name;
+
+    /// <summary>A part's mark and button: a row's kind badge and name, its tip and accessible words naming the list it
+    /// opens; or, as the last mark, the mark alone, named by its list.</summary>
     private sealed class Part
     {
         private readonly Border badge;
         private readonly TextBlock letter;
-        private readonly RowIcon icon = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, Gaps.Tight, 0) };
         private readonly TextBlock name = new() { VerticalAlignment = VerticalAlignment.Center };
         private string? badgeBrush;
 
@@ -401,62 +378,37 @@ public sealed class NavigationBar
         {
             badge = Tags.Kind(out letter);
             badge.Margin = new Thickness(0, 0, Gaps.Tight, 0);
-            Button = new Button { Classes = { StyleClasses.Crumb }, Content = new DockPanel { Children = { icon, badge, name } } };
+            Button = new Button { Classes = { StyleClasses.Crumb }, Content = new DockPanel { Children = { badge, name } } };
         }
 
         public TextBlock Mark { get; } = new() { Text = "›", Classes = { StyleClasses.Status }, Margin = new Thickness(Gaps.Tight, 0), VerticalAlignment = VerticalAlignment.Center };
 
         public Button Button { get; }
 
-        public void ShowFile(string text, string path, bool isFile, bool first, string tip)
-        {
-            badge.IsVisible = false;
-            icon.IsVisible = isFile;
-            if (isFile)
-            {
-                icon.Data = FileIcons.ForFile(path);
-                icon.Foreground = FileIcons.BrushForFile(path);
-            }
-            name.Text = text;
-            Show(first, tip, isFile ? $"{text}, file" : $"{text}, folder");
-            ListRow.Dim(Button, !isFile);
-        }
-
         public void ShowRow(SymbolRow row, string list, bool first)
         {
-            (string kind, string brush) = SymbolPopup.Badge(row.Kind);
-            letter.Text = kind;
-            badge.Resource(Border.BackgroundProperty, ref badgeBrush, brush);
+            SymbolPopup.ShowBadge(badge, letter, ref badgeBrush, row.Kind);
             badge.IsVisible = true;
-            icon.IsVisible = false;
             name.Text = NameOf(row.Name);
-            Show(first, list, $"{NameOf(row.Name)}, {row.Kind.ToString().ToLowerInvariant()}");
-            ListRow.Dim(Button, false);
+            Mark.IsVisible = !first;
+            Button.IsVisible = true;
+            Button.Margin = default;
+            AutomationProperties.SetName(Button, $"{NameOf(row.Name)}, {row.Kind.ToString().ToLowerInvariant()}");
+            AutomationProperties.SetHelpText(Button, list);
+            ToolTip.SetTip(Button, list);
         }
 
-        public void ShowMore(string list)
+        public void ShowMore(string list, bool after)
         {
             badge.IsVisible = false;
-            icon.IsVisible = false;
             name.Text = "›";
             // The mark is the button itself, standing where a part's mark would.
             Mark.IsVisible = false;
             Button.IsVisible = true;
-            Button.Margin = new Thickness(Gaps.Tight, 0, 0, 0);
+            Button.Margin = after ? new Thickness(Gaps.Tight, 0, 0, 0) : default;
             AutomationProperties.SetName(Button, list);
             AutomationProperties.SetHelpText(Button, list);
             ToolTip.SetTip(Button, list);
-            ListRow.Dim(Button, false);
-        }
-
-        private void Show(bool first, string tip, string said)
-        {
-            Mark.IsVisible = !first;
-            Button.IsVisible = true;
-            Button.Margin = default;
-            AutomationProperties.SetName(Button, said);
-            AutomationProperties.SetHelpText(Button, tip);
-            ToolTip.SetTip(Button, tip);
         }
 
         public void Hide()
@@ -464,8 +416,5 @@ public sealed class NavigationBar
             Mark.IsVisible = false;
             Button.IsVisible = false;
         }
-
-        /// <summary>A member's name as the bar shows it: without the parameters or type its outline name may give.</summary>
-        private static string NameOf(string name) => name.IndexOfAny(['(', ':', '<']) is var cut and > 0 ? name[..cut].TrimEnd() : name;
     }
 }

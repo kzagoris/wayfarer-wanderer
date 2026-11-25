@@ -91,27 +91,35 @@ public sealed class EditorNavigationTests : IDisposable
     }
 
     [AvaloniaFact]
-    public async Task TheNavigationBarNamesThePathThenWhereTheCaretIsAndListsWhatStandsBeside()
+    public async Task TheNavigationBarNamesTheOutlineAloneWhileTabsAndStatusBarNameTheFile()
     {
         EditorWindow window = await OpenAsync();
         try
         {
-            // A file no server outlines: the path alone.
+            // A file no server outlines: no navigation bar over the editor; the tab strip and status bar name the file.
             window.OpenSource(Path.Combine(root, "pom.xml"));
-            Assert.True(window.NavigationBar.Bar.IsVisible);
-            Assert.Equal(["pom.xml"], window.NavigationBar.Shown);
+            Assert.True(window.EditorTabs.TabStrip.IsVisible);
+            Assert.Equal(["pom.xml"], window.EditorTabs.Tabs.Select(t => t.Document.Name));
+            Assert.False(window.NavigationBar.Bar.IsVisible);
+            Assert.Empty(window.NavigationBar.Shown);
+            Assert.Equal(["pom.xml"], window.Breadcrumbs);
 
             window.OpenSource(main);
-            Assert.Equal(["java", "demo", "Main.java"], window.NavigationBar.Shown);
-            // The outline the Java server gives the status bar's path, given the bar.
+            Assert.Equal(["pom.xml", "Main.java"], window.EditorTabs.Tabs.Select(t => t.Document.Name));
+            Assert.False(window.NavigationBar.Bar.IsVisible);
+            Assert.Equal(["java", "demo", "Main.java"], window.Breadcrumbs);
+
+            // The outline the Java server gives the status bar's path, given the bar: package, type and member only.
             window.NavigationBar.ShowOutline(main, EditorWindow.DocumentSymbols(JsonDocument.Parse(MainOutline).RootElement, main));
+            Assert.True(window.NavigationBar.Bar.IsVisible);
             window.Editor.GoTo(new TextPosition(6, 8));
-            await Settled(window, () => window.NavigationBar.Shown.Count == 5);
-            Assert.Equal(["java", "demo", "Main.java", "Main", "run()"], window.NavigationBar.Shown);
+            await Settled(window, () => window.NavigationBar.Shown.Count == 3);
+            Assert.Equal(["demo", "Main", "run()"], window.NavigationBar.Shown);
             Assert.True(window.NavigationBar.NamesOutline);
+            Assert.Equal(["java", "demo", "Main.java"], window.Breadcrumbs);
 
             // A member's part lists the type's members, it chosen; another chosen is gone to.
-            window.NavigationBar.Buttons[4].RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            window.NavigationBar.Buttons[2].RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             SymbolPopup list = await Shown<SymbolPopup>(window);
             await list.SettledAsync();
             Assert.Equal("Members of Main", list.Title);
@@ -120,14 +128,59 @@ public sealed class EditorNavigationTests : IDisposable
             list.Selected = list.Rows[0];
             list.Choose();
             Assert.Equal(new TextPosition(3, 8), window.Editor.CaretPosition);
-            await Settled(window, () => window.NavigationBar.Shown.Count == 5 && window.NavigationBar.Shown[4] == "count");
+            await Settled(window, () => window.NavigationBar.Shown.Count == 3 && window.NavigationBar.Shown[2] == "count");
 
-            // Turned off, the bar hides and Jump to Navigation Bar lists the caret's part's neighbours instead.
+            // Turned off, the bar hides, and Jump to Navigation Bar lists the caret's part's neighbours instead.
             window.NavigationBar.IsOn = false;
             Assert.False(window.NavigationBar.Bar.IsVisible);
             Assert.True(window.RunFromMenu(WayfarerWanderer.App.Shell.AppActions.JumpToNavigationBar));
             SymbolPopup jumped = await Shown<SymbolPopup>(window);
             Assert.Equal("Members of Main", jumped.Title);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task EditorTabsShowOpenFilesSwitchPinCloseAndReopen()
+    {
+        EditorWindow window = await OpenAsync();
+        try
+        {
+            Assert.False(window.EditorTabs.TabStrip.IsVisible);
+            window.OpenSource(main);
+            window.OpenSource(service);
+            Assert.True(window.EditorTabs.TabStrip.IsVisible);
+            Assert.Equal(["Main.java", "OrderService.java"], window.EditorTabs.Tabs.Select(t => t.Document.Name));
+            Assert.Equal(service, window.EditorTabs.Active!.Path);
+
+            // Next/Previous Tab cycles around the strip.
+            Assert.True(window.RunFromMenu(AppActions.PreviousTab));
+            Assert.Equal(main, window.SourcePath);
+            Assert.True(window.RunFromMenu(AppActions.NextTab));
+            Assert.Equal(service, window.SourcePath);
+
+            // Pinning moves the tab to the pinned fence and keeps it open across Close All Tabs.
+            Assert.True(window.RunFromMenu(AppActions.PinTab));
+            Assert.True(window.EditorTabs.IsPinned(window.ShownDocument!));
+            Assert.Equal(["OrderService.java", "Main.java"], window.EditorTabs.Tabs.Select(t => t.Document.Name));
+            Assert.True(window.RunFromMenu(AppActions.CloseAllTabs));
+            Assert.Equal(["OrderService.java"], window.EditorTabs.Tabs.Select(t => t.Document.Name));
+            Assert.Equal(service, window.SourcePath);
+
+            // Reopen Closed Tab brings the closed tab back; closing the last tab hides the strip and editor.
+            Assert.True(window.RunFromMenu(AppActions.ReopenClosedTab));
+            Assert.Equal(main, window.SourcePath);
+            Assert.Equal(["OrderService.java", "Main.java"], window.EditorTabs.Tabs.Select(t => t.Document.Name));
+
+            window.EditorTabs.Pin(window.EditorTabs.Tabs[0].Document, false);
+            Assert.True(window.RunFromMenu(AppActions.CloseAllTabs));
+            Assert.Empty(window.EditorTabs.Tabs);
+            Assert.False(window.EditorTabs.TabStrip.IsVisible);
+            Assert.False(window.Editor.IsVisible);
+            Assert.Null(window.SourcePath);
         }
         finally
         {

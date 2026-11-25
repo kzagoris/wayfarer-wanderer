@@ -88,13 +88,7 @@ public sealed partial class EditorWindow : Window
         if (request != workspaceRequest || closing) return;
         Breakpoints.Reset();
         ForgetPlaces();
-        if (SourcePath != null)
-        {
-            SourcePath = null;
-            Editor.Document = new TextDocument();
-            Editor.Highlighter = null;
-            ShowBlameOf(null);
-        }
+        ResetOpenDocuments();
         DebugTool.Reset();
         RunTool.Console.Reset();
         DebugTool.Console.Reset();
@@ -186,7 +180,11 @@ public sealed partial class EditorWindow : Window
             ToolDock.LayoutChanged += (_, _) => state.Layout.Set(ToolDock.Capture());
         }
         // The theme's layout as the dock's default, laid over what the person has not arranged, now and as it changes.
-        EventHandler followTheme = (_, _) => ToolDock.UseDefault(Themes.Layout);
+        EventHandler followTheme = (_, _) =>
+        {
+            ToolDock.UseDefault(Themes.Layout);
+            FollowEditorTabs(SettingsKept.Value);
+        };
         followTheme(null, EventArgs.Empty);
         Themes.LayoutChanged += followTheme;
         Closed += (_, _) => Themes.LayoutChanged -= followTheme;

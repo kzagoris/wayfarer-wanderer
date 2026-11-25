@@ -904,23 +904,41 @@ public sealed partial class EditorWindow
         }
     }
 
-    /// <summary>The open files a delete took away let go of: the one shown leaves the editor empty.</summary>
+    /// <summary>The open files a delete took away let go of: the one shown gives way to the next tab, or leaves the editor empty.</summary>
     private void Forget(string path)
     {
         string full = Path.GetFullPath(path);
+        bool activeGone = false;
+        Shell.Workspace.OpenDocument? next = null;
         foreach (string open in documents.Keys.Where(p => PathNames.Within(p, full)).ToList())
         {
+            bool wasShown = SourcePath == open;
             if (documents.Remove(open, out var closed))
             {
+                Shell.Workspace.OpenDocument? candidate = EditorTabs.Remove(closed);
+                if (wasShown)
+                {
+                    activeGone = true;
+                    next = candidate;
+                }
+                ForgetOutline(closed.Document);
                 ForgetLanguage(closed.Document);
                 DocumentClosed(closed);
             }
-            if (SourcePath == open)
+            else if (wasShown)
             {
-                SourcePath = null;
-                Editor.Document = new TextDocument();
-                Editor.IsVisible = false;
-                ShowBlameOf(null);
+                activeGone = true;
+            }
+        }
+        if (activeGone)
+        {
+            if (next is not null && documents.ContainsKey(next.Path))
+            {
+                OpenSource(next.Path);
+            }
+            else
+            {
+                ClearEditor();
             }
         }
     }

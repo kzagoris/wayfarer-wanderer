@@ -250,6 +250,7 @@ public sealed partial class EditorWindow
             TerminalSettingsChanged(change);
             FollowMainMenu(SettingsKept.Value);
             FollowTitleBar(SettingsKept.Value);
+            FollowEditorTabs(SettingsKept.Value);
             FollowNavigationBar(SettingsKept.Value);
         });
 

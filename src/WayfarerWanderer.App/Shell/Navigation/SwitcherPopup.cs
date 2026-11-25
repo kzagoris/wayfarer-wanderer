@@ -57,22 +57,14 @@ public sealed class SwitcherPopup : SearchPopup<SwitcherRow>, IOwnKeys
     }
 
     /// <summary>A row: its icon, its name, and its folder or keys at the row's end, as every popup row's detail.</summary>
-    protected override Control Row()
+    protected override Control Row() => Editors.HiddenTabsPopup.TabRow<SwitcherRow>((shown, icon, name, after) =>
     {
-        // The hidden tabs' row upstream (HiddenTabsPopup.TabRow), which Wayfarer has no popup for.
-        RowIcon icon = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, Gaps.Normal, 0), [DockPanel.DockProperty] = Dock.Left };
-        TextBlock name = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-        TextBlock after = ListRow.DetailText();
-        DockPanel row = new() { Height = ListRow.Height, Children = { icon, after, name } };
-        return row.Showing<SwitcherRow>(shown =>
-        {
-            icon.Data = shown.Icon;
-            icon.DataKey = shown.IconKey;
-            icon.Foreground = shown.IconBrush;
-            name.Text = shown.Name;
-            after.Text = shown.After;
-        });
-    }
+        icon.Data = shown.Icon;
+        icon.DataKey = shown.IconKey;
+        icon.Foreground = shown.IconBrush;
+        name.Text = shown.Name;
+        after.Text = shown.After;
+    });
 
     /// <summary>The choice moved a row on, or back for a negative step, round from either end.</summary>
     public void Move(int step)

@@ -32,6 +32,7 @@ public sealed partial class EditorWindow
     public void OpenSource(string path)
     {
         path = Path.GetFullPath(path);
+        EditorTabs.Keep(Editor);
         bool opened = !documents.TryGetValue(path, out var source);
         if (opened)
         {
@@ -46,9 +47,11 @@ public sealed partial class EditorWindow
         else
         {
             Leaving(path);
-            ShowDocument(path, source!.Document);
+            (SelectionSet selections, Avalonia.Vector scroll) = EditorTabs.ViewOf(source!);
+            ShowDocument(path, source!.Document, selections, scroll);
         }
         Editor.IsVisible = true;
+        EditorTabs.Show(source);
         SourcePath = path;
         ShowBlameOf(source);
         Breakpoints.Select(path);
@@ -60,11 +63,16 @@ public sealed partial class EditorWindow
     private void SaveSource()
     {
         if (SourcePath is not { } path) return;
-        var (document, file) = documents[path];
+        SaveDocument(documents[path]);
+    }
+
+    private void SaveDocument(OpenDocument source)
+    {
+        var (document, file) = source;
         (FileText Written, string? Converted) saved;
         try
         {
-            saved = FileText.SaveOver(path, file, document.Snapshot.ToString());
+            saved = FileText.SaveOver(source.Path, file, document.Snapshot.ToString());
         }
         catch (Exception refused) when (refused is IOException or UnauthorizedAccessException)
         {
@@ -73,8 +81,21 @@ public sealed partial class EditorWindow
             throw;
         }
         document.MarkSaved();
-        documents[path].OnSaved(saved.Written);
-        if (Language(path) == "kotlin") RefreshKotlinClasses();
+        source.OnSaved(saved.Written);
+        if (Language(source.Path) == "kotlin") RefreshKotlinClasses();
+    }
+
+    private string? TrySaveDocument(OpenDocument source)
+    {
+        try
+        {
+            SaveDocument(source);
+            return null;
+        }
+        catch (Exception refused) when (refused is IOException or UnauthorizedAccessException)
+        {
+            return refused.Message;
+        }
     }
 
     private async Task PickWorkspaceAsync()
