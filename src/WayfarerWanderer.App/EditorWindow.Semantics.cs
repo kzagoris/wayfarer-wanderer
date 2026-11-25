@@ -77,6 +77,7 @@ public sealed partial class EditorWindow
     private void ResetSemanticSession()
     {
         CloseCompletion();
+        CloseQuickDoc();
         Task[] starting = [.. startingClients.Values.Where(task => !task.IsCompleted)];
         startingClients.Clear();
         semanticLifetime.Cancel();
@@ -383,6 +384,7 @@ public sealed partial class EditorWindow
             else completionPopup?.Close();
             return;
         }
+        CloseQuickDoc();
         Completion.Show(shown, Editor.PointOf(session.WordStart), Editor.LineHeight, snapshot.GetText(session.WordStart, caret - session.WordStart));
     }
 

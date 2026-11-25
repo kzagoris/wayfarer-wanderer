@@ -75,11 +75,14 @@ public sealed class JvmLanguageClient : IAsyncDisposable
                 capabilities = new { workspace = new { configuration = true, workspaceFolders = true, workspaceEdit = new { documentChanges = true },
                         inlayHint = new { refreshSupport = true } },
                     textDocument = new { completion = new { completionItem = new { snippetSupport = false } },
+                        hover = new { dynamicRegistration = false, contentFormat = new[] { "markdown", "plaintext" } },
                         documentSymbol = new { hierarchicalDocumentSymbolSupport = true },
                         inlayHint = new { dynamicRegistration = false, resolveSupport = new { properties = new[] { "tooltip", "label.tooltip", "label.location" } } } } }
             }, cancel).ConfigureAwait(false);
-            JsonElement hints = initialized.ValueKind == JsonValueKind.Object && initialized.TryGetProperty("capabilities", out JsonElement capabilities)
-                && capabilities.TryGetProperty("inlayHintProvider", out JsonElement provider) ? provider : default;
+            JsonElement capabilities = initialized.ValueKind == JsonValueKind.Object && initialized.TryGetProperty("capabilities", out JsonElement caps) ? caps : default;
+            JsonElement hints = capabilities.ValueKind == JsonValueKind.Object && capabilities.TryGetProperty("inlayHintProvider", out JsonElement provider) ? provider : default;
+            JsonElement hover = capabilities.ValueKind == JsonValueKind.Object && capabilities.TryGetProperty("hoverProvider", out JsonElement hoverProvider) ? hoverProvider : default;
+            client.HasHover = hover.ValueKind is JsonValueKind.True or JsonValueKind.Object;
             client.HasInlayHints = hints.ValueKind is JsonValueKind.True or JsonValueKind.Object;
             client.ResolvesInlayHints = hints.ValueKind == JsonValueKind.Object
                 && hints.TryGetProperty("resolveProvider", out JsonElement resolves) && resolves.ValueKind == JsonValueKind.True;
@@ -95,6 +98,9 @@ public sealed class JvmLanguageClient : IAsyncDisposable
     }
 
     public bool HasExited => reader.IsCompleted;
+
+    /// <summary>Whether the server said it gives hover documentation (<c>textDocument/hover</c>).</summary>
+    public bool HasHover { get; private set; }
 
     /// <summary>Whether the server said it gives inlay hints (<c>textDocument/inlayHint</c>).</summary>
     public bool HasInlayHints { get; private set; }

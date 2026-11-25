@@ -54,6 +54,7 @@ public sealed partial class EditorWindow : Window
         AddNavigation();
         AddSwitcher();
         AddDeclarations();
+        AddQuickDocumentation();
         AddReadAsText();
         AddActiveEditor();
         AddFindInFiles();

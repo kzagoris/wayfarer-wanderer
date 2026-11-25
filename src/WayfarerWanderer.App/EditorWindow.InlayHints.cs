@@ -47,6 +47,7 @@ public sealed partial class EditorWindow
         hintedText = text;
         hintsAgain?.Stop();
         CloseHintCard();
+        CloseQuickDoc();
         if (text is not null)
         {
             text.Changed += OnHintedTextChanged;
@@ -57,6 +58,7 @@ public sealed partial class EditorWindow
     private void OnHintedTextChanged(object? sender, DocumentChangedEventArgs e)
     {
         CloseHintCard();
+        CloseQuickDoc();
         if (ShowsHints && SourcePath is { } path && RunningServerFor(path) is not null)
         {
             hintsAgain?.Restart();

@@ -72,6 +72,7 @@ public sealed partial class EditorWindow
                 return;
             }
             // Under the hint's own row, where soft wrap breaks its line.
+            CloseQuickDoc();
             double lineTop = Editor.PointOf(hint.Offset).Y;
             HintCard.Show(words, new Point(point.X, lineTop + Editor.LineHeight + 2), lineTop);
         }
