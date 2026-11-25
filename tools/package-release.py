@@ -41,6 +41,13 @@ def linux(publish, output):
         'prefix="${1:-"$HOME/.local/share/wayfarer-wanderer"}"\n'
         'mkdir -p "$prefix"\n'
         'cp -R WayfarerWanderer/. "$prefix/"\n'
+        'sh "$prefix/refresh-desktop.sh" "$prefix"\n',
+        encoding="utf-8",
+    )
+    (staging / "WayfarerWanderer" / "refresh-desktop.sh").write_text(
+        "#!/usr/bin/env sh\n"
+        "set -eu\n"
+        'prefix="$1"\n'
         'mkdir -p "$HOME/.local/bin"\n'
         'ln -sf "$prefix/WayfarerWanderer.App" "$HOME/.local/bin/wayfarer-wanderer"\n'
         # The desktop entry the app finds itself by to list its recent folders as recently used (LinuxRecentlyUsed.cs),

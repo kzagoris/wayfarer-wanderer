@@ -179,13 +179,16 @@ public sealed partial class EditorWindow
     {
         if (closing) { args.Cancel = true; return; }
         ResetSemanticSession();
-        if (Session is not { } session) return;
+        var session = Session;
+        Task checks = IsLastWindow ? FinishUpdateCheck() : Task.CompletedTask;
+        if (session is null && stoppedLanguageClients.IsCompleted && checks.IsCompleted) return;
         args.Cancel = true;
         closing = true;
         try
         {
-            await session.DisposeAsync();
+            await Task.WhenAll(session?.DisposeAsync().AsTask() ?? Task.CompletedTask, stoppedLanguageClients, checks);
         }
+        catch (Exception error) { Shell.IdeErrors.Report(error); }
         finally
         {
             Session = null;

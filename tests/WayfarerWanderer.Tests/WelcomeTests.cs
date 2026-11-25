@@ -120,6 +120,7 @@ public class WelcomeTests
             Assert.Equal([SettingsDialog.Appearance, SettingsDialog.SystemPage, SettingsDialog.AccessibilityPage, SettingsDialog.EditorPage, SettingsDialog.KeymapPage], dialog.Pages);
             Assert.Contains(Themes.OwnName, dialog.ThemePicker.Listed);
             Assert.DoesNotContain("Passenger", dialog.ThemePicker.Listed);
+            Assert.Contains("Check for updates automatically", ShownOn(dialog, SettingsDialog.SystemPage));
             Assert.Contains("Reopen projects on startup", ShownOn(dialog, SettingsDialog.SystemPage));
 
             // The keymap page lists the window's own actions with their keys.

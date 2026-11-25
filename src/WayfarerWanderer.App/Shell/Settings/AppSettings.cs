@@ -49,6 +49,8 @@ public sealed record AppSettings : IStateDocument<AppSettings>
     /// draws moves, resizes and maximizes as the window manager's own does on GNOME.</summary>
     public bool MergeMainMenuWithWindowTitle { get; init; } = true;
 
+    public bool CheckForUpdates { get; init; } = true;
+
     /// <summary>The main menu as a bar of its menus on the toolbar (File, Edit, View…) rather than behind its button,
     /// where the system has no menu bar of its own; those the toolbar has no room for behind the button after
     /// them. On at first: Wayfarer's menus are few enough to stand side by side.</summary>

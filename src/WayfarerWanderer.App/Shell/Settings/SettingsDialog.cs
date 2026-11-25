@@ -225,6 +225,7 @@ public sealed partial class SettingsDialog : IdeWindow
 
         Add(Declared.ReopenProjectsOnStartup);
         Add(Declared.ConfirmBeforeClosing);
+        Add(Declared.CheckForUpdates);
 
         AddTrust();
 

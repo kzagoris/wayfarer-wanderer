@@ -74,6 +74,7 @@ public sealed partial class EditorWindow
     /// agrees, asked once over the window they were in.</summary>
     private static async Task QuitAskedAsync(EditorWindow from)
     {
+        if (confirmingRestart) return;
         if (askingQuit is { } asking)
         {
             asking.OwnedWindows.OfType<ConfirmDialog>().LastOrDefault()?.Activate();

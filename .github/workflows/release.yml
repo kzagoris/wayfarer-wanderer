@@ -97,8 +97,13 @@ jobs:
           mount="$RUNNER_TEMP/image"
           hdiutil attach downloads/*.dmg -mountpoint "$mount" -nobrowse
           ditto "$mount/WayfarerWanderer.app" "$RUNNER_TEMP/WayfarerWanderer.app"
+          codesign --verify --deep --strict "$RUNNER_TEMP/WayfarerWanderer.app"
           hdiutil detach "$mount"
           echo "INSTALLED_APP=$RUNNER_TEMP/WayfarerWanderer.app/Contents/MacOS/WayfarerWanderer" >> "$GITHUB_ENV"
+      - name: Verify the native updater accepts this package
+        env:
+          WAYFARER_TEST_PACKAGE_DIR: ${{ github.workspace }}/downloads
+        run: dotnet test tests/WayfarerWanderer.Tests --no-build --filter FullyQualifiedName~PackagedUpdateTests
       - name: Run installed acceptance
         run: |
           dotnet restore WayfarerWanderer.slnx --locked-mode --configfile vendor/passenger/nuget.config

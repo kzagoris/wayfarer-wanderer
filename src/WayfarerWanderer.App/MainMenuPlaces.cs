@@ -100,6 +100,8 @@ public static class MainMenuPlaces
         [AppActions.CreateRepository] = [new("Git", 3, 0)],
         [AppActions.CommitSigning] = [new("Git", 3, 1)],
 
+        [AppActions.CheckForUpdates] = [new("Help", 1, 0)],
+        [AppActions.RestartToUpdate] = [new("Help", 1, 1)],
         [AppActions.FindAction] = [new("Help", 0, 0)],
     };
 

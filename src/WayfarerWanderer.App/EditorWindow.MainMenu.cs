@@ -44,6 +44,11 @@ public sealed partial class EditorWindow
         });
         Actions.Registry.Add(new IdeAction(AppActions.Exit, OperatingSystem.IsMacOS() ? "Quit Wayfarer Wanderer" : "Exit", WayfarerGroup, _ => Exit()));
         Actions.Registry.Add(new IdeAction(AppActions.FindAction, "Find Action…", WayfarerGroup, _ => OpenFindAction()));
+        Actions.Registry.Add(new IdeAction(AppActions.CheckForUpdates, "Check for Updates…", "Help", _ => IdeErrors.Observe(CheckUpdatesAsync(automatic: false))));
+        Actions.Registry.Add(new IdeAction(AppActions.RestartToUpdate, "Restart to Update", "Help", _ => IdeErrors.Observe(RestartToUpdateAsync()))
+        {
+            WhyNot = _ => installer?.Ready is null || !SettingsKept.Value.CheckForUpdates ? "No update is ready to install" : null,
+        });
         AddEdit(EditorKeys.Undo, "Undo", box => box.Undo(), redo: false);
         AddEdit(EditorKeys.Redo, "Redo", box => box.Redo(), redo: true);
         AddEdit(EditorKeys.SelectAll, "Select All", box => box.SelectAll());

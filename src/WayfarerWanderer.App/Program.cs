@@ -83,9 +83,16 @@ public partial class EditorApplication : Application
             _ = Task.Run(() => WayfarerWanderer.Jvm.JdkDownloader.CleanUp(stateRoot));
             State.Settings.PutInForce();
             EditorWindow.TrustKept(State);
-            desktop.Exit += (_, _) => State.Release();
+            desktop.Exit += (_, _) =>
+            {
+                bool updatesEnabled = State.Settings.Value.CheckForUpdates;
+                State.Release();
+                StateStore.LandWaiting();
+                EditorWindow.InstallUpdate(updatesEnabled);
+            };
             EditorWindow window = CreateWindow(null);
             desktop.MainWindow = window;
+            window.WatchUpdates(stateRoot);
             // The theme asked first on a new state folder, over the folder the command line names; without one, the folder
             // open as Wayfarer last quit opens again, unless the start asked for a window with nothing open.
             bool firstStart = window.ShowFirstStartOnce();
@@ -131,7 +138,7 @@ internal static class Program
         {
             return signed;
         }
-        if (OperatingSystem.IsWindows())
+        if (OperatingSystem.IsWindows() && File.Exists(Path.Combine(AppContext.BaseDirectory, "sq.version")))
         {
             VelopackApp.Build().SetArgs(args).SetAutoApplyOnStartup(false).Run();
         }

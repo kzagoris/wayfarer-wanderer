@@ -26,6 +26,7 @@ public sealed partial class EditorWindow
         Width = 14, Height = 14, Margin = new Thickness(0, 0, 6, 0), IsVisible = false, VerticalAlignment = VerticalAlignment.Center,
     };
     private readonly Panel breadcrumbHost = new() { VerticalAlignment = VerticalAlignment.Center, ClipToBounds = true };
+    private readonly Button updateButton = StatusWidget();
     private readonly Button caretButton = StatusWidget();
     private readonly Button lineSeparatorButton = StatusWidget();
     private readonly Button encodingButton = StatusWidget();
@@ -97,7 +98,7 @@ public sealed partial class EditorWindow
             Orientation = Orientation.Horizontal,
             Spacing = 18,
             VerticalAlignment = VerticalAlignment.Center,
-            Children = { branchButton, caretButton, lineSeparatorButton, encodingButton, indentButton, languageText, readOnlyButton },
+            Children = { updateButton, branchButton, caretButton, lineSeparatorButton, encodingButton, indentButton, languageText, readOnlyButton },
         };
         DockPanel.SetDock(widgets, Dock.Right);
         // A gap before the widgets, as between them, so neither a deep path nor what the bar says runs on against them.
@@ -115,6 +116,8 @@ public sealed partial class EditorWindow
 
     private void AddStatusBar()
     {
+        Opened += (_, _) => RefreshUpdateButton();
+        updateButton.Click += (_, _) => IdeErrors.Observe(OpenUpdateNoticeAsync());
         caretButton.Click += (_, _) => Actions.TryExecute(A.GoToLine);
         lineSeparatorButton.Click += (_, _) => ShowLineSeparatorMenu();
         encodingButton.Click += (_, _) => Actions.TryExecute(A.FileEncoding);

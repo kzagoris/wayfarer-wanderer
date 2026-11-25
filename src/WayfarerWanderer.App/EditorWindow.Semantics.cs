@@ -72,20 +72,35 @@ public sealed partial class EditorWindow
         Deactivated += (_, _) => CloseCompletion();
     }
 
+    private Task stoppedLanguageClients = Task.CompletedTask;
+
     private void ResetSemanticSession()
     {
         CloseCompletion();
+        Task[] starting = [.. startingClients.Values.Where(task => !task.IsCompleted)];
         startingClients.Clear();
         semanticLifetime.Cancel();
         semanticLifetime.Dispose();
         semanticLifetime = new();
-        foreach (var server in languageClients.Values) UnawaitedWork.Observe(server.DisposeAsync().AsTask());
+        if (languageClients.Count != 0 || starting.Length != 0)
+        {
+            stoppedLanguageClients = Task.WhenAll(languageClients.Values.Select(server => server.DisposeAsync().AsTask())
+                .Concat(starting.Select(WaitForCancelledStartAsync))
+                .Append(stoppedLanguageClients.IsCompleted ? Task.CompletedTask : stoppedLanguageClients));
+            UnawaitedWork.Observe(stoppedLanguageClients);
+        }
         languageClients.Clear();
         sentSources.Clear();
         kotlinClasses?.Dispose();
         kotlinClasses = null;
         kotlinRefreshQueued = false;
         lastRename = null;
+    }
+
+    private static async Task WaitForCancelledStartAsync(Task starting)
+    {
+        // Its original caller observes startup failures. Closing waits for startup's cancellation and disposal.
+        await starting.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
     }
 
     private void ReloadLanguageModels(WorkspaceSnapshot snapshot)
