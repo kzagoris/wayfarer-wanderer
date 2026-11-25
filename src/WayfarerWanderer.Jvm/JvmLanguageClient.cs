@@ -75,10 +75,14 @@ public sealed class JvmLanguageClient : IAsyncDisposable
                 capabilities = new { workspace = new { configuration = true, workspaceFolders = true, workspaceEdit = new { documentChanges = true },
                         inlayHint = new { refreshSupport = true } },
                     textDocument = new { completion = new { completionItem = new { snippetSupport = false } },
-                        documentSymbol = new { hierarchicalDocumentSymbolSupport = true }, inlayHint = new { dynamicRegistration = false } } }
+                        documentSymbol = new { hierarchicalDocumentSymbolSupport = true },
+                        inlayHint = new { dynamicRegistration = false, resolveSupport = new { properties = new[] { "tooltip", "label.tooltip", "label.location" } } } } }
             }, cancel).ConfigureAwait(false);
-            client.HasInlayHints = initialized.ValueKind == JsonValueKind.Object && initialized.TryGetProperty("capabilities", out JsonElement capabilities)
-                && capabilities.TryGetProperty("inlayHintProvider", out JsonElement hints) && hints.ValueKind is JsonValueKind.True or JsonValueKind.Object;
+            JsonElement hints = initialized.ValueKind == JsonValueKind.Object && initialized.TryGetProperty("capabilities", out JsonElement capabilities)
+                && capabilities.TryGetProperty("inlayHintProvider", out JsonElement provider) ? provider : default;
+            client.HasInlayHints = hints.ValueKind is JsonValueKind.True or JsonValueKind.Object;
+            client.ResolvesInlayHints = hints.ValueKind == JsonValueKind.Object
+                && hints.TryGetProperty("resolveProvider", out JsonElement resolves) && resolves.ValueKind == JsonValueKind.True;
             await client.NotifyAsync("initialized", new { }, cancel).ConfigureAwait(false);
             return client;
         }
@@ -94,6 +98,9 @@ public sealed class JvmLanguageClient : IAsyncDisposable
 
     /// <summary>Whether the server said it gives inlay hints (<c>textDocument/inlayHint</c>).</summary>
     public bool HasInlayHints { get; private set; }
+
+    /// <summary>Whether the server fills in a hint's tooltip when asked (<c>inlayHint/resolve</c>), which its hover card says.</summary>
+    public bool ResolvesInlayHints { get; private set; }
 
     /// <summary>Why the JDT LS Kotlin class extension is unavailable, or null.</summary>
     public string? BundleProblem { get; private init; }
@@ -114,8 +121,20 @@ public sealed class JvmLanguageClient : IAsyncDisposable
     public event Action? StatusChanged;
 
     /// <summary>Raised, on the reader's thread, when the server says the inlay hints it gave may have changed
-    /// (<c>workspace/inlayHint/refresh</c>): JDT LS once its build ends, so a file's hints asked for before are asked again.</summary>
+    /// (<c>workspace/inlayHint/refresh</c>): JDT LS once its build ends, so a file's hints asked for before are asked again.
+    /// The Kotlin server never says so; its first answers, given while it still analyses, lack the types, so the end of
+    /// each of its imports (<see cref="ImportEnded"/>) is taken to say it.</summary>
     public event Action? HintsChanged;
+
+    /// <summary>Whether a notification is the Kotlin server's word that an import of the workspace ended, done or failed: the
+    /// last line of its import's log (<c>intellij/importLog</c>), "Workspace imported successfully" with <c>succeeded</c>.</summary>
+    public static bool ImportEnded(JsonElement notification) =>
+        notification.ValueKind == JsonValueKind.Object
+        && notification.TryGetProperty("method", out JsonElement method) && method.ValueEquals("intellij/importLog")
+        && notification.TryGetProperty("params", out JsonElement said) && said.ValueKind == JsonValueKind.Object
+        && (Flag(said, "succeeded") || Flag(said, "failed"));
+
+    private static bool Flag(JsonElement owner, string name) => owner.TryGetProperty(name, out JsonElement flag) && flag.ValueKind == JsonValueKind.True;
 
     private static object InitializationOptions(string[] bundles, WorkspaceSnapshot? snapshot) => snapshot switch
     {
@@ -225,6 +244,8 @@ public sealed class JvmLanguageClient : IAsyncDisposable
                 JsonElement message = doc.RootElement;
                 if (!message.TryGetProperty("id", out var id))
                 {
+                    if (ImportEnded(message))
+                        HintsChanged?.Invoke();
                     if (message.TryGetProperty("method", out var notice) && notice.GetString() == "language/status" &&
                         message.TryGetProperty("params", out var said))
                     {

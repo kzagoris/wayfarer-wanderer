@@ -8,7 +8,7 @@ namespace WayfarerWanderer.App;
 
 /// <summary>Parameter and type name hints in the Java or Kotlin file shown, from its language server: asked as the file
 /// is shown, as editing pauses, as the server comes up or says its import is done, and when it says its hints changed
-/// (JDT LS after a build). Like the outline, they never start a server of their own accord. Both kinds are asked for; the
+/// (JDT LS after a build; the Kotlin server as its import ends). Like the outline, they never start a server of their own accord. Both kinds are asked for; the
 /// editor draws those Settings' Editor page shows, and nothing is asked while it shows neither. The hints are kept with
 /// the file's decorations, carried through each edit until the next answer replaces them.</summary>
 public sealed partial class EditorWindow
@@ -23,7 +23,11 @@ public sealed partial class EditorWindow
     /// <summary>How long editing pauses before the hints are asked for again.</summary>
     private static readonly TimeSpan HintPause = TimeSpan.FromMilliseconds(400);
 
-    private void AddInlayHints() => hintsAgain = new Debounce(HintPause, HintsAsync);
+    private void AddInlayHints()
+    {
+        hintsAgain = new Debounce(HintPause, HintsAsync);
+        FollowHintCard();
+    }
 
     /// <summary>Whether the editor draws either kind of hint, so they are worth asking for.</summary>
     private bool ShowsHints => Editor.ShowParameterHints || Editor.ShowTypeHints;
@@ -42,6 +46,7 @@ public sealed partial class EditorWindow
         }
         hintedText = text;
         hintsAgain?.Stop();
+        CloseHintCard();
         if (text is not null)
         {
             text.Changed += OnHintedTextChanged;
@@ -51,6 +56,7 @@ public sealed partial class EditorWindow
 
     private void OnHintedTextChanged(object? sender, DocumentChangedEventArgs e)
     {
+        CloseHintCard();
         if (ShowsHints && SourcePath is { } path && RunningServerFor(path) is not null)
         {
             hintsAgain?.Restart();

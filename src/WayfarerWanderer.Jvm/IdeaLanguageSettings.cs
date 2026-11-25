@@ -18,6 +18,7 @@ public static class IdeaLanguageSettings
             },
             configuration = new { runtimes = Runtimes(snapshot) },
             inlayHints = JdtInlayHints.Settings,
+            signatureHelp = JdtInlayHints.SignatureHelp,
         },
     };
 

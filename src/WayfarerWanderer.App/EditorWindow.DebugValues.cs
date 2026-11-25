@@ -40,7 +40,11 @@ public sealed partial class EditorWindow
     {
         DebugTool.ValuesShown += ShowInlineValues;
         DebugTool.Cleared += ForgetDebugValues;
-        Editor.Hovered += (_, e) => UnawaitedWork.Observe(HoverValueAsync(e.Offset));
+        // A hint's own card says what is under the pointer on a hint (EditorWindow.HintCard).
+        Editor.Hovered += (_, e) =>
+        {
+            if (e.Hint is null) UnawaitedWork.Observe(HoverValueAsync(e.Offset));
+        };
         Editor.HoverEnded += (_, _) =>
         {
             int hover = ++hovers;

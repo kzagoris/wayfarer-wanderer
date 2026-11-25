@@ -18,6 +18,7 @@ public static class BuildLanguageSettings
                 import = new { gradle = new { java = new { home = GradleJavaHome(snapshot) }, arguments = GradleArguments(snapshot, jdks) } },
                 configuration = new { runtimes = Runtimes(snapshot, jdks) },
                 inlayHints = JdtInlayHints.Settings,
+                signatureHelp = JdtInlayHints.SignatureHelp,
             },
         };
     }
