@@ -393,6 +393,7 @@ public static partial class QuickDocParser
         int i = 0;
         while (i < lines.Length)
         {
+            int iterationStart = i;
             string rawLine = lines[i];
             string trimmed = rawLine.Trim();
             if (trimmed.Length == 0)
@@ -401,12 +402,20 @@ public static partial class QuickDocParser
                 continue;
             }
 
-            // JDT LS trailing source link: `Source: *[service](file:///...)*`
+            // JDT LS trailing source line: `Source: *[service](file:///...)*` or `Source: *Java 21.0.10 (module: java.base)*`
             Match sourceMatch = JdtSourceLine().Match(trimmed);
             if (sourceMatch.Success)
             {
                 sourceLabel = sourceMatch.Groups[1].Value.Trim();
                 sourceTarget = sourceMatch.Groups[2].Value.Trim();
+                i++;
+                continue;
+            }
+            Match plainSourceMatch = JdtPlainSourceLine().Match(trimmed);
+            if (plainSourceMatch.Success)
+            {
+                sourceLabel = plainSourceMatch.Groups[1].Value.Trim();
+                sourceTarget = null;
                 i++;
                 continue;
             }
@@ -446,6 +455,13 @@ public static partial class QuickDocParser
                 continue;
             }
 
+            // Standalone Javadoc tag header line (`Parameters:` / `**Returns:**`) followed by item lines
+            if (TryParseStandaloneTagSection(lines, ref i, out QuickDocTagSection? standaloneSection))
+            {
+                MergeTagSection(into, standaloneSection!);
+                continue;
+            }
+
             // Inline label tag line (`**Params:** ...`, `Params: ...`, `**Returns:** ...`)
             if (TryParseInlineTagLine(trimmed, out QuickDocTagSection? inlineSection))
             {
@@ -462,18 +478,25 @@ public static partial class QuickDocParser
             }
 
             // Regular paragraph: gather lines until blank line or another block opener.
+            // Always consume the first line so an unmatched line can never stall the outer loop.
             List<string> paragraphLines = [];
             while (i < lines.Length)
             {
                 string current = lines[i].Trim();
-                if (current.Length == 0
+                if (paragraphLines.Count > 0 && (current.Length == 0
                     || HorizontalRule().IsMatch(current)
                     || HeadingLine().IsMatch(current)
                     || JdtSourceLine().IsMatch(current)
+                    || JdtPlainSourceLine().IsMatch(current)
                     || AtTagLine().IsMatch(current)
                     || BulletLine().IsMatch(lines[i])
                     || OrderedListLine().IsMatch(lines[i])
-                    || InlineTagLine().IsMatch(current))
+                    || IsKnownStandaloneTag(current)
+                    || IsKnownInlineTag(current)))
+                {
+                    break;
+                }
+                if (current.Length == 0)
                 {
                     break;
                 }
@@ -493,6 +516,10 @@ public static partial class QuickDocParser
                 {
                     into.Add(new QuickDocParagraph(parts));
                 }
+            }
+            if (i == iterationStart)
+            {
+                i++;
             }
         }
     }
@@ -557,6 +584,7 @@ public static partial class QuickDocParser
     private static bool TryParseJavadocBulletSection(string[] lines, ref int i, out QuickDocTagSection? section)
     {
         section = null;
+        int saved = i;
         Match header = JdtTagBullet().Match(lines[i]);
         if (!header.Success)
         {
@@ -609,6 +637,59 @@ public static partial class QuickDocParser
 
         if (items.Count == 0)
         {
+            i = saved;
+            return false;
+        }
+        section = new QuickDocTagSection(label, items);
+        return true;
+    }
+
+    private static bool IsKnownInlineTag(string trimmed) =>
+        InlineTagLine().Match(trimmed) is { Success: true } m && IsKnownDocTag(m.Groups[1].Value.Trim());
+
+    private static bool IsKnownStandaloneTag(string trimmed) =>
+        StandaloneTagLine().Match(trimmed) is { Success: true } m && IsKnownDocTag(m.Groups[1].Value.Trim());
+
+    private static bool TryParseStandaloneTagSection(string[] lines, ref int i, out QuickDocTagSection? section)
+    {
+        section = null;
+        int saved = i;
+        Match header = StandaloneTagLine().Match(lines[i].Trim());
+        if (!header.Success)
+        {
+            return false;
+        }
+        string rawName = header.Groups[1].Value.Trim();
+        if (!IsKnownDocTag(rawName))
+        {
+            return false;
+        }
+        string label = NormalizeTagLabel(rawName);
+        bool hasNamedItems = label is "Params:" or "Throws:" or "Type Params:";
+        List<QuickDocTagItem> items = [];
+
+        i++;
+        while (i < lines.Length)
+        {
+            string trimmed = lines[i].Trim();
+            if (trimmed.Length == 0)
+            {
+                break;
+            }
+            if (HorizontalRule().IsMatch(trimmed) || HeadingLine().IsMatch(trimmed)
+                || JdtSourceLine().IsMatch(trimmed) || JdtPlainSourceLine().IsMatch(trimmed)
+                || IsKnownStandaloneTag(trimmed) || IsKnownInlineTag(trimmed) || AtTagLine().IsMatch(trimmed))
+            {
+                break;
+            }
+            string itemText = BulletLine().Match(lines[i]) is { Success: true } b ? b.Groups[2].Value.Trim() : trimmed;
+            items.Add(BuildTagItem(itemText, hasNamedItems));
+            i++;
+        }
+
+        if (items.Count == 0)
+        {
+            i = saved;
             return false;
         }
         section = new QuickDocTagSection(label, items);
@@ -667,6 +748,7 @@ public static partial class QuickDocParser
     private static bool TryParseList(string[] lines, ref int i, out QuickDocList? list)
     {
         list = null;
+        int saved = i;
         Match bullet = BulletLine().Match(lines[i]);
         Match ordered = bullet.Success ? Match.Empty : OrderedListLine().Match(lines[i]);
         if (!bullet.Success && !ordered.Success)
@@ -684,8 +766,9 @@ public static partial class QuickDocParser
             {
                 break;
             }
-            // Stop if a JDT Javadoc tag section starts here so it renders as a tag section.
-            if (!isOrdered && JdtTagBullet().IsMatch(lines[i]) && IsKnownDocTag(JdtTagBullet().Match(lines[i]).Groups[2].Value.Trim().TrimEnd(':')))
+            // Stop if a JDT Javadoc tag section starts after items already collected so it renders as a tag section.
+            if (items.Count > 0 && !isOrdered && JdtTagBullet().Match(lines[i]) is { Success: true } tag
+                && IsKnownDocTag(tag.Groups[2].Value.Trim().TrimEnd(':')))
             {
                 break;
             }
@@ -705,6 +788,7 @@ public static partial class QuickDocParser
         }
         if (items.Count == 0)
         {
+            i = saved;
             return false;
         }
         list = new QuickDocList(isOrdered, startNumber, items);
@@ -787,6 +871,7 @@ public static partial class QuickDocParser
 
         while (i < text.Length)
         {
+            int inlineStart = i;
             char c = text[i];
 
             if (c == '\n')
@@ -806,7 +891,7 @@ public static partial class QuickDocParser
             }
 
             // HTML character references (&nbsp;, &lt;, &gt;, &amp;, &#...)
-            if (c == '&' && DecodeEntity(text, i, out int entityLength) is { } decoded)
+            if (c == '&' && DecodeEntity(text, i, out int entityLength) is { } decoded && entityLength > 0)
             {
                 buffer.Append(decoded);
                 i += entityLength;
@@ -881,7 +966,7 @@ public static partial class QuickDocParser
             }
 
             buffer.Append(c);
-            i++;
+            i = Math.Max(i + 1, inlineStart + 1);
         }
 
         Flush();
@@ -1082,6 +1167,12 @@ public static partial class QuickDocParser
 
     [GeneratedRegex(@"^Source:\s*\*?\[([^\]]+)\]\(([^)\s]+)\)\*?$")]
     private static partial Regex JdtSourceLine();
+
+    [GeneratedRegex(@"^Source:\s*(?:\*|_|__|\*\*)?(.+?)(?:\*|_|__|\*\*)?$")]
+    private static partial Regex JdtPlainSourceLine();
+
+    [GeneratedRegex(@"^(?:\*\*|__)?([A-Za-z][A-Za-z ]{1,28}):(?:\*\*|__)?$")]
+    private static partial Regex StandaloneTagLine();
 
     [GeneratedRegex(@"^(?:-{3,}|\*{3,}|_{3,})$")]
     private static partial Regex HorizontalRule();

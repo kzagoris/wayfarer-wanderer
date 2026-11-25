@@ -149,8 +149,14 @@ public sealed partial class EditorWindow
             }
 
             string language = Language(path) ?? string.Empty;
-            QuickDoc doc = QuickDocParser.Parse(markdown, language);
-            if (doc.IsEmpty)
+            JvmModule? module = CurrentModule();
+            (QuickDoc doc, string? footer) = await Task.Run(() =>
+            {
+                QuickDoc parsed = QuickDocParser.Parse(markdown, language);
+                return (parsed, parsed.IsEmpty ? null : QuickDocFooter(parsed, module));
+            }, ask.Token);
+            if (ask.IsCancellationRequested || SourcePath != path || !ReferenceEquals(Editor.Document, document)
+                || !ReferenceEquals(document.Snapshot, snapshot) || doc.IsEmpty)
             {
                 return false;
             }
@@ -159,7 +165,6 @@ public sealed partial class EditorWindow
             quickDocTarget = (path, position);
             double lineTop = Editor.PointOf(clamped).Y;
             Point anchor = new(point.X, lineTop + Editor.LineHeight + 4);
-            string? footer = QuickDocFooter(doc);
             bool canGo = DeclarationFinder is not null || (Language(path) is not null && SemanticAvailable());
             QuickDocCard.Show(doc, anchor, lineTop, footer, sticky, canGo);
             return QuickDocCard.IsOpen;
@@ -199,9 +204,8 @@ public sealed partial class EditorWindow
         return markdown.Length > 0 ? markdown : null;
     }
 
-    private string? QuickDocFooter(QuickDoc doc)
+    private static string? QuickDocFooter(QuickDoc doc, JvmModule? module)
     {
-        JvmModule? module = CurrentModule();
         if (IsJdkOwner(doc.Owner))
         {
             if (ModuleJdkName(module) is { Length: > 0 } jdk)

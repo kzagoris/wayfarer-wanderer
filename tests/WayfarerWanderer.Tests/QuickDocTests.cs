@@ -3,15 +3,18 @@ using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Threading;
+using Passenger.Core;
 using Passenger.Editor;
 using Passenger.Text;
 using WayfarerWanderer.App;
 using WayfarerWanderer.App.Shell;
+using WayfarerWanderer.Jvm;
 
 namespace WayfarerWanderer.Tests;
 
 /// <summary>IntelliJ IDEA-style Quick Documentation and symbol hover: Markdown/Javadoc parsing, synchronous TextMate
 /// colouring, parameter-per-line signature formatting, interactive card lifecycle, menu &amp; shortcut wiring.</summary>
+[Collection(JvmTrustCollection.Name)]
 public sealed class QuickDocTests
 {
     private const string IoPrintlnMarkdown = """
@@ -141,6 +144,118 @@ public sealed class QuickDocTests
         SyntaxSpan[] mapped = formatted.Map(spans);
         Assert.Contains(mapped, s => s.Kind == TokenKind.Method && formatted.Text.Substring(s.Start, s.Length) == "println");
         Assert.Null(QuickDocSyntax.BreakParameters("String toString()"));
+    }
+
+    [Fact]
+    public void ParserNeverLoopsOnUnknownInlineColonsOrEmptyJavadocTagBullets()
+    {
+        const string tricky = """
+            ```java
+            void java.lang.IO.println(Object obj)
+            ```
+
+            Note: this line has a colon within 28 characters.
+
+            For example: calling this writes to standard output.
+
+            Source: java.base
+
+             *  **Parameters:**
+
+             *  ![icon](data:image/png;base64,AAAA)
+
+             *  Normal bullet item
+            """;
+
+        QuickDoc doc = QuickDocParser.Parse(tricky, "java");
+        Assert.False(doc.IsEmpty);
+        Assert.Equal("java.lang.IO", doc.Owner);
+        Assert.Equal("java.base", doc.SourceLabel);
+        Assert.Contains("Note: this line has a colon", doc.PlainText(), StringComparison.Ordinal);
+        Assert.Contains("Normal bullet item", doc.PlainText(), StringComparison.Ordinal);
+
+        // Standalone JDT LS Javadoc tag header followed by parameter lines and plain Source footer.
+        const string jdtJdkHover = """
+            ```java
+            void java.io.PrintStream.println(String arg0)
+            ```
+
+            Prints a String and then terminates the line.
+
+            Parameters:
+            `x` - The `String` to be printed.
+
+            Source: *Java 21.0.10 (module: java.base)*
+            """;
+        QuickDoc jdkDoc = QuickDocParser.Parse(jdtJdkHover, "java");
+        Assert.Equal("Java 21.0.10 (module: java.base)", jdkDoc.SourceLabel);
+        Assert.Null(jdkDoc.SourceTarget);
+        QuickDocTagSection paramSection = Assert.IsType<QuickDocTagSection>(jdkDoc.Body[1]);
+        Assert.Equal("Params:", paramSection.Label);
+        Assert.Equal("x", Assert.Single(paramSection.Items).Name);
+    }
+
+    [AvaloniaFact(SkipUnless = nameof(KotlinClassBridgeTests.RunLanguageAcceptance), SkipType = typeof(KotlinClassBridgeTests),
+        Skip = "Set WAYFARER_LANGUAGE_ACCEPTANCE=1 and install JDT LS to verify real Java symbol hover.")]
+    public async Task LiveJavaServerHoverOpensQuickDocCardWithoutHanging()
+    {
+        CancellationToken cancel = TestContext.Current.CancellationToken;
+        string root = WorkspaceImportTests.Copy("maven");
+        string file = Path.Combine(root, "service/src/main/java/example/HoverProbe.java");
+        const string source = """
+            package example;
+
+            class HoverProbe {
+                void run() {
+                    System.out.println("Hello from Wayfarer!");
+                }
+            }
+            """;
+        await File.WriteAllTextAsync(file, source, cancel);
+        WorkspaceTrust.Trust(root);
+        bool starts = EditorWindow.StartsLanguageServersOnOpen;
+        EditorWindow.StartsLanguageServersOnOpen = true;
+        EditorWindow window = EditorApplication.CreateWindow(null);
+        window.Width = 1100;
+        window.Height = 680;
+        window.Show();
+        try
+        {
+            await window.OpenWorkspaceAsync(root, cancel);
+            window.OpenSource(file);
+            int at = source.IndexOf("println", StringComparison.Ordinal) + 2;
+            window.Editor.GoTo(window.Editor.Document.Snapshot.GetPosition(at));
+            window.Editor.Focus();
+
+            // Wait for JDT LS to answer Quick Documentation on System.out.println.
+            System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+            while (!window.QuickDocCard.IsOpen && clock.Elapsed < TimeSpan.FromMinutes(2))
+            {
+                await window.QuickDocumentationAsync();
+                Dispatcher.UIThread.RunJobs();
+                if (!window.QuickDocCard.IsOpen)
+                {
+                    await Task.Delay(500, cancel);
+                }
+            }
+
+            Assert.True(window.QuickDocCard.IsOpen, "JDT LS hover never opened QuickDocCard");
+            Assert.Contains("println", window.QuickDocCard.Text, StringComparison.Ordinal);
+
+            if (Environment.GetEnvironmentVariable("WAYFARER_TEST_OUTPUT") is { Length: > 0 } outputDir)
+            {
+                Directory.CreateDirectory(outputDir);
+                using var frame = window.CaptureRenderedFrame();
+                frame?.Save(Path.Combine(outputDir, "quick-doc-live-java.png"), Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
+            }
+        }
+        finally
+        {
+            window.Close();
+            EditorWindow.StartsLanguageServersOnOpen = starts;
+            await WayfarerWanderer.Jvm.ProjectHosts.ReleaseAsync(root);
+            WorkspaceTrust.TakeBack(WorkspaceTrust.FolderToTrust(root));
+        }
     }
 
     [AvaloniaFact]
