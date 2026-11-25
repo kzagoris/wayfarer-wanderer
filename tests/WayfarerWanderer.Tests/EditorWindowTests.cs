@@ -319,6 +319,95 @@ public class EditorWindowTests
         }
     }
 
+    [AvaloniaFact]
+    public async Task BuildCurrentModuleCompilesAnIntelliJModuleAndShowsOutput()
+    {
+        CancellationToken cancel = TestContext.Current.CancellationToken;
+        await using JvmConsoleDebugTests.Module module = await JvmConsoleDebugTests.Module.CreateAsync(cancel);
+        var window = EditorApplication.CreateWindow(null);
+        window.Show();
+        try
+        {
+            await window.OpenWorkspaceAsync(module.Snapshot.Root, cancel);
+            ProjectSession session = window.Session!;
+            window.OpenSource(module.Source);
+            foreach (var tool in window.ToolDock.Windows)
+            {
+                window.ToolDock.Hide(tool.Id);
+            }
+
+            Task<bool> ended = BuildEndedAsync(session);
+            Assert.True(window.Actions.TryExecute(WayfarerWanderer.App.EditorActions.Build));
+            Assert.True(window.ToolDock.IsShown(WayfarerWanderer.App.Shell.ToolWindowIds.Build));
+            Assert.True(await ended);
+            Assert.Contains(window.BuildTool.Output, line => line.StartsWith("Building ", StringComparison.Ordinal));
+            Assert.Contains(window.BuildTool.Output, line => line.StartsWith("Build succeeded in ", StringComparison.Ordinal));
+            Assert.True(File.Exists(Path.Combine(module.Snapshot.Modules[0].Classpath.Runtime[0], "com", "example", "console", "App.class")));
+
+            // A compiler error shows javac's output and the failure summary in the Build tool window.
+            string original = await File.ReadAllTextAsync(module.Source, cancel);
+            await File.WriteAllTextAsync(module.Source, "package com.example.console; public class App { void broken( }", cancel);
+            ended = BuildEndedAsync(session);
+            Assert.True(window.Actions.TryExecute(WayfarerWanderer.App.EditorActions.Build));
+            Assert.False(await ended);
+            Assert.Contains(window.BuildTool.Output, line => line.Contains("error:", StringComparison.Ordinal));
+            Assert.Contains(window.BuildTool.Output, line => line.StartsWith("Build failed (exit code ", StringComparison.Ordinal));
+
+            // Explorer's Build Module opens the Build tool window and compiles classes rather than running tests.
+            await File.WriteAllTextAsync(module.Source, original, cancel);
+            window.ToolDock.Hide(WayfarerWanderer.App.Shell.ToolWindowIds.Build);
+            window.Explorer.RowList.SelectedItem = window.Explorer.Tree.Rows[0];
+            ended = BuildEndedAsync(session);
+            Assert.Null(window.Actions.Registry.Run(
+                WayfarerWanderer.App.Shell.AppActions.BuildSelected,
+                window.Actions.Registry.Context().In(window.ToolDock[WayfarerWanderer.App.Shell.ToolWindowIds.Explorer])));
+            Assert.True(window.ToolDock.IsShown(WayfarerWanderer.App.Shell.ToolWindowIds.Build));
+            Assert.True(await ended);
+            Assert.Contains(window.BuildTool.Output, line => line.StartsWith("Build succeeded in ", StringComparison.Ordinal));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task BuildPreLaunchErrorIsShownInBuildToolWindow()
+    {
+        CancellationToken cancel = TestContext.Current.CancellationToken;
+        await using JvmConsoleDebugTests.Module module = await JvmConsoleDebugTests.Module.CreateAsync(cancel);
+        File.Delete(module.Source);
+        var window = EditorApplication.CreateWindow(null);
+        window.Show();
+        try
+        {
+            await window.OpenWorkspaceAsync(module.Snapshot.Root, cancel);
+            ProjectSession session = window.Session!;
+            Task<bool> ended = BuildEndedAsync(session);
+            Assert.True(window.Actions.TryExecute(WayfarerWanderer.App.EditorActions.Build));
+            Assert.False(await ended);
+            Assert.Contains(window.BuildTool.Output, line => line.StartsWith("Building ", StringComparison.Ordinal));
+            Assert.Contains(window.BuildTool.Output, line => line.StartsWith("Build failed: ", StringComparison.Ordinal) && line.Contains("no Java sources", StringComparison.Ordinal));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static Task<bool> BuildEndedAsync(ProjectSession session)
+    {
+        TaskCompletionSource<bool> ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Action<bool>? handler = null;
+        handler = passed =>
+        {
+            session.BuildEnded -= handler;
+            ended.TrySetResult(passed);
+        };
+        session.BuildEnded += handler;
+        return ended.Task.WaitAsync(TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken);
+    }
+
     private static Task SnapshotChangedAsync(ProjectSession session)
     {
         TaskCompletionSource changed = new(TaskCreationOptions.RunContinuationsAsynchronously);

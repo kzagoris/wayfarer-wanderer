@@ -231,13 +231,31 @@ public sealed partial class EditorWindow : Window
         AddLaunchJdkActions();
     }
 
+    private JvmModule? CurrentModule()
+    {
+        if (Session?.Snapshot is not { } snapshot) return null;
+        if (SourcePath is { } path)
+        {
+            JvmModule? containing = snapshot.Modules
+                .Where(module => PathNames.IsUnder(path, module.Root))
+                .OrderByDescending(module => module.Root.Length)
+                .FirstOrDefault();
+            if (containing is not null) return containing;
+        }
+        return snapshot.Modules.FirstOrDefault();
+    }
+
     private void BuildCurrent()
     {
         ToolDock.ShowBehind(ToolWindowIds.Build);
-        JvmModule? module = Session?.Snapshot?.Modules.FirstOrDefault();
-        if (module is not null)
+        if (CurrentModule() is { } module)
         {
-            UnawaitedWork.Observe(Session!.BuildAsync(module.Id, "test"));
+            UnawaitedWork.Observe(Session!.BuildAsync(module.Id, "classes"));
+        }
+        else
+        {
+            BuildTool.Reset();
+            BuildTool.Append("No module was found in this workspace.");
         }
     }
 

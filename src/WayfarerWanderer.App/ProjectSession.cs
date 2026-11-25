@@ -117,21 +117,69 @@ public sealed partial class ProjectSession : IAsyncDisposable
     {
         WorkspaceSnapshot snapshot = await SnapshotForWorkAsync(cancellationToken);
         CancellationTokenSource running = BeginOperation(cancellationToken);
+        string target = snapshot.Module(module)?.Name ?? module;
+        string heading = task is "classes" or "compile"
+            ? $"Building {target}…"
+            : $"Building {target} ({task})…";
+        System.Diagnostics.Stopwatch elapsed = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            BuildWindow.Reset();
+            OnUi(() =>
+            {
+                BuildWindow.Reset();
+                BuildWindow.Append(heading);
+            });
             ProcessResult built = await build.RunAsync(
                 snapshot,
                 new JvmBuildRequest(Root, module, task, arguments ?? []),
                 output => OnUi(() => BuildWindow.Append(output.Line)),
                 running.Token);
-            OnUi(() => BuildEnded?.Invoke(built.ExitCode == 0));
+            elapsed.Stop();
+            OnUi(() =>
+            {
+                BuildWindow.Append(built.ExitCode == 0
+                    ? $"Build succeeded in {FormatElapsed(elapsed.Elapsed)}."
+                    : $"Build failed (exit code {built.ExitCode}) in {FormatElapsed(elapsed.Elapsed)}.");
+                BuildEnded?.Invoke(built.ExitCode == 0);
+            });
             return built;
+        }
+        catch (OperationCanceledException)
+        {
+            OnUi(() => BuildWindow.Append("Build cancelled."));
+            throw;
+        }
+        catch (UntrustedFolderException)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            elapsed.Stop();
+            OnUi(() =>
+            {
+                BuildWindow.Append($"Build failed: {error.Message}");
+                BuildEnded?.Invoke(false);
+            });
+            return new ProcessResult(1, [new ProcessOutput(ProcessOutputStream.StandardError, error.Message)], elapsed.Elapsed);
         }
         finally
         {
             EndOperation(running);
         }
+    }
+
+    private static string FormatElapsed(TimeSpan elapsed)
+    {
+        if (elapsed.TotalSeconds < 1)
+        {
+            return string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0} ms", Math.Max(0, (int)Math.Round(elapsed.TotalMilliseconds)));
+        }
+        if (elapsed.TotalMinutes < 1)
+        {
+            return string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.0} s", elapsed.TotalSeconds);
+        }
+        return string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0} m {1} s", (int)elapsed.TotalMinutes, elapsed.Seconds);
     }
 
     public async Task<TestRunResult> TestAsync(

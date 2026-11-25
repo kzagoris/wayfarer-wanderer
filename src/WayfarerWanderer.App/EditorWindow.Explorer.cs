@@ -109,7 +109,11 @@ public sealed partial class EditorWindow
         Row(A.Rename, "Rename…", row => AskRename(row.Path!), Movable);
         Row(A.CopyPath, "Copy Path", row => IdeErrors.Observe(CopyPathAsync(row.Path!)), row => row.Path is null ? $"{row.Name} is in no folder on disk" : null);
         Row(A.RevealInFileManager, FileManager.Showing, row => FileManager.Show(this, row.Path!), row => row.Path is null ? $"{row.Name} is in no folder on disk" : null);
-        Row(A.BuildSelected, "Build Module", row => IdeErrors.Observe(Session!.BuildAsync(ModuleOf(row)!.Id, "test")),
+        Row(A.BuildSelected, "Build Module", row =>
+            {
+                ToolDock.ShowBehind(ToolWindowIds.Build);
+                IdeErrors.Observe(Session!.BuildAsync(ModuleOf(row)!.Id, "classes"));
+            },
             row => ModuleOf(row) is null ? $"{row.Name} is no module" : Session is not { IsTrusted: true } ? "The folder is not trusted"
                 : Session.IsRunning ? "A build or run is under way" : null);
 
