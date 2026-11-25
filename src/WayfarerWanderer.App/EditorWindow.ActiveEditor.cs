@@ -9,7 +9,7 @@ using A = WayfarerWanderer.App.Shell.AppActions;
 namespace WayfarerWanderer.App;
 
 /// <summary>The editor as Settings' Editor page has it: its font's size and line spacing, ligatures, line numbers, rainbow
-/// braces, closing tags, wrapped fragments' indent and Ctrl+wheel zoom, followed as Settings previews or applies them. View,
+/// braces, closing tags, parameter and type name hints, wrapped fragments' indent and Ctrl+wheel zoom, followed as Settings previews or applies them. View,
 /// Active Editor: Soft-Wrap and Show Whitespaces for the file shown, and Increase, Decrease and Reset Font Size, which
 /// Ctrl+wheel (Cmd+wheel on macOS) also does while Settings allows it. A file opens soft-wrapped when Settings' masks match
 /// its name and with whitespace shown when Settings shows it; the font size is Settings' own, so a zoom is kept as
@@ -101,6 +101,14 @@ public sealed partial class EditorWindow
         Editor.ClosesTags = next.CloseTags;
         Editor.WrapIndent = next.SoftWrapIndent;
         Editor.ZoomsWithWheel = next.WheelZoom;
+        bool hinted = ShowsHints;
+        Editor.ShowParameterHints = next.ParameterHints;
+        Editor.ShowTypeHints = next.TypeHints;
+        if (!hinted && ShowsHints)
+        {
+            // Nothing was asked while neither kind showed.
+            AskHintsNow();
+        }
         if (before is not null)
         {
             FollowViewSettings(before, next);

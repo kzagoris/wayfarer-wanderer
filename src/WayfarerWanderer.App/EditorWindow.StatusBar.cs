@@ -140,6 +140,7 @@ public sealed partial class EditorWindow
         Actions.Registry.Work.Told += (_, told) => StatusText = told.Said;
         AddFileProperties();
         AddBreadcrumbs();
+        AddInlayHints();
     }
 
     /// <summary>A file read from disk: the bar follows how it is stored, and it opens read-only when its file is.</summary>
@@ -199,6 +200,7 @@ public sealed partial class EditorWindow
         ShowCaret();
         ShowLanguage();
         BreadcrumbsFollowFile();
+        HintsFollowFile();
     }
 
     /// <summary>The caret's line and column, the carets there are, or what is selected; nothing with no file shown.</summary>
@@ -271,6 +273,7 @@ public sealed partial class EditorWindow
     {
         ShowLanguage();
         OutlineWhenUnseen();
+        HintsWhenServerChanged();
     }
 
     /// <summary>The read-only lock clicked: asked, the file made writable and editable.</summary>

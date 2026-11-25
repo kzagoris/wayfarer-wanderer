@@ -242,6 +242,7 @@ public sealed partial class EditorWindow
                 }
                 languageClients[language] = client;
                 client.StatusChanged += () => Shell.UiThread.Post(LanguageServerChanged);
+                FollowHints(client);
                 if (language == "java") RefreshKotlinClasses();
                 return client;
             }

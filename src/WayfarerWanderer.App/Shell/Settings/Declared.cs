@@ -171,6 +171,14 @@ public static class Declared
         new(D.EditorPage, "Close tags on '>' and '</'", "auto close closing end tags markup xml pom maven elements",
             "In XML (a POM, an .iml, a JavaFX layout), a start tag's '>' writes its end tag after the caret, and '</' the open element's name."));
 
+    public static readonly ToggleSetting ParameterHints = new(s => s.ParameterHints, (s, v) => s with { ParameterHints = v },
+        new(D.EditorPage, "Show parameter name hints", "inlay hints parameter names arguments literals java kotlin",
+            "A parameter's name before an argument that does not say it: in Java before a literal, in Kotlin as the call's named argument would read."));
+
+    public static readonly ToggleSetting TypeHints = new(s => s.TypeHints, (s, v) => s with { TypeHints = v },
+        new(D.EditorPage, "Show type name hints", "inlay hints type names var val inferred lambda parameters it return java kotlin",
+            "The type of a name that does not write it: a Java var or lambda parameter, a Kotlin val, var, lambda parameter or expression-bodied function."));
+
     public static readonly ToggleSetting SoftWrapIndent = new(s => s.SoftWrapIndent, (s, v) => s with { SoftWrapIndent = v },
         new(D.EditorPage, "Use the original line's indent for wrapped fragments", "soft wrap wrapped indent indentation fragments"));
 

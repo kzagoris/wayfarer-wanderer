@@ -117,8 +117,8 @@ public sealed record AppSettings : IStateDocument<AppSettings>
     /// <summary>Parameter name hints: an argument's parameter shown before it where the call does not say it.</summary>
     public bool ParameterHints { get; init; } = true;
 
-    /// <summary>Type name hints: the type of a <c>var</c>, a lambda's parameter or a target-typed <c>new</c> shown
-    /// after it where the code does not say it.</summary>
+    /// <summary>Type name hints: the type of a Java <c>var</c> or a Kotlin <c>val</c>, a lambda's parameter or an
+    /// expression-bodied function shown after it where the code does not say it.</summary>
     public bool TypeHints { get; init; } = true;
 
     /// <summary>"Soft-wrap these files": a file whose name matches <see cref="SoftWrapFiles"/> opens with its lines

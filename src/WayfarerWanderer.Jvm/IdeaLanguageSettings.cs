@@ -17,6 +17,7 @@ public static class IdeaLanguageSettings
                 referencedLibraries = Libraries(snapshot),
             },
             configuration = new { runtimes = Runtimes(snapshot) },
+            inlayHints = JdtInlayHints.Settings,
         },
     };
 
@@ -26,7 +27,7 @@ public static class IdeaLanguageSettings
         "java.project.outputPath" => OutputPath(snapshot),
         "java.project.referencedLibraries" => Libraries(snapshot),
         "java.configuration.runtimes" => Runtimes(snapshot),
-        _ => null,
+        _ => JdtInlayHints.Value(section),
     };
 
     public static string[] SourcePaths(WorkspaceSnapshot snapshot) =>

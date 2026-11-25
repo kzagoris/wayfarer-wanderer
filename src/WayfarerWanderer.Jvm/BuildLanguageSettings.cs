@@ -17,6 +17,7 @@ public static class BuildLanguageSettings
             {
                 import = new { gradle = new { java = new { home = GradleJavaHome(snapshot) }, arguments = GradleArguments(snapshot, jdks) } },
                 configuration = new { runtimes = Runtimes(snapshot, jdks) },
+                inlayHints = JdtInlayHints.Settings,
             },
         };
     }
@@ -26,7 +27,7 @@ public static class BuildLanguageSettings
         "java.import.gradle.java.home" => GradleJavaHome(snapshot),
         "java.import.gradle.arguments" => GradleArguments(snapshot, jdks ?? JdkRegistry.Current.All()),
         "java.configuration.runtimes" => Runtimes(snapshot, jdks ?? JdkRegistry.Current.All()),
-        _ => null,
+        _ => JdtInlayHints.Value(section),
     };
 
     /// <summary>Buildship's Gradle arguments: the table's JDKs as installation paths, quoted where a path has a space;

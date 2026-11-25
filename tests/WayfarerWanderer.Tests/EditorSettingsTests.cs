@@ -27,7 +27,7 @@ public sealed class EditorSettingsTests
             window.SettingsKept.Update(s => s with
             {
                 EditorFontSize = 17, EditorLineSpacing = 1.5, ShowLineNumbers = false, RainbowBraces = false, Ligatures = true,
-                CloseTags = false, SoftWrapIndent = false, WheelZoom = true, FoldXmlTags = true,
+                CloseTags = false, SoftWrapIndent = false, WheelZoom = true, FoldXmlTags = true, ParameterHints = false, TypeHints = false,
             });
             Dispatcher.UIThread.RunJobs();
             Assert.Equal(17, window.Editor.FontSize);
@@ -38,6 +38,8 @@ public sealed class EditorSettingsTests
             Assert.False(window.Editor.ClosesTags);
             Assert.False(window.Editor.WrapIndent);
             Assert.True(window.Editor.ZoomsWithWheel);
+            Assert.False(window.Editor.ShowParameterHints);
+            Assert.False(window.Editor.ShowTypeHints);
 
             // A Markdown file opens wrapped, Java does not; View, Active Editor's Soft-Wrap turns one file's alone.
             window.OpenSource(notes);

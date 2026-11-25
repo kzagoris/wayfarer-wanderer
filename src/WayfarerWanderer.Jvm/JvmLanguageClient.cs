@@ -67,15 +67,18 @@ public sealed class JvmLanguageClient : IAsyncDisposable
             ChildProcesses.HoldFamily(process);
             client = new(process, state, root, language, snapshot) { BundleProblem = bundleProblem, bundles = bundles };
             object initializationOptions = InitializationOptions(bundles, snapshot);
-            await client.RequestAsync("initialize", new
+            JsonElement initialized = await client.RequestAsync("initialize", new
             {
                 processId = Environment.ProcessId, rootUri = new Uri(root).AbsoluteUri, rootPath = root,
                 workspaceFolders = client.folders,
                 initializationOptions,
-                capabilities = new { workspace = new { configuration = true, workspaceFolders = true, workspaceEdit = new { documentChanges = true } },
+                capabilities = new { workspace = new { configuration = true, workspaceFolders = true, workspaceEdit = new { documentChanges = true },
+                        inlayHint = new { refreshSupport = true } },
                     textDocument = new { completion = new { completionItem = new { snippetSupport = false } },
-                        documentSymbol = new { hierarchicalDocumentSymbolSupport = true } } }
+                        documentSymbol = new { hierarchicalDocumentSymbolSupport = true }, inlayHint = new { dynamicRegistration = false } } }
             }, cancel).ConfigureAwait(false);
+            client.HasInlayHints = initialized.ValueKind == JsonValueKind.Object && initialized.TryGetProperty("capabilities", out JsonElement capabilities)
+                && capabilities.TryGetProperty("inlayHintProvider", out JsonElement hints) && hints.ValueKind is JsonValueKind.True or JsonValueKind.Object;
             await client.NotifyAsync("initialized", new { }, cancel).ConfigureAwait(false);
             return client;
         }
@@ -88,6 +91,9 @@ public sealed class JvmLanguageClient : IAsyncDisposable
     }
 
     public bool HasExited => reader.IsCompleted;
+
+    /// <summary>Whether the server said it gives inlay hints (<c>textDocument/inlayHint</c>).</summary>
+    public bool HasInlayHints { get; private set; }
 
     /// <summary>Why the JDT LS Kotlin class extension is unavailable, or null.</summary>
     public string? BundleProblem { get; private init; }
@@ -106,6 +112,10 @@ public sealed class JvmLanguageClient : IAsyncDisposable
     /// <summary>Raised, on the reader's thread, when <see cref="Status"/> or <see cref="IsReady"/> changes or the connection
     /// ends.</summary>
     public event Action? StatusChanged;
+
+    /// <summary>Raised, on the reader's thread, when the server says the inlay hints it gave may have changed
+    /// (<c>workspace/inlayHint/refresh</c>): JDT LS once its build ends, so a file's hints asked for before are asked again.</summary>
+    public event Action? HintsChanged;
 
     private static object InitializationOptions(string[] bundles, WorkspaceSnapshot? snapshot) => snapshot switch
     {
@@ -254,6 +264,8 @@ public sealed class JvmLanguageClient : IAsyncDisposable
                 result = message.GetProperty("params").GetProperty("items").EnumerateArray().Select(item =>
                 {
                     string? section = item.TryGetProperty("section", out JsonElement name) ? name.GetString() : null;
+                    if (language == "kotlin" && section == KotlinInlayHints.Section)
+                        return KotlinInlayHints.Settings;
                     return snapshot switch
                     {
                         { BuildSystem: JvmBuildSystem.Idea } => IdeaLanguageSettings.Value(snapshot, section),
@@ -265,6 +277,7 @@ public sealed class JvmLanguageClient : IAsyncDisposable
             case "workspace/applyEdit": result = new { applied = false, failureReason = "Edits require a reviewed preview." }; break;
             case "client/registerCapability": case "client/unregisterCapability": case "window/workDoneProgress/create":
             case "workspace/semanticTokens/refresh": case "workspace/diagnostic/refresh": result = null; break;
+            case "workspace/inlayHint/refresh": result = null; HintsChanged?.Invoke(); break;
             default: return SendAsync(new { jsonrpc = "2.0", id, error = new { code = -32601, message = "Unsupported client method: " + method } }, default);
         }
         return SendAsync(new { jsonrpc = "2.0", id, result }, default);
