@@ -1,38 +1,75 @@
-"""Draws Wayfarer Wanderer's placeholder mark: a compass needle on a rounded square, in the app's deep teal.
+"""Renders Wayfarer Wanderer's app icon from docs/brand/ridgeline.svg.
 
-Writes src/WayfarerWanderer.App/Shell/Assets/wayfarer.ico (every size Windows draws) and wayfarer.png (256 px, for
-About and the welcome page). Run from the repository's root: python tools/app-icon.py
+Writes src/WayfarerWanderer.App/Shell/Assets/wayfarer.ico (16, 20, 24, 32, 40, 48, 64, 128 and 256 px PNG frames)
+and wayfarer.png (256 px, for About, the first-start screen and the welcome page). When the website directory
+site/static/ is present, also exports site/static/favicon.png (64 px) and site/static/img/icon.png (256 px).
+
+Run from the repository's root: python3 tools/app-icon.py
 """
 from pathlib import Path
-from PIL import Image, ImageDraw
+import shutil
+import struct
+import subprocess
+import sys
 
-OUT = Path("src/WayfarerWanderer.App/Shell/Assets")
-SIZE = 1024
-
-
-def mark(size: int = SIZE) -> Image.Image:
-    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    s = size / 1024
-    draw.rounded_rectangle((40 * s, 40 * s, 984 * s, 984 * s), radius=220 * s, fill=(14, 92, 99, 255))
-    # The compass's ring.
-    draw.ellipse((200 * s, 200 * s, 824 * s, 824 * s), outline=(226, 240, 238, 255), width=round(44 * s))
-    # The needle: north light, south amber, pointing up and to the right, a wanderer's heading.
-    centre = (512 * s, 512 * s)
-    north, south = (700 * s, 324 * s), (324 * s, 700 * s)
-    left, right = (452 * s, 452 * s), (572 * s, 572 * s)
-    draw.polygon([north, left, centre, right], fill=(246, 251, 250, 255))
-    draw.polygon([south, left, centre, right], fill=(240, 170, 60, 255))
-    draw.ellipse((482 * s, 482 * s, 542 * s, 542 * s), fill=(14, 92, 99, 255))
-    return image
+ROOT = Path(__file__).resolve().parent.parent
+SVG = ROOT / "docs" / "brand" / "ridgeline.svg"
+OUT = ROOT / "src" / "WayfarerWanderer.App" / "Shell" / "Assets"
+SITE_STATIC = ROOT / "site" / "static"
+ICO_SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
 
 
-def main() -> None:
+def render_png(svg: Path, size: int) -> bytes:
+    if rsvg := shutil.which("rsvg-convert"):
+        result = subprocess.run(
+            [rsvg, "-w", str(size), "-h", str(size), "--format=png", str(svg)],
+            check=True,
+            capture_output=True,
+        )
+        return result.stdout
+    if magick := shutil.which("magick"):
+        result = subprocess.run(
+            [magick, "-background", "none", str(svg), "-resize", f"{size}x{size}", "png:-"],
+            check=True,
+            capture_output=True,
+        )
+        return result.stdout
+    raise RuntimeError("No SVG renderer found on PATH (expected rsvg-convert or magick).")
+
+
+def pack_ico(frames: list[tuple[int, bytes]]) -> bytes:
+    header = struct.pack("<HHH", 0, 1, len(frames))
+    offset = 6 + 16 * len(frames)
+    entries = []
+    payload = []
+    for size, png in frames:
+        dim = 0 if size >= 256 else size
+        entries.append(struct.pack("<BBBBHHII", dim, dim, 0, 0, 1, 32, len(png), offset))
+        payload.append(png)
+        offset += len(png)
+    return header + b"".join(entries) + b"".join(payload)
+
+
+def main() -> int:
+    if not SVG.is_file():
+        print(f"Missing SVG master: {SVG}", file=sys.stderr)
+        return 1
+
     OUT.mkdir(parents=True, exist_ok=True)
-    big = mark()
-    big.resize((256, 256), Image.LANCZOS).save(OUT / "wayfarer.png")
-    big.save(OUT / "wayfarer.ico", sizes=[(16, 16), (20, 20), (24, 24), (32, 32), (40, 40), (48, 48), (64, 64), (128, 128), (256, 256)])
+    frames = [(size, render_png(SVG, size)) for size in ICO_SIZES]
+    by_size = dict(frames)
+
+    (OUT / "wayfarer.png").write_bytes(by_size[256])
+    (OUT / "wayfarer.ico").write_bytes(pack_ico(frames))
+
+    if SITE_STATIC.is_dir():
+        (SITE_STATIC / "favicon.png").write_bytes(by_size[64])
+        img_dir = SITE_STATIC / "img"
+        img_dir.mkdir(parents=True, exist_ok=True)
+        (img_dir / "icon.png").write_bytes(by_size[256])
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -9,11 +9,11 @@
          again. Passenger.Editor.*, Passenger.Syntax.* and Passenger.SyntaxStyle.* are read by the code editor by name; a
          syntax kind left out draws as plain text.
 
-         The look: the app icon's blue as the window's own colour on cool blue-tinted neutrals, the icon's blue-to-teal
-         ground across the title bar, and its amber dot wherever the window says "you are here" (the focus ring, the caret,
-         the current line's number, the execution point, an unsaved file's dot, the project's badge). The window's areas
-         are told apart by shade rather than rules: the frame round the edges deepest, the tool windows a step lighter,
-         the editor the page. -->
+         The look: the app icon's deep teal (#103D40) across the title bar and light-mode primary actions, and its
+         Trail Amber (#FFBE50) wherever the window says "you are here" (dark-mode primary actions, focus rings, the
+         caret, the current line's number, the execution point, an unsaved file's dot, the project's badge). The
+         window's areas are told apart by shade rather than rules: the frame round the edges deepest, the tool windows
+         a step lighter, the editor the page. -->
 
     <!-- Shapes: a control's corners, a toolbar's and a stripe's buttons', a popup's; a badge's and a chip's; the editor tabs'
          (pills on their strip here); a popup's top edge (its crown here). -->
@@ -60,8 +60,8 @@
             <SolidColorBrush x:Key="Passenger.PopupBorder" Color="#2F384B" read:None="a popup's edge, its ground and shadow setting it apart" />
             <BoxShadows x:Key="Passenger.PopupShadow">0 6 20 0 #80000000</BoxShadows>
             <LinearGradientBrush x:Key="Passenger.Popup.Edge" StartPoint="0%,0%" EndPoint="100%,0%" read:None="a popup's crown, for its look">
-                <GradientStop Offset="0" Color="#3D78F5" />
-                <GradientStop Offset="1" Color="#1FB5A5" />
+                <GradientStop Offset="0" Color="#145559" />
+                <GradientStop Offset="1" Color="#FFBE50" />
             </LinearGradientBrush>
             <!-- An editor's notice above its text (a file not the project's own). -->
             <SolidColorBrush x:Key="Passenger.Banner" Color="#18233C" />
@@ -85,7 +85,7 @@
             <SolidColorBrush x:Key="Passenger.Icon" Color="#B9C3D7" read:Mark="Panel Frame Popup Editor.Background" />
             <SolidColorBrush x:Key="Passenger.Link" Color="#80A8FF" read:Text="Panel Frame Popup Editor.Background" />
             <SolidColorBrush x:Key="Passenger.LinkHover" Color="#A6C2FF" read:Text="Panel" />
-            <SolidColorBrush x:Key="Passenger.AccentText" Color="#FFFFFF" read:Text="Accent AccentHover AccentPressed Welcome.Badge" />
+            <SolidColorBrush x:Key="Passenger.AccentText" Color="#103D40" read:Text="Accent AccentHover AccentPressed Welcome.Badge" />
             <SolidColorBrush x:Key="Passenger.BadgeText" Color="#0F131C" read:Text="TextMuted Editor.Error Editor.Warning Syntax.Keyword Syntax.Class Syntax.Interface Syntax.Struct Syntax.Enum Syntax.TypeParameter Syntax.Method Syntax.Property Syntax.Field Syntax.Constant Syntax.EnumMember Syntax.Event Syntax.Heading" />
             <SolidColorBrush x:Key="Passenger.Error" Color="#FF7A87" read:Text="Panel Frame Popup Editor.Background" />
             <SolidColorBrush x:Key="Passenger.Warning" Color="#F2B84B" read:Text="Panel Frame Popup Editor.Background" />
@@ -100,27 +100,27 @@
             <SolidColorBrush x:Key="Passenger.Selected" Color="#24A6C2FF" />
             <SolidColorBrush x:Key="Passenger.RowSelected" Color="#1B3366" />
             <SolidColorBrush x:Key="Passenger.ChosenMark" Color="#5B8DFF" read:Mark="Panel Frame Popup List Hover RowSelected Selected Selected/Frame Selected/Popup Tab.Active Stripe.Selected" />
-            <SolidColorBrush x:Key="Passenger.Accent" Color="#2F6BF2" read:Mark="Panel" />
-            <SolidColorBrush x:Key="Passenger.AccentHover" Color="#2A5FD9" />
-            <SolidColorBrush x:Key="Passenger.AccentPressed" Color="#1D51CA" />
-            <SolidColorBrush x:Key="Passenger.Focus" Color="#FFB547" read:Mark="Panel Frame Popup Editor.Background Field" />
+            <SolidColorBrush x:Key="Passenger.Accent" Color="#FFBE50" read:Mark="Panel" />
+            <SolidColorBrush x:Key="Passenger.AccentHover" Color="#F2AE3D" />
+            <SolidColorBrush x:Key="Passenger.AccentPressed" Color="#E09B28" />
+            <SolidColorBrush x:Key="Passenger.Focus" Color="#FFBE50" read:Mark="Panel Frame Popup Editor.Background Field" />
             <SolidColorBrush x:Key="Passenger.CheckBorder" Color="#6B7690" read:Edge="Panel Popup List" />
             <SolidColorBrush x:Key="Passenger.ScrollThumb" Color="#59808080" read:None="a scrollbar's, faint until the pointer is over it, the wheel and keys scrolling too" />
             <SolidColorBrush x:Key="Passenger.ScrollThumbHover" Color="#8C808080" read:None="a scrollbar's, under the pointer" />
             <SolidColorBrush x:Key="Passenger.ScrollTrackHover" Color="#1A808080" read:None="a scrollbar's, under the pointer" />
-            <!-- A menu's chosen item, solid in the accent, its words and keys white. -->
-            <SolidColorBrush x:Key="Passenger.Menu.Selected" Color="#2F6BF2" />
+            <!-- A menu's chosen item, solid in deep teal, its words and keys white. -->
+            <SolidColorBrush x:Key="Passenger.Menu.Selected" Color="#175256" />
             <SolidColorBrush x:Key="Passenger.Menu.SelectedText" Color="#FFFFFF" read:Text="Menu.Selected" />
             <SolidColorBrush x:Key="Passenger.Menu.SelectedKeys" Color="#FFFFFF" read:Text="Menu.Selected" />
 
-            <!-- The title bar, the toolbar on it: the icon's ground, blue into teal, with its own words, icons, hover,
-                 press, rule, run, debug, stop and Hot Reload, focus ring, and the project's initials on the icon's amber dot. -->
+            <!-- The title bar, the toolbar on it: anchored in Deep Teal, with its own words, icons, hover,
+                 press, rule, run, debug, stop and Hot Reload, Trail Amber focus ring, and the project's initials on Trail Amber. -->
             <LinearGradientBrush x:Key="Passenger.TitleBar" StartPoint="0%,0%" EndPoint="100%,0%">
-                <GradientStop Offset="0" Color="#1B3270" />
-                <GradientStop Offset="1" Color="#0E4552" />
+                <GradientStop Offset="0" Color="#103D40" />
+                <GradientStop Offset="1" Color="#144B4E" />
             </LinearGradientBrush>
-            <SolidColorBrush x:Key="Passenger.TitleBar.Text" Color="#F2F6FF" read:Text="TitleBar TitleBar.Hover/TitleBar TitleBar.Pressed/TitleBar" />
-            <SolidColorBrush x:Key="Passenger.TitleBar.Icon" Color="#D6E2FF" read:Mark="TitleBar" />
+            <SolidColorBrush x:Key="Passenger.TitleBar.Text" Color="#F2F7F7" read:Text="TitleBar TitleBar.Hover/TitleBar TitleBar.Pressed/TitleBar" />
+            <SolidColorBrush x:Key="Passenger.TitleBar.Icon" Color="#D4E6E7" read:Mark="TitleBar" />
             <SolidColorBrush x:Key="Passenger.TitleBar.Hover" Color="#26FFFFFF" />
             <SolidColorBrush x:Key="Passenger.TitleBar.Pressed" Color="#33FFFFFF" />
             <SolidColorBrush x:Key="Passenger.TitleBar.Rule" Color="#40FFFFFF" read:None="a line between groups on the title bar" />
@@ -128,9 +128,9 @@
             <SolidColorBrush x:Key="Passenger.TitleBar.Stop" Color="#FF8A96" read:Mark="TitleBar" />
             <SolidColorBrush x:Key="Passenger.TitleBar.HotReload" Color="#FFB27A" read:Mark="TitleBar" />
             <SolidColorBrush x:Key="Passenger.TitleBar.Debug" Color="#C4A7FF" read:Mark="TitleBar" />
-            <SolidColorBrush x:Key="Passenger.TitleBar.Focus" Color="#FFB547" read:Mark="TitleBar TitleBar.Hover/TitleBar TitleBar.Pressed/TitleBar" />
-            <SolidColorBrush x:Key="Passenger.TitleBar.Badge" Color="#FFB547" />
-            <SolidColorBrush x:Key="Passenger.TitleBar.BadgeText" Color="#1A1305" read:Text="TitleBar.Badge" />
+            <SolidColorBrush x:Key="Passenger.TitleBar.Focus" Color="#FFBE50" read:Mark="TitleBar TitleBar.Hover/TitleBar TitleBar.Pressed/TitleBar" />
+            <SolidColorBrush x:Key="Passenger.TitleBar.Badge" Color="#FFBE50" />
+            <SolidColorBrush x:Key="Passenger.TitleBar.BadgeText" Color="#103D40" read:Text="TitleBar.Badge" />
             <!-- The merged title bar's window buttons on Windows and Linux: under the pointer, pressed, and Close's red. -->
             <SolidColorBrush x:Key="Passenger.WindowButton.Hover" Color="#1AFFFFFF" read:None="the window buttons' hover and press, as the system draws them" />
             <SolidColorBrush x:Key="Passenger.WindowButton.Pressed" Color="#33FFFFFF" read:None="the window buttons' hover and press, as the system draws them" />
@@ -143,7 +143,7 @@
             <SolidColorBrush x:Key="Passenger.Stripe.SelectedIcon" Color="#CFDDFF" read:Mark="Stripe.Selected" />
             <SolidColorBrush x:Key="Passenger.Tab.Active" Color="#22304D" />
             <SolidColorBrush x:Key="Passenger.Tab.ActiveText" Color="#F2F6FF" read:Text="Tab.Active" />
-            <SolidColorBrush x:Key="Passenger.Modified" Color="#FFB547" read:Mark="Frame Panel" />
+            <SolidColorBrush x:Key="Passenger.Modified" Color="#FFBE50" read:Mark="Frame Panel" />
 
             <!-- The start page: an action's tile, its edge, its icon's chip and the icon; a recent solution's badge. -->
             <SolidColorBrush x:Key="Passenger.Welcome.Tile" Color="#161C29" />
@@ -151,10 +151,10 @@
             <BoxShadows x:Key="Passenger.Welcome.TileShadow">0 0 0 0 #00000000</BoxShadows>
             <SolidColorBrush x:Key="Passenger.Welcome.Chip" Color="#1B3366" />
             <SolidColorBrush x:Key="Passenger.Welcome.ChipIcon" Color="#9CBBFF" read:Mark="Welcome.Chip" />
-            <!-- The icon's own ground, blue into teal, deepened so white initials read. -->
+            <!-- Trail Amber so Deep Teal AccentText initials read cleanly. -->
             <LinearGradientBrush x:Key="Passenger.Welcome.Badge" StartPoint="0%,0%" EndPoint="100%,100%">
-                <GradientStop Offset="0" Color="#2F6BF2" />
-                <GradientStop Offset="1" Color="#0B7D72" />
+                <GradientStop Offset="0" Color="#FFBE50" />
+                <GradientStop Offset="1" Color="#ECA432" />
             </LinearGradientBrush>
 
             <!-- Running and testing: run, debug and Hot Reload's icons; a test's mark by its outcome. -->
@@ -353,8 +353,8 @@
             <SolidColorBrush x:Key="Passenger.PopupBorder" Color="#D6DDE9" />
             <BoxShadows x:Key="Passenger.PopupShadow">0 6 20 0 #2E0B1E4A</BoxShadows>
             <LinearGradientBrush x:Key="Passenger.Popup.Edge" StartPoint="0%,0%" EndPoint="100%,0%">
-                <GradientStop Offset="0" Color="#2C62E6" />
-                <GradientStop Offset="1" Color="#0E9A8C" />
+                <GradientStop Offset="0" Color="#103D40" />
+                <GradientStop Offset="1" Color="#D99422" />
             </LinearGradientBrush>
             <SolidColorBrush x:Key="Passenger.Banner" Color="#E8F0FF" />
             <SolidColorBrush x:Key="Passenger.DropZone" Color="#2F6BF2" Opacity="0.14" />
@@ -381,36 +381,36 @@
             <SolidColorBrush x:Key="Passenger.Selected" Color="#211F3A70" />
             <SolidColorBrush x:Key="Passenger.RowSelected" Color="#DBE6FF" />
             <SolidColorBrush x:Key="Passenger.ChosenMark" Color="#1F55D6" />
-            <SolidColorBrush x:Key="Passenger.Accent" Color="#2F6BF2" />
-            <SolidColorBrush x:Key="Passenger.AccentHover" Color="#2459D6" />
-            <SolidColorBrush x:Key="Passenger.AccentPressed" Color="#1345C1" />
-            <SolidColorBrush x:Key="Passenger.Focus" Color="#B86A00" />
+            <SolidColorBrush x:Key="Passenger.Accent" Color="#103D40" />
+            <SolidColorBrush x:Key="Passenger.AccentHover" Color="#165155" />
+            <SolidColorBrush x:Key="Passenger.AccentPressed" Color="#0B2C2E" />
+            <SolidColorBrush x:Key="Passenger.Focus" Color="#103D40" />
             <SolidColorBrush x:Key="Passenger.CheckBorder" Color="#828DA2" />
             <SolidColorBrush x:Key="Passenger.ScrollThumb" Color="#33000000" />
             <SolidColorBrush x:Key="Passenger.ScrollThumbHover" Color="#80000000" />
             <SolidColorBrush x:Key="Passenger.ScrollTrackHover" Color="#1A808080" />
-            <SolidColorBrush x:Key="Passenger.Menu.Selected" Color="#2F6BF2" />
+            <SolidColorBrush x:Key="Passenger.Menu.Selected" Color="#103D40" />
             <SolidColorBrush x:Key="Passenger.Menu.SelectedText" Color="#FFFFFF" />
             <SolidColorBrush x:Key="Passenger.Menu.SelectedKeys" Color="#FFFFFF" />
 
             <LinearGradientBrush x:Key="Passenger.TitleBar" StartPoint="0%,0%" EndPoint="100%,0%">
-                <GradientStop Offset="0" Color="#2C62E6" />
-                <GradientStop Offset="1" Color="#0E7F86" />
+                <GradientStop Offset="0" Color="#103D40" />
+                <GradientStop Offset="1" Color="#144B4E" />
             </LinearGradientBrush>
             <SolidColorBrush x:Key="Passenger.TitleBar.Text" Color="#FFFFFF" />
-            <SolidColorBrush x:Key="Passenger.TitleBar.Icon" Color="#FFFFFF" />
-            <SolidColorBrush x:Key="Passenger.TitleBar.Hover" Color="#2E06143A" />
-            <SolidColorBrush x:Key="Passenger.TitleBar.Pressed" Color="#4D06143A" />
-            <SolidColorBrush x:Key="Passenger.TitleBar.Rule" Color="#59FFFFFF" />
+            <SolidColorBrush x:Key="Passenger.TitleBar.Icon" Color="#E6F2F2" />
+            <SolidColorBrush x:Key="Passenger.TitleBar.Hover" Color="#26FFFFFF" />
+            <SolidColorBrush x:Key="Passenger.TitleBar.Pressed" Color="#33FFFFFF" />
+            <SolidColorBrush x:Key="Passenger.TitleBar.Rule" Color="#4DFFFFFF" />
             <SolidColorBrush x:Key="Passenger.TitleBar.Run" Color="#8BF5C4" />
             <SolidColorBrush x:Key="Passenger.TitleBar.Stop" Color="#FFC2C8" />
             <SolidColorBrush x:Key="Passenger.TitleBar.HotReload" Color="#FFD2A8" />
             <SolidColorBrush x:Key="Passenger.TitleBar.Debug" Color="#E7C4F8" />
-            <SolidColorBrush x:Key="Passenger.TitleBar.Focus" Color="#FFFFFF" />
-            <SolidColorBrush x:Key="Passenger.TitleBar.Badge" Color="#FFB547" />
-            <SolidColorBrush x:Key="Passenger.TitleBar.BadgeText" Color="#1A1305" />
-            <SolidColorBrush x:Key="Passenger.WindowButton.Hover" Color="#2E06143A" />
-            <SolidColorBrush x:Key="Passenger.WindowButton.Pressed" Color="#4D06143A" />
+            <SolidColorBrush x:Key="Passenger.TitleBar.Focus" Color="#FFBE50" />
+            <SolidColorBrush x:Key="Passenger.TitleBar.Badge" Color="#FFBE50" />
+            <SolidColorBrush x:Key="Passenger.TitleBar.BadgeText" Color="#103D40" />
+            <SolidColorBrush x:Key="Passenger.WindowButton.Hover" Color="#26FFFFFF" />
+            <SolidColorBrush x:Key="Passenger.WindowButton.Pressed" Color="#38FFFFFF" />
             <SolidColorBrush x:Key="Passenger.WindowButton.CloseHover" Color="#E81123" />
             <SolidColorBrush x:Key="Passenger.WindowButton.ClosePressed" Color="#F1707A" />
             <SolidColorBrush x:Key="Passenger.WindowButton.CloseGlyph" Color="#FFFFFF" />
@@ -427,8 +427,8 @@
             <SolidColorBrush x:Key="Passenger.Welcome.Chip" Color="#E3ECFF" />
             <SolidColorBrush x:Key="Passenger.Welcome.ChipIcon" Color="#2F6BF2" />
             <LinearGradientBrush x:Key="Passenger.Welcome.Badge" StartPoint="0%,0%" EndPoint="100%,100%">
-                <GradientStop Offset="0" Color="#2F6BF2" />
-                <GradientStop Offset="1" Color="#0B7D72" />
+                <GradientStop Offset="0" Color="#103D40" />
+                <GradientStop Offset="1" Color="#17575C" />
             </LinearGradientBrush>
 
             <SolidColorBrush x:Key="Passenger.Run" Color="#0E8A5A" />
