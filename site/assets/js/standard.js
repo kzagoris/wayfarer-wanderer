@@ -17,7 +17,7 @@ const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matc
     const io = new IntersectionObserver((entries) => entries.forEach((e) => {
       if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
     }), { rootMargin: "0px 0px -12% 0px", threshold: 0.12 });
-    document.querySelectorAll(".rise, .stack, .slide-l, .slide-r, .tilt, .draw-scroll, .open-band").forEach((el) => io.observe(el));
+    document.querySelectorAll(".rise, .stack, .tilt, .draw-scroll, .open-band").forEach((el) => io.observe(el));
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
 })();
@@ -41,17 +41,25 @@ document.addEventListener("alpine:init", () => {
   window.Alpine.data("jumpDemo", () => ({
     file: "java",
     hot: false,
+    manual: false,
+    pick(next) {
+      this.manual = true;
+      this.file = next;
+      this.hot = true;
+    },
     async loop() {
-      if (reduced()) { this.hot = true; return; }
+      if (reduced() || document.documentElement.classList.contains("still")) { this.hot = true; return; }
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
       const seen = new Promise((resolve) => {
         const io = new IntersectionObserver((e) => { if (e[0].isIntersecting) { io.disconnect(); resolve(); } }, { threshold: 0.6 });
         io.observe(this.$el);
       });
       await seen;
-      for (;;) {
+      while (!this.manual) {
         this.file = "java"; this.hot = false; await wait(1400);
+        if (this.manual) break;
         this.hot = true; await wait(1100);
+        if (this.manual) break;
         this.file = "kt"; await wait(2400);
       }
     },
