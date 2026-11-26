@@ -1,0 +1,30 @@
+baseURL = "/"
+locale = "en"
+title = "Wayfarer Wanderer"
+relativeURLs = true
+disableKinds = ["taxonomy", "term", "RSS", "sitemap"]
+
+[build]
+  [build.buildStats]
+    enable = true
+  [[build.cachebusters]]
+    source = "assets/notwatching/hugo_stats\\.json"
+    target = "css"
+
+[module]
+  [[module.mounts]]
+    source = "assets"
+    target = "assets"
+  [[module.mounts]]
+    disableWatch = true
+    source = "hugo_stats.json"
+    target = "assets/notwatching/hugo_stats.json"
+  [[module.mounts]]
+    source = "node_modules/alpinejs/dist/cdn.min.js"
+    target = "assets/js/vendor/alpine.js"
+
+[markup.goldmark.renderer]
+  unsafe = true
+
+[security.exec]
+  allow = ['^(dart-)?sass$', '^go$', '^git$', '^node$', '^postcss$', '^tailwindcss$', '^npx$']

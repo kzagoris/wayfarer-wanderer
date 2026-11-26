@@ -1,0 +1,87 @@
+name: Wayfarer Wanderer
+short: Wayfarer
+version: "0.1.0"
+repo: https://github.com/kzagoris/wayfarer-wanderer
+releases: https://github.com/kzagoris/wayfarer-wanderer/releases
+passenger: https://github.com/Zaneris/passenger
+jdtls: https://github.com/eclipse-jdtls/eclipse.jdt.ls
+kotlinLsp: https://github.com/Kotlin/kotlin-lsp/releases
+releaseNote: First release pending. Download links go live with v0.1.0 on GitHub Releases.
+
+downloads:
+  - id: linux
+    os: Linux
+    arch: x64
+    file: WayfarerWanderer-linux-x64.tar.gz
+    url: https://github.com/kzagoris/wayfarer-wanderer/releases/latest/download/WayfarerWanderer-linux-x64.tar.gz
+  - id: windows
+    os: Windows
+    arch: x64
+    file: WayfarerWanderer-windows-x64.exe
+    url: https://github.com/kzagoris/wayfarer-wanderer/releases/latest/download/WayfarerWanderer-windows-x64.exe
+  - id: macos
+    os: macOS
+    arch: Apple Silicon
+    file: WayfarerWanderer-macos-arm64.dmg
+    url: https://github.com/kzagoris/wayfarer-wanderer/releases/latest/download/WayfarerWanderer-macos-arm64.dmg
+
+source:
+  needs: .NET SDK 11.0.100, Python 3 and a JDK 21
+  commands:
+    - git clone https://github.com/kzagoris/wayfarer-wanderer.git
+    - cd wayfarer-wanderer
+    - dotnet restore WayfarerWanderer.slnx --locked-mode --configfile vendor/passenger/nuget.config
+    - python3 tools/build-jvm-host.py
+    - dotnet run --project src/WayfarerWanderer.App --no-restore
+
+servers:
+  java: Eclipse JDT LS, from WAYFARER_JDTLS_HOME or VS Code's redhat.java extension
+  kotlin: JetBrains' standalone kotlin-lsp, unpacked into ~/.local/share/wayfarer/kotlin-lsp/<version>/
+
+keys:
+  - action: Search Everywhere
+    keys: ["Shift", "Shift"]
+  - action: Go to Declaration
+    keys: ["Ctrl", "B"]
+  - action: Quick Documentation
+    keys: ["Ctrl", "Q"]
+  - action: Rename
+    keys: ["Shift", "F6"]
+  - action: Show Intention Actions
+    keys: ["Alt", "Enter"]
+  - action: Build
+    keys: ["Ctrl", "F9"]
+  - action: Run
+    keys: ["Shift", "F10"]
+  - action: Debug
+    keys: ["Shift", "F9"]
+  - action: Toggle Breakpoint
+    keys: ["Ctrl", "F8"]
+  - action: Step Over
+    keys: ["F8"]
+  - action: Step Into
+    keys: ["F7"]
+  - action: Terminal
+    keys: ["Alt", "F12"]
+
+themes:
+  - id: wayfarer
+    name: Wayfarer
+  - id: cubicle
+    name: Cubicle
+  - id: high-contrast
+    name: High Contrast
+
+shipped:
+  - date: 2026-11-25
+    what: IDEA-style Quick Documentation and symbol hover cards
+  - date: 2026-11-25
+    what: Parameter and type name hints from the Java and Kotlin servers
+  - date: 2026-11-25
+    what: Build Current Module compiles and reports in the Build window
+  - date: 2026-11-25
+    what: Editor tabs, and Settings pages for the editor and terminal
+  - date: 2026-11-23
+    what: Ctrl+click Go to Declaration for Java and Kotlin
+  - date: 2026-11-23
+    what: High Contrast theme at WCAG AAA, sound cues, colour-blind safe states

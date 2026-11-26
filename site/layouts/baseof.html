@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en" {{ with .Params.htmlClass }}class="{{ . }}"{{ end }}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ .Params.pageTitle | default (printf "%s — the open Java and Kotlin IDE" hugo.Data.product.name) }}</title>
+  <meta name="description" content="{{ .Params.description | default "Wayfarer Wanderer is a free, open-source desktop IDE for Java and Kotlin with IntelliJ IDEA's workflow and an open language backend." }}">
+  {{ with .Params.themeColor }}<meta name="theme-color" content="{{ . }}">{{ end }}
+  <script>if (/[?&]still\b/.test(location.search)) document.documentElement.classList.add("still");</script>
+  <link rel="icon" type="image/png" href="{{ "favicon.png" | relURL }}">
+  {{ $name := .Params.css | default "chooser" }}
+  {{ with (templates.Defer (dict "key" $name "data" $name)) }}
+    {{ $name := . }}
+    {{ with resources.Get (printf "css/%s.css" $name) }}
+      {{ $opts := dict "minify" hugo.IsProduction }}
+      {{ with . | css.TailwindCSS $opts }}
+        {{ if hugo.IsProduction }}
+          {{ with . | fingerprint }}<link rel="stylesheet" href="{{ .RelPermalink }}" integrity="{{ .Data.Integrity }}" crossorigin="anonymous">{{ end }}
+        {{ else }}
+          <link rel="stylesheet" href="{{ .RelPermalink }}">
+        {{ end }}
+      {{ end }}
+    {{ end }}
+  {{ end }}
+  {{ with .Params.js }}
+    {{ with resources.Get (printf "js/%s.js" .) }}{{ with . | minify | fingerprint }}<script src="{{ .RelPermalink }}" defer></script>{{ end }}{{ end }}
+  {{ end }}
+  {{ if .Params.alpine }}
+    {{ with resources.Get "js/vendor/alpine.js" }}{{ with . | fingerprint }}<script src="{{ .RelPermalink }}" defer></script>{{ end }}{{ end }}
+  {{ end }}
+</head>
+<body>
+{{ block "main" . }}{{ end }}
+</body>
+</html>

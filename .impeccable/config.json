@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "geist",
+        "files": [
+          "site/assets/css/standard.css"
+        ],
+        "createdAt": "2026-11-26T08:37:04.060Z",
+        "reason": "Claude's decision: The Standard direction deliberately plays the category canon (Zed/Vercel/Linear look) straight; Geist is that canon's face"
+      },
+      {
+        "rule": "overused-font",
+        "value": "geist mono",
+        "files": [
+          "site/assets/css/standard.css"
+        ],
+        "createdAt": "2026-11-26T08:37:04.069Z",
+        "reason": "Claude's decision: The Standard direction is the category canon played straight; Geist Mono is its code face"
+      }
+    ]
+  }
+}
