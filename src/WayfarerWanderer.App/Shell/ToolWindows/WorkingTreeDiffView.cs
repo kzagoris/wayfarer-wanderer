@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/ToolWindows/WorkingTreeDiffView.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/ToolWindows/WorkingTreeDiffView.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia.Controls;
 using Avalonia.Input;
 using WayfarerWanderer.App.Shell.Vcs;
@@ -8,8 +8,9 @@ using Passenger.Vcs;
 namespace WayfarerWanderer.App.Shell.ToolWindows;
 
 /// <summary>A tab of the Git window, Show Diff with Working Tree's: the files that differ between a branch and the working
-/// tree, read again while shown as the working tree changes, the first chosen; a file's diff (the branch's text beside the
-/// file's) opens wherever Settings opens diffs, the list staying. Where nothing differs it says so.</summary>
+/// tree, or those a stash holds, read again while shown as the working tree changes, the first chosen; a file's diff (the
+/// branch's or stash's text beside the file's) opens wherever Settings opens diffs, the list staying. Where nothing
+/// differs it says so.</summary>
 public sealed class WorkingTreeDiffView : Panel, IOwnKeys
 {
     private readonly VcsController vcs;
@@ -20,10 +21,10 @@ public sealed class WorkingTreeDiffView : Panel, IOwnKeys
     private bool read;
     private int loads;
 
-    public WorkingTreeDiffView(VcsController git, BranchInfo branch)
+    public WorkingTreeDiffView(VcsController git, WorkingTreeComparison compared)
     {
         vcs = git;
-        Branch = branch;
+        Compared = compared;
         files = new ChangedFileList(() => vcs.Repository);
         files.DiffRequested += (_, change) => DiffRequested?.Invoke(this, change);
         files.OpenRequested += (_, path) => OpenRequested?.Invoke(this, path);
@@ -48,8 +49,8 @@ public sealed class WorkingTreeDiffView : Panel, IOwnKeys
         };
     }
 
-    /// <summary>The branch the working tree is compared with.</summary>
-    public BranchInfo Branch { get; }
+    /// <summary>The branch or stash the working tree is compared with.</summary>
+    public WorkingTreeComparison Compared { get; }
 
     /// <summary>The files that differ, as last read.</summary>
     public IReadOnlyList<FileChange> Files => files.Files;
@@ -60,7 +61,7 @@ public sealed class WorkingTreeDiffView : Panel, IOwnKeys
     /// <summary>What it says while nothing differs.</summary>
     public string? Placeholder => placeholder.IsVisible ? placeholder.Text : null;
 
-    /// <summary>A file's diff asked for: the branch's text beside the file's.</summary>
+    /// <summary>A file's diff asked for: the branch's or stash's text beside the file's.</summary>
     public event EventHandler<FileChange>? DiffRequested;
 
     /// <summary>A file asked for as it is now, by its path.</summary>
@@ -71,7 +72,7 @@ public sealed class WorkingTreeDiffView : Panel, IOwnKeys
     {
         int load = ++loads;
         stale = false;
-        IReadOnlyList<FileChange> changed = await vcs.ChangesSinceAsync(Branch);
+        IReadOnlyList<FileChange> changed = await vcs.ChangesSinceAsync(Compared);
         if (load != loads)
         {
             return;

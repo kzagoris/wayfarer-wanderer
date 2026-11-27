@@ -126,9 +126,7 @@ public sealed partial class EditorWindow
         GitView view = gitView = new GitView(Vcs);
         view.DiffRequested += (_, chosen) => IdeErrors.Observe(ShowCommitDiffAsync(chosen.Commit, chosen.File));
         view.CompareRequested += (_, chosen) => IdeErrors.Observe(CompareWithAsync(chosen.Local, chosen.Commit.Hash, chosen.Commit.Short, chosen.File.Path));
-        view.WorkingTreeDiffRequested += (_, chosen) =>
-            IdeErrors.Observe(CompareWithAsync(chosen.File.Path, chosen.Branch.Ref.FullName, chosen.Branch.Name, chosen.File.From ?? chosen.File.Path,
-                added: chosen.File.Kind == ChangeKind.Added));
+        view.WorkingTreeDiffRequested += (_, chosen) => IdeErrors.Observe(CompareWithWorkingTreeAsync(chosen.Compared, chosen.File));
         view.OpenRequested += (_, path) => OpenFromExplorer(path);
         view.ActionRequested += (_, action) => Actions.TryExecute(action);
         view.NewBranchRequested += (_, commit) =>
@@ -142,8 +140,36 @@ public sealed partial class EditorWindow
             branches.RenameRequested += (_, branch) =>
                 Ask(ClosingAsking(new NamePopup($"Rename {branch.Name}", branch.Name, async name => (await Vcs.RenameBranchAsync(branch, name)).Problem)));
             branches.DeleteRequested += (_, branch) => IdeErrors.Observe(DeleteBranchAsync(branch));
+            branches.WorkingTreeDiffRequested += (_, branch) => ShowWorkingTreeDiff(WorkingTreeComparison.Of(branch));
         }
         return view;
+    }
+
+    /// <summary>Show Diff with Working Tree: a tab of the Git window listing the files that differ between a branch and the
+    /// working tree, or those a stash holds (nothing applied), each opening as the branch or stash has it beside the file,
+    /// where Settings opens diffs.</summary>
+    public WorkingTreeDiffView? ShowWorkingTreeDiff(WorkingTreeComparison compared)
+    {
+        if (Vcs.Repository is null)
+        {
+            StatusText = Vcs.NoRepository;
+            return null;
+        }
+        ToolDock.Show(ToolWindowIds.Git);
+        return GitWindow.ShowWorkingTreeDiff(compared);
+    }
+
+    /// <summary>A file of a Show Diff with Working Tree tab beside the file now, as the branch or stash has it; an empty side
+    /// where it has none of the file (a branch's file added since, one a stash deleted). A file a stash renamed is beside
+    /// where the working tree still has it.</summary>
+    private Task<DiffWindow?> CompareWithWorkingTreeAsync(WorkingTreeComparison compared, FileChange file)
+    {
+        if (compared.Stash is null)
+        {
+            return CompareWithAsync(file.Path, compared.Revision, compared.Name, file.From ?? file.Path, added: file.Kind == ChangeKind.Added);
+        }
+        string local = file is { Kind: ChangeKind.Renamed, From: { } from } && !File.Exists(file.Path) ? from : file.Path;
+        return CompareWithAsync(local, compared.RevisionOf(file), compared.Name, file.Path, added: file.Kind == ChangeKind.Deleted);
     }
 
     /// <summary>A popup that closes the window's asking popup once it is done.</summary>
@@ -402,11 +428,13 @@ public sealed partial class EditorWindow
         GitWindow.Log.Branches?.FocusSearch();
     }
 
-    /// <summary>Unstash Changes: the stashes to pop, apply or drop (once the person agrees).</summary>
+    /// <summary>Unstash Changes: the stashes to pop, apply or drop (once the person agrees), or to look at beside the
+    /// working tree.</summary>
     public async Task<UnstashPopup?> ShowUnstashAsync()
     {
         UnstashPopup popup = new(await Vcs.StashesAsync(), async (stash, pop) => (await Vcs.UnstashAsync(stash, pop)).Succeeded,
-            async stash => (await Vcs.DropStashAsync(stash)).Succeeded, (title, text, yes) => new ConfirmDialog(title, text, yes).ShowDialog<bool>(this));
+            async stash => (await Vcs.DropStashAsync(stash)).Succeeded, (title, text, yes) => new ConfirmDialog(title, text, yes).ShowDialog<bool>(this),
+            stash => ShowWorkingTreeDiff(WorkingTreeComparison.Of(stash)));
         popup.Done += (_, _) =>
         {
             if (Asking == popup)

@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Vcs/DiffWindow.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/Vcs/DiffWindow.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia.Controls;
 using Avalonia.Input;
 
@@ -26,7 +26,7 @@ public sealed class DiffWindow : IdeWindow, IDiffHost
                 e.Handled = true;
             }
         };
-        Opened += (_, _) => view.Right.Focus();
+        Opened += (_, _) => view.Keyed.Focus();
     }
 
     public DiffContent Shown { get; }

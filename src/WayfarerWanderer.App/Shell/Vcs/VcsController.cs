@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Vcs/VcsController.cs, MIT (notices/Passenger/LICENSE): without agents' calls,
+// From Passenger 494009d7 src/Passenger.App/Vcs/VcsController.cs, MIT (notices/Passenger/LICENSE): without agents' calls,
 // containers' secrets or .NET's gitignore, its Git folders watched by Wayfarer's own GitWatcher,
 // its change bars' typing pause its own (Wayfarer has no TypingPauses).
 using WayfarerWanderer.App.Shell.Workspace;
@@ -46,6 +46,9 @@ public sealed class VcsController : IDisposable
     /// wherever it was made (git mv in a terminal, a move here in an earlier session), which its bars, diff and rollback
     /// compare with.</summary>
     private Dictionary<string, string> renamed = new(PathNames.Comparer);
+
+    /// <summary>The files the last status lists as untracked, which the last commit has nowhere, whatever was moved here.</summary>
+    private HashSet<string> untracked = new(PathNames.Comparer);
 
     private Git? git;
     private int opened;
@@ -340,6 +343,7 @@ public sealed class VcsController : IDisposable
         textsRead = false;
         moves.Clear();
         renamed = new(PathNames.Comparer);
+        untracked = new(PathNames.Comparer);
     }
 
     /// <summary>Watches Git's folders the folder watcher does not: Git's folder and its common folder, wherever they are but
@@ -392,6 +396,7 @@ public sealed class VcsController : IDisposable
         textsRead = false;
         moves.Clear();
         renamed = new(PathNames.Comparer);
+        untracked = new(PathNames.Comparer);
         return RefreshAsync();
     }
 
@@ -665,11 +670,12 @@ public sealed class VcsController : IDisposable
             if (!textsRead || status.Head != textsOf)
             {
                 renamed = Renames(status.Changes);
+                untracked = Untracked(status.Changes);
                 ReadTexts(repository, status.Head);
             }
             else
             {
-                TakeRenames(Renames(status.Changes));
+                TakeRenames(Renames(status.Changes), Untracked(status.Changes));
             }
         }
         Changed?.Invoke(this, EventArgs.Empty);
@@ -1589,9 +1595,11 @@ public sealed class VcsController : IDisposable
             : Report(pushed.Succeeded, pushed.Succeeded ? $"Pushed {branch.Name}" : $"Push failed: {pushed.Message}");
     }
 
-    /// <summary>The files that differ between a branch or tag and the working tree.</summary>
-    public async Task<IReadOnlyList<FileChange>> ChangesSinceAsync(BranchInfo branch) =>
-        git is { } repository ? await repository.ChangesSinceAsync(branch.Ref.FullName) : [];
+    /// <summary>The files a Show Diff with Working Tree tab lists: those that differ between a branch or tag and the
+    /// working tree, or those a stash holds.</summary>
+    public async Task<IReadOnlyList<FileChange>> ChangesSinceAsync(WorkingTreeComparison compared) => git is not { } repository ? []
+        : compared.Stash is { } stash ? await repository.StashFilesAsync(stash)
+        : await repository.ChangesSinceAsync(compared.Revision);
 
     /// <summary>The commits of one revision another lacks ("main..feature"), newest first.</summary>
     public async Task<IReadOnlyList<CommitInfo>> LogAsync(IReadOnlyList<string> revisions) =>
@@ -2118,12 +2126,21 @@ public sealed class VcsController : IDisposable
         await bytes is { } read ? await BackgroundWork.Run(() => FileVersion.Read(read, encoding, path)) : null;
 
     /// <summary>A file or folder moved here (a rename, a code fix): until a commit has its files at their new paths,
-    /// their change bars, diff and rollback compare with what the last commit has where they were. What the index has of
-    /// it moves with it, as git mv moves it, so the status shows a rename; the next read waits for that. The moves made
+    /// their change bars, diff and rollback compare with what the last commit has where they were. A move back where it
+    /// came from (Undo's) takes the move out, so what comes at the name it left has no origin. What the index has of it
+    /// moves with it, as git mv moves it, so the status shows a rename; the next read waits for that. The moves made
     /// together (a refactoring's, an Undo's) go to the index together, in one write.</summary>
     public void Moved(string from, string to)
     {
-        moves.Add((from, to));
+        int brought = moves.FindLastIndex(m => PathNames.Same(m.To, from));
+        if (brought >= 0 && PathNames.Same(moves[brought].From, to))
+        {
+            moves.RemoveAt(brought);
+        }
+        else
+        {
+            moves.Add((from, to));
+        }
         heads.Clear();
         if (git is not { } repository)
         {
@@ -2181,12 +2198,17 @@ public sealed class VcsController : IDisposable
     }
 
     /// <summary>Where a file is in the last commit: where the status found it renamed from, else where it was before every
-    /// move made here since the folder opened (or where that was renamed from, until the status reads those moves).</summary>
+    /// move made here since the folder opened (or where that was renamed from, until the status reads those moves); a file
+    /// the status lists as untracked is where it is, new, whatever was moved to its name before.</summary>
     public string Origin(string path)
     {
         if (renamed.TryGetValue(path, out string? from))
         {
             return from;
+        }
+        if (untracked.Contains(path))
+        {
+            return path;
         }
         for (int i = moves.Count - 1; i >= 0; i--)
         {
@@ -2194,6 +2216,9 @@ public sealed class VcsController : IDisposable
         }
         return renamed.GetValueOrDefault(path) ?? path;
     }
+
+    private static HashSet<string> Untracked(IReadOnlyList<FileChange> changes) =>
+        new(changes.Where(c => c.Kind is ChangeKind.Unversioned).Select(c => c.Path), PathNames.Comparer);
 
     private static Dictionary<string, string> Renames(IReadOnlyList<FileChange> changes)
     {
@@ -2208,17 +2233,20 @@ public sealed class VcsController : IDisposable
         return found;
     }
 
-    /// <summary>A status's renames taken in: each file whose place in the last commit they move is read there again, an
-    /// open one's bars worked out again; none is when they move nothing (a move here the status has caught up with).</summary>
-    private void TakeRenames(Dictionary<string, string> now)
+    /// <summary>A status's renames and untracked files taken in: each file whose place in the last commit they move is read
+    /// there again, an open one's bars worked out again; none is when they move nothing (a move here the status has caught
+    /// up with).</summary>
+    private void TakeRenames(Dictionary<string, string> now, HashSet<string> nowUntracked)
     {
-        if (now.Count == renamed.Count && now.All(r => renamed.TryGetValue(r.Key, out string? was) && PathNames.Same(was, r.Value)))
+        if (now.Count == renamed.Count && now.All(r => renamed.TryGetValue(r.Key, out string? was) && PathNames.Same(was, r.Value))
+            && nowUntracked.SetEquals(untracked))
         {
             return;
         }
         string[] read = [.. heads.Keys];
         string[] before = [.. read.Select(Origin)];
         renamed = now;
+        untracked = nowUntracked;
         for (int i = 0; i < read.Length; i++)
         {
             if (PathNames.Same(before[i], Origin(read[i])))

@@ -10,9 +10,9 @@ using A = WayfarerWanderer.App.Shell.AppActions;
 
 namespace WayfarerWanderer.Tests;
 
-/// <summary>Passenger 0.4.2's Git features in Wayfarer's window: the status bar's branch, staging a change or just its
-/// selected lines from a diff, rolling back the change at a diff's caret in a file not open, Group by Directory, and Show
-/// Diff with Working Tree of a file the branch lacks.</summary>
+/// <summary>Passenger's Git features in Wayfarer's window: the status bar's branch, staging a change or just its selected
+/// lines from a diff, rolling back the change at a diff's caret in a file not open, Group by Directory, Show Diff with
+/// Working Tree of a file the branch lacks, and a stash's files shown beside the working tree without unstashing.</summary>
 public sealed class GitUiTests : IDisposable
 {
     private readonly string root = PathNames.Canonical(Directory.CreateTempSubdirectory("wayfarer-git-").FullName);
@@ -177,7 +177,37 @@ public sealed class GitUiTests : IDisposable
             DiffWindow? shown = await window.CompareWithAsync(added, "refs/heads/main", "main", added, added: true);
             Assert.NotNull(shown);
             Assert.Equal(string.Empty, shown.View.Left.Document.Snapshot.ToString());
+            Assert.Equal(MergeSide.Left, shown.View.NoFile);
+            Assert.False(shown.View.Left.IsVisible);
+            Assert.Same(shown.View.Right, shown.View.Keyed);
             shown.Close();
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task EnterOnAStashShowsItsFilesBesideTheWorkingTreeAndUnstashesNothing()
+    {
+        string main = Path.Combine(root, "Main.java");
+        Write("Main.java", Lines("a", "b", "stashed", "d", "e", "f", "g", "h", "i", "j"));
+        Git("stash", "push", "-q", "-m", "half done");
+        EditorWindow window = await OpenAsync();
+        try
+        {
+            await Until(() => window.Vcs.Repository is not null);
+            UnstashPopup? popup = await window.ShowUnstashAsync();
+            Assert.NotNull(popup);
+            popup.ShowFiles();
+            App.Shell.ToolWindows.WorkingTreeDiffView? files = window.GitWindow.Shown as App.Shell.ToolWindows.WorkingTreeDiffView;
+            Assert.NotNull(files);
+            Assert.Equal("stash@{0}", files.Compared.Name);
+            await Until(() => files.Files.Count > 0);
+            Assert.Equal([main], files.Files.Select(f => f.Path));
+            Assert.Equal(Lines("a", "b", "c", "d", "e", "f", "g", "h", "i", "j"), File.ReadAllText(main));
+            Assert.Equal("stash@{0}", Git("stash", "list", "--format=%gd").Trim());
         }
         finally
         {
