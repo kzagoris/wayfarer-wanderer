@@ -133,6 +133,8 @@ public static class MainMenuPlaces
         [AppActions.ResolveConflicts] = [new("Git", 2, 5)],
         [AppActions.Stage] = [new("Git", 2, 6)],
         [AppActions.Unstage] = [new("Git", 2, 7)],
+        [AppActions.AddToGitIgnore] = [new("Git", 2, 8)],
+        [AppActions.GoToIgnoringLine] = [new("Git", 2, 9)],
         [AppActions.CreateRepository] = [new("Git", 3, 0)],
         [AppActions.CommitSigning] = [new("Git", 3, 1)],
 

@@ -269,6 +269,11 @@ public static class AppActions
     public const string NewFolder = "app.explorer.newFolder";
     public const string NewType = "app.explorer.newType";
 
+    // A folder's .editorconfig, .gitignore and .gitattributes made, or opened where one is: no keys of Rider's.
+    public const string NewEditorConfig = "app.explorer.newEditorConfig";
+    public const string NewGitIgnore = "app.explorer.newGitIgnore";
+    public const string NewGitAttributes = "app.explorer.newGitAttributes";
+
     // New Item: dotnet new's item templates and Passenger's own, by Rider's New (NewElement) keys where Generate does not take
     // them (Visual Studio's keymaps; VS Code's give them all to Generate).
     public const string NewItem = "app.explorer.newItem";
@@ -650,6 +655,11 @@ public static class AppActions
     public const string ShowHistoryForSelection = "app.vcs.showHistoryForSelection";
     public const string CompareWithBranch = "app.vcs.compareWithBranch";
     public const string CompareWithRevision = "app.vcs.compareWithRevision";
+
+    // A file or folder added to the repository's .gitignore, and the ignore file's line deciding whether git ignores one:
+    // no keys of Rider's.
+    public const string AddToGitIgnore = "app.vcs.addToGitIgnore";
+    public const string GoToIgnoringLine = "app.vcs.goToIgnoringLine";
 
     // Rider's Local History (LocalHistory.ShowHistory, LocalHistory.ShowProjectHistory, RecentChanges and
     // LocalHistory.PutLabel): its Visual Studio keymaps give none of them keys, and take Recent Changes' Alt+Shift+C off.

@@ -58,7 +58,8 @@ public sealed class ExplorerActionsTests : IDisposable
             ExplorerNode app = Choose(window, "app");
             IReadOnlyList<Control> menu = window.Explorer.MenuFor!(app)!;
             Assert.Equal(["Add", "Edit", "Copy Path", "Open In"], Headers(menu));
-            Assert.Equal(["New File…", "New Folder…", "Java/Kotlin Class…"], Headers(Sub(menu, "Add")));
+            Assert.Equal(["New File…", "New Folder…", "Java/Kotlin Class…", ".editorconfig File", ".gitignore File", ".gitattributes File"],
+                Headers(Sub(menu, "Add")));
             Assert.Equal(["Cut", "Copy", "Paste", "Delete…", "Rename…"], Headers(Sub(menu, "Edit")));
             // Nothing was cut or copied yet, so Paste says so by being off.
             Assert.False(Item(Sub(menu, "Edit"), E.Paste).IsEnabled);

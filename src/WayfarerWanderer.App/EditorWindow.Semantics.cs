@@ -5,6 +5,7 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Passenger.Core;
 using Passenger.Text;
+using WayfarerWanderer.App.Shell.Vcs;
 using WayfarerWanderer.Jvm;
 
 namespace WayfarerWanderer.App;
@@ -27,9 +28,12 @@ public sealed partial class EditorWindow
     private CancellationTokenSource? completionAsk;
 
     /// <summary>What the open suggestion list was asked for: the document and where the word began, and the server's
-    /// answer, narrowed locally as the word grows.</summary>
-    private sealed record CompletionSession(string Path, TextDocument Document, int WordStart, JvmLanguageClient Client,
-        IReadOnlyList<CompletionChoice> Choices, bool Incomplete);
+    /// answer (or the file's own help's, <see cref="Assist"/>, with no server), narrowed locally as the word grows.</summary>
+    private sealed record CompletionSession(string Path, TextDocument Document, int WordStart, JvmLanguageClient? Client,
+        IReadOnlyList<CompletionChoice> Choices, bool Incomplete)
+    {
+        public IFileAssist? Assist { get; init; }
+    }
 
     /// <summary>How long typing a letter waits for the next before asking the server, so a word typed quickly asks once.</summary>
     internal static TimeSpan CompletionDelay { get; set; } = TimeSpan.FromMilliseconds(120);
@@ -43,8 +47,9 @@ public sealed partial class EditorWindow
 
     private void AddSemanticActions()
     {
-        Actions.Add(new(CompleteAction, "Complete Code", SemanticAvailable,
-            () => UnawaitedWork.Observe(AskCompletionAsync(trigger: null, explicitly: true, delay: TimeSpan.Zero))));
+        Actions.Add(new(CompleteAction, "Complete Code", () => ShownAssist is not null || SemanticAvailable(),
+            () => UnawaitedWork.Observe(ShownAssist is { } assist ? AskAssistCompletionAsync(assist, explicitly: true)
+                : AskCompletionAsync(trigger: null, explicitly: true, delay: TimeSpan.Zero))));
         // A workspace rename edits files from the model; while it is older than the build files (an import failed or is
         // running) the rename waits. Completion only suggests, so it stays.
         Actions.Add(new(RenameAction, "Rename Symbol…", () => SemanticAvailable() && Session?.IsStale == false,
@@ -293,7 +298,13 @@ public sealed partial class EditorWindow
     /// list open a letter narrows it (asking again only if the server said its list was partial) and anything else closes it.</summary>
     private void OnTypedForCompletion(string text)
     {
-        if (text.Length == 0 || semanticBusy || !SemanticAvailable()) return;
+        if (text.Length == 0) return;
+        if (ShownAssist is { } assist)
+        {
+            OnTypedForAssist(assist, text);
+            return;
+        }
+        if (semanticBusy || !SemanticAvailable()) return;
         char last = text[^1];
         if (completing is not null)
         {
@@ -371,7 +382,7 @@ public sealed partial class EditorWindow
         int caret = Editor.Selections.Primary.Caret;
         var snapshot = session.Document.Snapshot;
         if (SourcePath != session.Path || !ReferenceEquals(Editor.Document, session.Document) || Editor.Selections.Count > 1 ||
-            caret < session.WordStart || caret > snapshot.Length || CompletionModel.WordStart(snapshot, caret) != session.WordStart)
+            caret < session.WordStart || caret > snapshot.Length || CompletionStart(session, snapshot, caret) != session.WordStart)
         {
             CloseCompletion();
             return;
@@ -401,8 +412,13 @@ public sealed partial class EditorWindow
     {
         if (completing is not { } session) return;
         CloseCompletion();
+        if (session.Assist is { } assist)
+        {
+            AcceptAssistChoice(session, assist, choice);
+            return;
+        }
         JsonElement item = choice.Item;
-        if (!item.TryGetProperty("additionalTextEdits", out _) && item.TryGetProperty("data", out _))
+        if (!item.TryGetProperty("additionalTextEdits", out _) && item.TryGetProperty("data", out _) && session.Client is not null)
         {
             try
             {

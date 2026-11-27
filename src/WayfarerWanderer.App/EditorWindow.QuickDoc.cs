@@ -108,9 +108,9 @@ public sealed partial class EditorWindow
         bool shown = await ShowQuickDocAtAsync(caret, Editor.PointOf(caret), sticky: true, startServer: true);
         if (!shown && SourcePath == path)
         {
-            StatusText = HoverProvider is null && Language(path) is null
+            StatusText = HoverProvider is null && Language(path) is null && AssistFor(path) is null
                 ? $"No documentation available for {Path.GetFileName(path)}"
-                : HoverProvider is null && !SemanticAvailable()
+                : HoverProvider is null && AssistFor(path) is null && !SemanticAvailable()
                     ? "Documentation is available once the folder is trusted and its project read"
                     : "No documentation found at the caret";
         }
@@ -149,7 +149,8 @@ public sealed partial class EditorWindow
             }
 
             string language = Language(path) ?? string.Empty;
-            JvmModule? module = CurrentModule();
+            // A file of Wayfarer's own help belongs to no module.
+            JvmModule? module = AssistFor(path) is null ? CurrentModule() : null;
             (QuickDoc doc, string? footer) = await Task.Run(() =>
             {
                 QuickDoc parsed = QuickDocParser.Parse(markdown, language);
@@ -188,6 +189,11 @@ public sealed partial class EditorWindow
         if (HoverProvider is { } provider)
         {
             return await provider(path, position, cancel);
+        }
+        if (AssistFor(path) is { } assist)
+        {
+            TextSnapshot text = document.Snapshot;
+            return await assist.HoverAsync(path, text, document.IsModified, text.GetOffset(position), cancel);
         }
         if (Language(path) is null || (startServer ? !SemanticAvailable() : RunningServerFor(path) is null))
         {
