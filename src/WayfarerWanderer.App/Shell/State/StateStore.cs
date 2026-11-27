@@ -45,9 +45,29 @@ public sealed class StateStore
     /// <summary>A state folder other than the person's, for a test or a second, separate setup.</summary>
     public const string Variable = "WAYFARER_SETTINGS";
 
-    public static string DefaultRoot => Named ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Passenger.Core.Product.Name);
+    /// <summary>The folder: WAYFARER_SETTINGS names it, else a portable copy's data folder (<see cref="ThisCopy.Data"/>),
+    /// else the user's local application data.</summary>
+    public static string DefaultRoot => Named ?? ThisCopy.Data ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Passenger.Core.Product.Name);
 
-    public static string? Named => Environment.GetEnvironmentVariable(Variable) is { Length: > 0 } folder ? folder : null;
+    /// <summary>The folder WAYFARER_SETTINGS names, or null where it names none or this portable copy's own data folder,
+    /// which it gave the programs it starts (<see cref="NameWhole"/>).</summary>
+    public static string? Named => Environment.GetEnvironmentVariable(Variable) is { Length: > 0 } folder
+        && !(ThisCopy.Data is { } data && PathNames.Same(folder, data)) ? folder : null;
+
+    /// <summary>Makes a folder WAYFARER_SETTINGS names by a relative path the one it names from the folder Wayfarer was
+    /// started in, and names a portable copy's data folder where it names none: this process and every program it starts
+    /// (a terminal's shell, another Wayfarer) then take the same folder.</summary>
+    public static void NameWhole()
+    {
+        if (Named is { } named && !Path.IsPathFullyQualified(named))
+        {
+            OwnEnvironment.Set(Variable, Path.GetFullPath(named));
+        }
+        else if (Named is null && ThisCopy.Data is { } data)
+        {
+            OwnEnvironment.Set(Variable, data);
+        }
+    }
 
     public string Root { get; }
 

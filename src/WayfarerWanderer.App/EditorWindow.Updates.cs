@@ -110,7 +110,10 @@ public sealed partial class EditorWindow
             if (answer is ReleaseAnswer.Newer offered) available = offered.Release;
             else if (answer is ReleaseAnswer.Current && installer?.Ready is null) available = null;
             string message = answer.Said;
-            if (answer is ReleaseAnswer.Newer newer && installer is not null && SettingsKept.Value.CheckForUpdates)
+            // A portable copy, or a package manager's, says what puts the release in its place.
+            if (answer is ReleaseAnswer.Newer && installer is null && Updater.LeftElsewhere() is { } leftElsewhere)
+                message += $" {leftElsewhere.Why}";
+            else if (answer is ReleaseAnswer.Newer newer && installer is not null && SettingsKept.Value.CheckForUpdates)
             {
                 if (installer.Ready == newer.Release.Version)
                     message = ReadyMessage(newer.Release);

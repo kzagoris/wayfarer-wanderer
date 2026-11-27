@@ -46,16 +46,30 @@ public static partial class ThisCopy
     public static string FolderOf(string programs)
     {
         string trimmed = Path.TrimEndingDirectorySeparator(programs);
-        if (MacBundles.Of(Path.Combine(trimmed, Product.ProgramName)) is { } bundle)
+        if ((MacBundles.Of(Path.Combine(trimmed, Product.ProgramName)) ?? BundleHolding(trimmed)) is { } bundle)
         {
             return Path.GetDirectoryName(Untranslocated(bundle)) ?? trimmed;
         }
-        // The Linux archive's passenger/ folder: the app in app/, its launcher beside.
-        if (Path.GetFileName(trimmed) == "app" && Path.GetDirectoryName(trimmed) is { } above && File.Exists(Path.Combine(above, "passenger")))
+        // An archive's folder with the app in app/ and its launcher, named as the program is, beside.
+        if (Path.GetFileName(trimmed) == "app" && Path.GetDirectoryName(trimmed) is { } above && File.Exists(Path.Combine(above, Product.ProgramName)))
         {
             return above;
         }
         return trimmed;
+    }
+
+    /// <summary>The app bundle whose Contents hold a program's folder anywhere below it (Wayfarer's app in
+    /// <c>X.app/Contents/Resources/app</c>, its launcher in Contents/MacOS), or null.</summary>
+    private static string? BundleHolding(string programs)
+    {
+        for (string? at = programs; !string.IsNullOrEmpty(at); at = Path.GetDirectoryName(at))
+        {
+            if (Path.GetFileName(at) == "Contents" && Path.GetDirectoryName(at) is { } bundle && MacBundles.Named(bundle))
+            {
+                return bundle;
+            }
+        }
+        return null;
     }
 
     /// <summary>The portable state folder in a copy's folder, made canonical, or null where there is none.</summary>
