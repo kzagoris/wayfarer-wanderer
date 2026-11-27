@@ -4,13 +4,14 @@ using WayfarerWanderer.Jvm;
 namespace WayfarerWanderer.App;
 
 /// <summary>New Project: the dialog (<see cref="NewProjectDialog"/>) over the window, the starters made lately listed first,
-/// and the project it made opened in it, its starter kept among the recent ones.</summary>
+/// and the project it made opened in it, its starter kept among the recent ones and its Git choices for the next.</summary>
 public sealed class NewProjectAction
 {
     public async Task<ProjectGenerationResult?> RunAsync(EditorWindow owner, CancellationToken cancellationToken = default)
     {
         StateDocument<RecentTemplatesState>? kept = EditorApplication.State?.Templates;
-        NewProjectDialog dialog = new(DefaultFolder(owner.Session?.Root), recent: kept?.Value.Newest());
+        StateDocument<RepositoryChoices>? git = EditorApplication.State?.NewProject;
+        NewProjectDialog dialog = new(DefaultFolder(owner.Session?.Root), recent: kept?.Value.Newest(), repository: git?.Value);
         ProjectGenerationResult? result = await dialog.ShowDialog<ProjectGenerationResult?>(owner);
         if (result is null)
         {
@@ -20,7 +21,12 @@ public sealed class NewProjectAction
         {
             kept.Set(kept.Value.Made(made, DateTimeOffset.Now));
         }
+        git?.Set(dialog.RepositoryChosen);
         await owner.OpenWorkspaceAsync(result.Destination, cancellationToken);
+        if (dialog.RepositoryProblem is { } problem)
+        {
+            owner.StatusText = problem;
+        }
         return result;
     }
 

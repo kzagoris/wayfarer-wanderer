@@ -421,7 +421,7 @@ public sealed class VcsController : IDisposable
     public string? WhyNotCreate => lookIn is null ? Refusals.NoFolder : git is not null ? Refusals.InRepository : Refused;
 
     /// <summary>Create Git Repository: the open folder made a working tree and read as it is when a folder opens, given
-    /// first a .gitignore of Maven's, Gradle's and IntelliJ's output where it has none (<see cref="JvmIgnored"/>), so build
+    /// first a .gitignore of Maven's, Gradle's and IntelliJ's output where it has none (<see cref="RepositoryFiles.GitIgnore"/>), so build
     /// output is never offered for its first commit. A .gitignore that could not be written is said with the repository made; one written for a
     /// repository git then could not make is taken away again.</summary>
     public async Task<VcsOutcome> InitAsync()
@@ -446,7 +446,7 @@ public sealed class VcsController : IDisposable
         {
             try
             {
-                await File.WriteAllTextAsync(ignore, JvmIgnored);
+                await File.WriteAllTextAsync(ignore, RepositoryFiles.GitIgnore);
                 wrote = true;
             }
             catch (Exception refused) when (refused is IOException or UnauthorizedAccessException)
@@ -469,37 +469,6 @@ public sealed class VcsController : IDisposable
         return git is null ? Report(false, NoRepository)
             : Report(true, unwritten is null ? created : $"{created}, with no .gitignore: {unwritten}");
     }
-
-    /// <summary>The .gitignore Create Git Repository writes: what Maven, Gradle, IntelliJ and the JVM leave behind.</summary>
-    public const string JvmIgnored = """
-        # Build output
-        target/
-        build/
-        out/
-        bin/
-        *.class
-
-        # Gradle
-        .gradle/
-        !gradle/wrapper/gradle-wrapper.jar
-
-        # Kotlin
-        .kotlin/
-
-        # IntelliJ IDEA
-        .idea/
-        *.iml
-        *.iws
-
-        # Logs and crash files
-        *.log
-        hs_err_pid*
-
-        # Operating systems
-        .DS_Store
-        Thumbs.db
-
-        """;
 
     /// <summary>Create Git Repository's stage as git makes the repository.</summary>
     private const string Creating = "Creating the Git repository…";

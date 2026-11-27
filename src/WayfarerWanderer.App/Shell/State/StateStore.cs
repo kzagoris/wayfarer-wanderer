@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/State/StateStore.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/State/StateStore.cs, MIT (notices/Passenger/LICENSE).
 using System.Text.Json.Nodes;
 using Passenger.Core;
 using WayfarerWanderer.App.Shell.Settings;
@@ -14,6 +14,9 @@ public sealed class StateStore
 
     /// <summary>The file of the starters New Project made something from lately (<see cref="Templates"/>).</summary>
     public const string TemplatesFile = "recentTemplates.json";
+
+    /// <summary>The file of what New Project made for Git with the last project (<see cref="NewProject"/>).</summary>
+    public const string NewProjectFile = "newProject.json";
 
     private static readonly Dictionary<string, StateStore> Shared = new(StringComparer.Ordinal);
 
@@ -31,6 +34,7 @@ public sealed class StateStore
         Recent = new(Path.Combine(root, "recentFolders.json"));
         Trust = new(Path.Combine(root, "trust.json"));
         Templates = new(Path.Combine(root, TemplatesFile));
+        NewProject = new(Path.Combine(root, NewProjectFile));
         // Before this process writes any: a change is written a moment after it is made, and only through this store.
         UsedBefore = File.Exists(Path.Combine(root, SettingsFile)) || File.Exists(Recent.Path) || Directory.Exists(Path.Combine(root, "workspaces"));
     }
@@ -62,6 +66,9 @@ public sealed class StateStore
 
     /// <summary>The starters New Project made something from lately, which its list shows first.</summary>
     public StateDocument<RecentTemplatesState> Templates { get; }
+
+    /// <summary>What New Project made for Git with the last project, which it offers next.</summary>
+    public StateDocument<RepositoryChoices> NewProject { get; }
 
     public static StateStore Open(string root)
     {
@@ -125,6 +132,7 @@ public sealed class StateStore
         Recent.Flush();
         Trust.Flush();
         Templates.Flush();
+        NewProject.Flush();
         foreach ((ProjectState documents, _) in projects.Values)
         {
             documents.Flush();

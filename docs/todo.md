@@ -50,7 +50,7 @@ Spring Boot):
 ## New Project: closer to IntelliJ
 
 - Build system as segmented buttons (IntelliJ / Maven / Gradle) instead of a drop-down.
-- "Create Git repository" and "Add sample code" check boxes.
+- An "Add sample code" check box. ("Create Git repository" came with Passenger v0.4.6: `RepositoryFiles`.)
 - A one-click "Download <vendor> <version>" row at the top of the JDK drop-down, as IntelliJ shows for the newest JDK
   (needs a catalogue call when the dialog opens).
 - A `<No JDK>` choice.
