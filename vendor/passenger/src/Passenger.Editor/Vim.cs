@@ -230,12 +230,13 @@ public sealed partial class Vim(VimRegisters registers)
         VimResult result = command is null ? VimResult.Held
             : WritesIntoEmpty(command, text, view) ? OnOneEmptyLine(command, text, view)
             : Run(command, text, selections, view);
-        if ((command is { Operator: null, Name: "." or "p" or "P" or "~" or "r" or "h" or "l" or "f" or "F" or "t" or "T" or ";" or "," or "*" or "#"
+        if ((command is { Operator: null, Name: "." or "p" or "P" or "gp" or "gP" or "~" or "r" or "h" or "l" or "f" or "F" or "t" or "T" or ";" or "," or "*" or "#"
                 or "S" or "Y" or "s" or "x" or "X" or "J" or "gJ" or "%" or "+" or "-" or "_" }
             && (ReferenceEquals(result, VimResult.Held) || result is { Edits: null, Selections: null, ReadsClipboard: false }))
-            || (command is { Operator: not null, Name: not ("i" or "a" or "$") } && ReferenceEquals(result, VimResult.Held)))
+            || (command is { Operator: not null, Name: not ("i" or "a" or "$" or "(" or ")" or "{" or "}" or "b" or "B" or "ge" or "gE" or "n" or "N") }
+                && ReferenceEquals(result, VimResult.Held)))
         {
-            // One that can't act (nothing to repeat or put, nowhere to go, its operator's motion failing) keeps j and k's column.
+            // One that can't act (nothing to repeat or put, nowhere to go, its operator's motion failing but by sentence, paragraph, word back or search) keeps j and k's column.
             wantedFor = aimedFor;
         }
         if (command is { Operator: not null, Name: "$" } or { Operator: null, Name: "C" or "D" } && ReferenceEquals(result, VimResult.Held))
@@ -274,9 +275,14 @@ public sealed partial class Vim(VimRegisters registers)
             intoEmptied = false;
         }
         typingIntoEmptied = Mode == VimMode.Insert;
-        if (result.Edits is { Count: > 0 } made)
+        if (result.Edits is { Count: > 0 } made && made.Any(plan => !plan.Edits.Any() || plan.Edits.Any(edit => edit.Length > 0 || edit.Text.Length > 0)))
         {
             return result with { Edits = [line, .. made.Select(p => p with { Kind = EditKind.Joined })] };
+        }
+        if (result.Edits is { Count: > 0 } && Mode is not (VimMode.Insert or VimMode.Replace))
+        {
+            // Edits that each write nothing (a visual put of an empty register) leave the text empty, as Vim's buffer stays.
+            return result with { Edits = null, Selections = SelectionSet.Single(0) };
         }
         return Mode is VimMode.Insert or VimMode.Replace ? result with { Edits = [line with { Selections = result.Selections ?? line.Selections }] } : result;
     }
@@ -528,6 +534,7 @@ public sealed partial class Vim(VimRegisters registers)
         }
         if (session is { Count: > 1, How: not ("c" or "cc") } counted && typed is not null && (typed.Length > 0 || counted.How is "o" or "O"))
         {
+            (string Text, int[] Breaks)? entered = breaks is { Count: > 0 } ? WithoutIndents(typed, breaks) : null;
             for (int i = 1; i < Math.Min(counted.Count, Math.Max(2, MostRepeatedText / Math.Max(1, typed.Length))); i++)
             {
                 if (counted.How is "o" or "O")
@@ -539,12 +546,39 @@ public sealed partial class Vim(VimRegisters registers)
                     plans.Add(line);
                     (text, selections) = (text.Apply(line.Edits), line.Selections);
                 }
-                if (typed.Length > 0)
+                if (typed.Length > 0 && entered is ({ } made, { } at))
+                {
+                    // Each line break Enter made is made again as Enter makes it, as . does.
+                    int from = 0;
+                    foreach (int place in at.Append(made.Length))
+                    {
+                        if (place > from)
+                        {
+                            EditPlan part = TextEditing.Insert(text, selections, made[from..place], EditKind.Joined);
+                            plans.Add(part);
+                            (text, selections) = (text.Apply(part.Edits), part.Selections);
+                        }
+                        if (place < made.Length)
+                        {
+                            EditPlan broken = TextEditing.NewLine(text, selections, view.LineEnding, view.Indent, view.Markup) with { Kind = EditKind.Joined };
+                            plans.Add(broken);
+                            (text, selections) = (text.Apply(broken.Edits), broken.Selections);
+                        }
+                        from = place + 1;
+                    }
+                }
+                else if (typed.Length > 0)
                 {
                     EditPlan again = TextEditing.Insert(text, selections, LineEndings.In(typed, view.LineEnding), EditKind.Joined);
                     plans.Add(again);
                     (text, selections) = (text.Apply(again.Edits), again.Selections);
                 }
+            }
+            if (entered is not null && indents && Unindented(text, selections) is { } blankAgain)
+            {
+                // The last line the count's Enter indented and left blank loses its indent too.
+                plans.Add(blankAgain);
+                (text, selections) = (text.Apply(blankAgain.Edits), blankAgain.Selections);
             }
         }
         if (session is { } begun && !replaying)

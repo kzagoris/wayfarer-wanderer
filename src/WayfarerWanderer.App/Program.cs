@@ -32,7 +32,7 @@ public partial class EditorApplication : Application
         // The shell's look as Passenger's App sets it up: the accent from the tokens, the fonts, the scale and the caret.
         Themes.TakeAccentFromTokens(this);
         FallbackFonts.Install(PlatformFallback.Named, FaceTracking.Set);
-        CodeFonts.Install(PlatformWidths.Monospaced);
+        CodeFonts.Install(PlatformWidths.Monospaced, PlatformWidths.Readable);
         CodeFonts.Use(this, CodeEditor.CodeFont);
         WindowFonts.Use(this, WindowFonts.Carried);
         InterfaceScale.Use(this, 1);

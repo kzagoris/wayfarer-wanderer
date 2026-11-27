@@ -286,36 +286,36 @@
       "passenger.dap": {
         "type": "Project",
         "dependencies": {
-          "Passenger.Core": "[0.4.2, )"
+          "Passenger.Core": "[0.4.6, )"
         }
       },
       "passenger.editor": {
         "type": "Project",
         "dependencies": {
           "Avalonia": "[12.1.6, )",
-          "Passenger.Core": "[0.4.2, )",
-          "Passenger.Text": "[0.4.2, )"
+          "Passenger.Core": "[0.4.6, )",
+          "Passenger.Text": "[0.4.6, )"
         }
       },
       "passenger.terminal": {
         "type": "Project",
         "dependencies": {
           "Avalonia": "[12.1.6, )",
-          "Passenger.Editor": "[0.4.2, )",
+          "Passenger.Editor": "[0.4.6, )",
           "Porta.Pty": "[2.2.4, )"
         }
       },
       "passenger.text": {
         "type": "Project",
         "dependencies": {
-          "Passenger.Core": "[0.4.2, )"
+          "Passenger.Core": "[0.4.6, )"
         }
       },
       "passenger.vcs": {
         "type": "Project",
         "dependencies": {
-          "Passenger.Core": "[0.4.2, )",
-          "Passenger.Text": "[0.4.2, )"
+          "Passenger.Core": "[0.4.6, )",
+          "Passenger.Text": "[0.4.6, )"
         }
       },
       "wayfarerwanderer.app": {
@@ -327,9 +327,9 @@
           "Avalonia.Themes.Fluent": "[12.1.6, )",
           "HarfBuzzSharp": "[14.4.0.200, )",
           "HarfBuzzSharp.NativeAssets.Linux": "[14.4.0.200, )",
-          "Passenger.Editor": "[0.4.2, )",
-          "Passenger.Terminal": "[0.4.2, )",
-          "Passenger.Vcs": "[0.4.2, )",
+          "Passenger.Editor": "[0.4.6, )",
+          "Passenger.Terminal": "[0.4.6, )",
+          "Passenger.Vcs": "[0.4.6, )",
           "SkiaSharp": "[4.157.0, )",
           "SkiaSharp.NativeAssets.Linux": "[4.157.0, )",
           "Tint": "[0.3.0, )",
@@ -340,8 +340,8 @@
       "wayfarerwanderer.jvm": {
         "type": "Project",
         "dependencies": {
-          "Passenger.Core": "[0.4.2, )",
-          "Passenger.Dap": "[0.4.2, )"
+          "Passenger.Core": "[0.4.6, )",
+          "Passenger.Dap": "[0.4.6, )"
         }
       },
       "Avalonia": {

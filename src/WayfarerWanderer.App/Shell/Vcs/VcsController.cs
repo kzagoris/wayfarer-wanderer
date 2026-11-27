@@ -1646,14 +1646,14 @@ public sealed class VcsController : IDisposable
         : changes.FirstOrDefault(c => c.Kind is ChangeKind.Conflicted) is { } conflicted ? $"{conflicted.Name} is in conflict: resolve it first"
         : null;
 
-    /// <summary>Stages files whole (<see cref="Git.StageAsync"/>), or unstages them (<see cref="Git.UnstageAsync"/>), a
-    /// rename's old name with it, every open file saved first, then reads the status again.</summary>
+    /// <summary>Stages files whole (<see cref="Git.StageAsync"/>), a rename's old name with it, or unstages them (<see
+    /// cref="Git.UnstageAsync"/>), a rename keeping its move in the index, every open file saved first, then reads the
+    /// status again.</summary>
     public Task<VcsOutcome> StageAsync(IReadOnlyList<FileChange> changes, bool stage) =>
-        IndexChangeAsync(stage, repository =>
-        {
-            string[] paths = [.. changes.SelectMany(c => c.From is { } from ? new[] { c.Path, from } : [c.Path])];
-            return stage ? repository.StageAsync(paths) : repository.UnstageAsync(paths);
-        }, Plural.Of(changes.Count, "file"));
+        IndexChangeAsync(stage, repository => stage
+            ? repository.StageAsync([.. changes.SelectMany(c => c.From is { } from ? new[] { c.Path, from } : [c.Path])])
+            : repository.UnstageAsync([.. changes.Where(c => c.From is null).Select(c => c.Path)], [.. changes.Where(c => c.From is not null).Select(c => (c.From!, c.Path))]),
+            Plural.Of(changes.Count, "file"));
 
     /// <summary>Stages some of a file's changes (<see cref="Git.StageChangesAsync"/>), then reads the status again.</summary>
     public Task<VcsOutcome> StageChangesAsync(string path, PartialCommit chosen) =>
@@ -1693,15 +1693,13 @@ public sealed class VcsController : IDisposable
     /// <summary>What git's index holds at each path (its mode and blob, or none), for putting it back as it was.</summary>
     public async Task<IReadOnlyList<(string Path, (string Mode, string Blob)? Entry)>> IndexEntriesAsync(IReadOnlyList<string> paths)
     {
-        List<(string, (string, string)?)> entries = [];
-        if (git is { } repository)
+        if (git is not { } repository)
         {
-            foreach (string path in paths.Distinct(PathNames.Comparer))
-            {
-                entries.Add((path, await repository.IndexEntryAsync(path)));
-            }
+            return [];
         }
-        return entries;
+        string[] distinct = [.. paths.Distinct(PathNames.Comparer)];
+        IReadOnlyList<(string Mode, string Blob)?> held = await repository.IndexEntriesAsync(distinct);
+        return [.. distinct.Select((path, i) => (path, held[i]))];
     }
 
     /// <summary>Puts git's index's entries back as <paramref name="entries"/> has them, then reads the status again: null
@@ -1715,16 +1713,9 @@ public sealed class VcsController : IDisposable
         }
         VcsOutcome put = await OneAtATimeAsync(async () =>
         {
-            foreach ((string path, (string Mode, string Blob)? entry) in entries)
-            {
-                if (await repository.PutIndexEntryAsync(path, entry) is { Succeeded: false } refused)
-                {
-                    await RefreshAsync();
-                    return new VcsOutcome(false, refused.Message);
-                }
-            }
+            GitResult written = await repository.PutIndexEntriesAsync(entries);
             await RefreshAsync();
-            return new VcsOutcome(true, string.Empty);
+            return new VcsOutcome(written.Succeeded, written.Succeeded ? string.Empty : written.Message);
         }, refused => refused);
         return put.Succeeded ? null : put.Message;
     }

@@ -183,6 +183,10 @@ public static class MSBuildNames
     /// <summary>The registry an SDK container's image is pushed to; none for the engine on this machine.</summary>
     public const string ContainerRegistry = "ContainerRegistry";
 
+    /// <summary>The engine on this machine an SDK container's image is loaded into, by its CLI (Docker, Podman); with none
+    /// named, the SDK takes the first it finds, Apple's or WSL's own before either.</summary>
+    public const string LocalRegistry = "LocalRegistry";
+
     /// <summary>An SDK container's several tags, the one tag's place where it has more than one.</summary>
     public const string ContainerImageTags = "ContainerImageTags";
 
@@ -232,6 +236,10 @@ public static class MSBuildNames
 
     /// <summary>The target that restores a project's packages.</summary>
     public const string Restore = "Restore";
+
+    // WPF's markup compilation at design time, and the target a build runs it after, which resolves the references.
+    public const string DesignTimeMarkupCompilation = "DesignTimeMarkupCompilation";
+    public const string ResolveReferences = "ResolveReferences";
 
     /// <summary>"true" has a question's evaluation pass over the restore's assets, which it reads nothing of.</summary>
     public const string SkipResolvePackageAssets = "SkipResolvePackageAssets";

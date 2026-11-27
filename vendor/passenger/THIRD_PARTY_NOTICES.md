@@ -210,7 +210,7 @@ Packages the build or the tests use that no app carries.
 
 | Package | In Passenger | Licence | Copyright |
 |---|---|---|---|
-| `Avalonia.BuildServices` | Avalonia's build task, whose telemetry `AVALONIA_TELEMETRY_OPTOUT` turns off (the README says how) | MIT | Copyright 2023-2025 © The AvaloniaUI Project |
+| `Avalonia.BuildServices` | Avalonia's build task, whose telemetry `AVALONIA_TELEMETRY_OPTOUT` turns off (the README says how) | MIT | Copyright 2023-2026 © The AvaloniaUI Project |
 | `Microsoft.CodeAnalysis.Analyzers` | Roslyn's analyzers, which come with Microsoft.CodeAnalysis.Common | MIT | © Microsoft Corporation. All rights reserved. |
 | `Krafs.Publicizer` | the debugger's build | MIT | © Krafs 2024 |
 | `Microsoft.Build`, `Microsoft.Build.Framework`, `Microsoft.NET.StringTools`, `System.Configuration.ConfigurationManager`, `System.Diagnostics.EventLog`, `System.Reflection.MetadataLoadContext`, `System.Security.Cryptography.ProtectedData` | the project host's build: MSBuild's API and what it depends on, compiled against and never carried, since the host runs the installed SDK's own MSBuild (`src/Passenger.Host`) | MIT | © Microsoft Corporation. All rights reserved. |
@@ -223,6 +223,7 @@ Packages the build or the tests use that no app carries.
 | `Cucumber.HtmlFormatter` | Reqnroll's dependency in the unit tests; Passenger never carries it | MIT | Copyright © Cucumber Ltd |
 | `Avalonia.Fonts.Inter` | Inter 3.019, which `Avalonia.Headless` names and the tests' Avalonia apps take; the app leaves its files out and carries its own Inter (below) | MIT | Copyright 2013-2026 © The AvaloniaUI Project |
 | `Avalonia.Templates` | Avalonia's dotnet new templates, downloaded for the tests' local feed, from which they install them as New Solution does (`AvaloniaApp.Feed`); Passenger never carries them, and installs them only when asked. The package names no licence; its repository's (AvaloniaUI/Avalonia.Templates) is MIT | MIT | Copyright (c) 2023 .NET Foundation and Contributors All Rights Reserved |
+| `Avalonia.Themes.Fluent2` | the Fluent 2 theme Avalonia's templates give an app they make, restored for the tests' package cache (tests/AvaloniaGraphs); Passenger never carries it | MIT | Copyright 2013-2026 © The AvaloniaUI Project |
 | `CommunityToolkit.Mvvm` | the MVVM Toolkit at the version Avalonia's MVVM template writes, downloaded for the tests' package cache, which an app of theirs restores with its generators; Passenger never carries it | MIT | (c) .NET Foundation and Contributors. All rights reserved. |
 | `ReactiveUI`, `ReactiveUI.Core`, `Splat`, `Splat.Builder`, `Splat.Core`, `Splat.Logging` | ReactiveUI and what it depends on, whose view models the XAML tests' Avalonia apps bind to: restored for the tests' package cache (tests/AvaloniaGraphs); Passenger never carries them | MIT | Copyright (c) .NET Foundation and Contributors |
 | `ReactiveUI.SourceGenerators`, `ReactiveUI.Binding` | ReactiveUI's source generators, which make the `[Reactive]` properties and `[ReactiveCommand]` commands those apps bind to, and its bindings: restored for the tests' package cache (tests/AvaloniaGraphs); Passenger never carries them | MIT | Copyright (c) 2026 ReactiveUI and Contributors |
@@ -278,13 +279,15 @@ Packages the build or the tests use that no app carries.
 | `Microsoft.Bcl.AsyncInterfaces`, `Microsoft.Win32.Registry` | the test platform's | MIT | © Microsoft Corporation. All rights reserved. |
 | `vpk` | Velopack's packer, a .NET tool at the version `dotnet-tools.json` pins, which builds the Windows installer (`tools/package-win.sh`). It carries others' programs under their own terms for what Passenger's installer does not use or carry: Microsoft's signtool and Azure Artifact Signing client, which sign it only when signing is asked for (the Windows SDK's and Microsoft's terms), WiX (MS-RL) for MSI packages, and zstd (BSD-3-Clause or GPL-2.0) | MIT | Copyright © Velopack Ltd. All rights reserved. |
 
-### The tests' own ESLint, Prettier and xterm.js
+### The tests' own ESLint, Prettier, Oxlint, Oxfmt, Biome, Yarn and xterm.js
 
-The npm packages `EslintPrettierTests` put in a test folder's node_modules as a project's own ESLint and Prettier, and
-the terminal `TerminalEmulationTests` holds Passenger's terminal to:
+The npm packages `EslintPrettierTests` put in a test folder's node_modules as a project's own ESLint, Prettier, Oxlint,
+Oxfmt and Biome, the Yarn it lays a Plug'n'Play project out with, and the terminal `TerminalEmulationTests` holds
+Passenger's terminal to:
 `tests/Passenger.Tests/NodePackages/package.json` pins them and `package-lock.json` everything they bring, each with
 its tarball's sha512, which the tests' build checks as `tools/Passenger.NodePackages` puts them in the tests' output
-(`node-packages/`). No app carries them, and no test fetches them from npm. Each is named by its npm name, with the
+(`node-packages/`), of a package for some systems only the one for the system it builds on. No app carries them, and no
+test fetches them from npm. Each is named by its npm name, with the
 licence its package.json states and the copyright line its licence file (else its source) carries, else its author.
 `tools/check-notices.py` fails naming any package the lock file pins that is not named here.
 
@@ -293,6 +296,12 @@ licence its package.json states and the copyright line its licence file (else it
 | `eslint` | the project's own ESLint, which Passenger's ESLint support runs through the ESLint language server | MIT | Copyright OpenJS Foundation and other contributors, <www.openjsf.org> |
 | `@xterm/headless` | xterm.js with no screen, the terminal Passenger's own is compared with, output for output | MIT | Copyright (c) 2014-2020 The xterm.js authors; Copyright (c) 2012-2013, Christopher Jeffrey; Copyright (c) 2011 Fabrice Bellard (as its source carries them; it has no licence file) |
 | `prettier`, `prettier2` (Prettier 2.8.8, under npm's alias) | the project's own Prettier, 3 and 2, which Passenger's Prettier runner formats with | MIT | Copyright © James Long and contributors |
+| `@yarnpkg/cli-dist` | Yarn, which lays a test's Plug'n'Play project out offline, its packages the tests' own; its one bundled file carries the code of the packages it is built from under their own notices | BSD-2-Clause | no licence file or copyright line of its own; its repository's (yarnpkg/berry) licence: Copyright (c) 2016-present, Yarn Contributors |
+| `oxlint`, `oxfmt` | the project's own Oxlint and Oxfmt, whose language servers Passenger runs | MIT | Copyright (c) 2024-present VoidZero Inc. & Contributors; Copyright (c) 2023 Boshen |
+| `@oxlint/binding-android-arm-eabi`, `@oxlint/binding-android-arm64`, `@oxlint/binding-darwin-arm64`, `@oxlint/binding-darwin-x64`, `@oxlint/binding-freebsd-x64`, `@oxlint/binding-linux-arm-gnueabihf`, `@oxlint/binding-linux-arm-musleabihf`, `@oxlint/binding-linux-arm64-gnu`, `@oxlint/binding-linux-arm64-musl`, `@oxlint/binding-linux-ppc64-gnu`, `@oxlint/binding-linux-riscv64-gnu`, `@oxlint/binding-linux-riscv64-musl`, `@oxlint/binding-linux-s390x-gnu`, `@oxlint/binding-linux-x64-gnu`, `@oxlint/binding-linux-x64-musl`, `@oxlint/binding-openharmony-arm64`, `@oxlint/binding-win32-arm64-msvc`, `@oxlint/binding-win32-ia32-msvc`, `@oxlint/binding-win32-x64-msvc`, `@oxfmt/binding-android-arm-eabi`, `@oxfmt/binding-android-arm64`, `@oxfmt/binding-darwin-arm64`, `@oxfmt/binding-darwin-x64`, `@oxfmt/binding-freebsd-x64`, `@oxfmt/binding-linux-arm-gnueabihf`, `@oxfmt/binding-linux-arm-musleabihf`, `@oxfmt/binding-linux-arm64-gnu`, `@oxfmt/binding-linux-arm64-musl`, `@oxfmt/binding-linux-ppc64-gnu`, `@oxfmt/binding-linux-riscv64-gnu`, `@oxfmt/binding-linux-riscv64-musl`, `@oxfmt/binding-linux-s390x-gnu`, `@oxfmt/binding-linux-x64-gnu`, `@oxfmt/binding-linux-x64-musl`, `@oxfmt/binding-openharmony-arm64`, `@oxfmt/binding-win32-arm64-msvc`, `@oxfmt/binding-win32-ia32-msvc`, `@oxfmt/binding-win32-x64-msvc` | Oxlint's and Oxfmt's native code, each for one system | MIT | no licence file; its author: Boshen and oxc contributors |
+| `tinypool` | Oxfmt's | MIT | Copyright (c) 2020 James M Snell and the Piscina contributors |
+| `@biomejs/biome` | the project's own Biome, whose language server Passenger runs | MIT OR Apache-2.0 | Copyright (c) 2023 Biome Developers and Contributors. |
+| `@biomejs/cli-android-arm64`, `@biomejs/cli-android-x64`, `@biomejs/cli-darwin-arm64`, `@biomejs/cli-darwin-x64`, `@biomejs/cli-linux-arm64`, `@biomejs/cli-linux-arm64-musl`, `@biomejs/cli-linux-x64`, `@biomejs/cli-linux-x64-musl`, `@biomejs/cli-win32-arm64`, `@biomejs/cli-win32-x64` | Biome's program, each for one system | MIT OR Apache-2.0 | no licence file or author; its repository is biomejs/biome, as `@biomejs/biome`'s |
 | `@eslint/config-array`, `@eslint/core`, `@eslint/object-schema`, `@eslint/plugin-kit`, `@humanfs/core`, `@humanfs/node`, `@humanfs/types` | eslint's configuration, rules and file system | Apache-2.0 | no copyright line; its author: Nicholas C. Zakas |
 | `@eslint/config-helpers` | eslint's configuration | Apache-2.0 | no copyright line or author; its repository is eslint/rewrite |
 | `@humanwhocodes/module-importer`, `@humanwhocodes/retry` | eslint's | Apache-2.0 | no copyright line; its author: Nicholas C. Zaks (as it is written) |
@@ -496,7 +505,7 @@ SOFTWARE.
 `src/Passenger.Workspace/GDScript/` (`GDScriptToken.cs`, `GDScriptTokenizer.cs`, `GDScriptNodes.cs` and the
 `GDScriptParser` files) is a port to C# of the Godot Engine's GDScript tokenizer and parser,
 `modules/gdscript/gdscript_tokenizer.cpp`, `gdscript_tokenizer.h`, `gdscript_parser.cpp` and `gdscript_parser.h` at
-commit cafc17a192acf67903910a68aeb3c076c0907a4b (4.8 beta 2) of https://github.com/godotengine/godot: their tokens,
+commit a661dfdbccc664ccca57ad76c2bb5dcd8f3fc768 (4.8 beta 5) of https://github.com/godotengine/godot: their tokens,
 nodes, parse rules and error messages, kept as Godot words them. `GDScriptAnalyzer` (with `GDScriptType`,
 `GDScriptAnalysis` and `GodotEngineApi`) ports the typing of `modules/gdscript/gdscript_analyzer.cpp` and
 `gdscript_analyzer.h` at the same commit (its data types, how a declaration, an override's return and each expression
@@ -730,9 +739,9 @@ SOFTWARE.
 
 ## Codicons
 
-`src/Passenger.App/Theme/Icons.axaml`'s `Icon.Preview` is the path data of the `open-preview` icon from Visual Studio
-Code's Codicons (https://github.com/microsoft/vscode-codicons, `src/icons/open-preview.svg` at commit 5a6ad495),
-unchanged, written by `tools/icons.py`. Copyright (c) Microsoft Corporation. It is licensed under the Creative Commons
+`src/Passenger.App/Theme/Icons.axaml`'s `Icon.Preview` and `Icon.Selection` are the path data of the `open-preview` and
+`list-selection` icons from Visual Studio Code's Codicons (https://github.com/microsoft/vscode-codicons, `src/icons/` at
+commit 8d1826a9), unchanged, written by `tools/icons.py`. Copyright (c) Microsoft Corporation. It is licensed under the Creative Commons
 Attribution 4.0 International License (CC BY 4.0, https://creativecommons.org/licenses/by/4.0/).
 
 ## File Icons
@@ -972,7 +981,7 @@ SOFTWARE.
 
 `src/Passenger.Workspace/GodotShaderTypes.json` is a table of Godot's shading language, written by `just godot-shader-types`
 (`tools/godot-shader-types.py`) from two files of the Godot Engine (https://github.com/godotengine/godot) at commit
-cafc17a192acf67903910a68aeb3c076c0907a4b, which Godot 4.8 beta 2 was built from: `servers/rendering/shader_types.cpp`
+a661dfdbccc664ccca57ad76c2bb5dcd8f3fc768, which Godot 4.8 beta 5 was built from: `servers/rendering/shader_types.cpp`
 (each shader type's processor functions, the built-ins each offers, the stage functions each may call, its render and
 stencil modes) and `servers/rendering/shader_language.cpp` (the uniform hints of its keyword list, its built-in
 functions with their arguments' names, and every entry of its built-in function table in order, constructors too). The
@@ -989,7 +998,7 @@ complete, check and describe the theme items a Godot game's C# names.
 `src/Passenger.Workspace/GodotShader/` is a port to C# of the Godot Engine's shader language front end, by which
 Passenger checks a shader as Godot reads it: `GodotShaderPreprocessor.cs` ports `servers/rendering/shader_preprocessor.cpp`
 and `shader_preprocessor.h` (its directives, macro expansion, includes and error messages, with 4.7.2-stable's reading of
-line continuations, at commit ed1daf0bf001b61586d9930840f2f1394092c079, beside 4.8 beta 2's); `GodotShaderExpression.cs`
+line continuations, at commit ed1daf0bf001b61586d9930840f2f1394092c079, beside 4.8 beta 5's); `GodotShaderExpression.cs`
 ports the tokenizer of `servers/rendering/shader_expression.cpp` and the parser of `core/math/expression.cpp` it runs
 on; `GodotPathStrings.cs` ports `simplify_path`, `is_absolute_path`, `get_base_dir` and `path_join` of
 `core/string/ustring.cpp`; the `GodotShaderLanguage` files and `GodotShaderNodes.cs` port
@@ -999,7 +1008,7 @@ ports `servers/rendering/shader_warnings.cpp` and `shader_warnings.h`; `GodotSha
 `editor/shader/shader_text_editor.cpp`'s validation of a shader and an include; and
 `src/Passenger.App/Godot/GodotShaderChecker.cs` ports `uniform_to_property_info` of `shader_language.cpp` and `rtos`'s
 writing of a number (`String::num` of `core/string/ustring.cpp`); all at commit
-cafc17a192acf67903910a68aeb3c076c0907a4b (4.8 beta 2), their words kept as Godot words them.
+a661dfdbccc664ccca57ad76c2bb5dcd8f3fc768 (4.8 beta 5), their words kept as Godot words them.
 
 ```
 Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md).
@@ -1030,41 +1039,41 @@ SOFTWARE.
 file of Visual Studio Code's own extensions (https://github.com/microsoft/vscode, MIT, Copyright (c) 2015 - present
 Microsoft Corporation), unchanged, from the project its header names:
 
-- `xml.tmLanguage.json` (VS Code 1.144.0, `extensions/xml`): from atom/language-xml
+- `xml.tmLanguage.json` (VS Code 1.148.0, `extensions/xml`): from atom/language-xml
   (https://github.com/atom/language-xml), MIT, Copyright (c) 2014 GitHub Inc., which was converted from the TextMate
   bundle textmate/xml.tmbundle, under the TextMate bundle licence below.
-- `JSON.tmLanguage.json` (VS Code 1.144.0, `extensions/json`): from microsoft/vscode-JSON.tmLanguage
+- `JSON.tmLanguage.json` (VS Code 1.148.0, `extensions/json`): from microsoft/vscode-JSON.tmLanguage
   (https://github.com/microsoft/vscode-JSON.tmLanguage), MIT, Copyright (c) 2015 simonzack, zertosh, benvie.
 - `yaml.tmLanguage.json`, with `yaml-1.0.tmLanguage.json`, `yaml-1.1.tmLanguage.json`, `yaml-1.2.tmLanguage.json`,
-  `yaml-1.3.tmLanguage.json` and `yaml-embedded.tmLanguage.json`, which it reads by (VS Code 1.144.0,
+  `yaml-1.3.tmLanguage.json` and `yaml-embedded.tmLanguage.json`, which it reads by (VS Code 1.148.0,
   `extensions/yaml`): from RedCMD/YAML-Syntax-Highlighter (https://github.com/RedCMD/YAML-Syntax-Highlighter) at
   commit 53d38bbc, its 1.3.2, MIT, Copyright 2024 RedCMD: a grammar for each version of YAML, a file read by the one
   its `%YAML` directive names and by 1.2's where it names none.
-- `markdown.tmLanguage.json` (VS Code 1.144.0, `extensions/markdown-basics`): from microsoft/vscode-markdown-tm-grammar
+- `markdown.tmLanguage.json` (VS Code 1.148.0, `extensions/markdown-basics`): from microsoft/vscode-markdown-tm-grammar
   (https://github.com/microsoft/vscode-markdown-tm-grammar), MIT, Copyright (c) Microsoft 2018, derived from
   textmate/markdown.tmbundle, under the TextMate bundle licence below.
-- `html.tmLanguage.json` (VS Code 1.144.0, `extensions/html`): converted from textmate/html.tmbundle
+- `html.tmLanguage.json` (VS Code 1.148.0, `extensions/html`): converted from textmate/html.tmbundle
   (https://github.com/textmate/html.tmbundle), under the TextMate bundle licence below.
-- `css.tmLanguage.json` (VS Code 1.144.0, `extensions/css`): from microsoft/vscode-css
+- `css.tmLanguage.json` (VS Code 1.148.0, `extensions/css`): from microsoft/vscode-css
   (https://github.com/microsoft/vscode-css), MIT, Copyright (c) Microsoft Corporation, derived from atom/language-css
   and the TextMate bundle textmate/css.tmbundle, under the TextMate bundle licence below.
-- `scss.tmLanguage.json` (VS Code 1.144.0, `extensions/scss`): from atom/language-sass
+- `scss.tmLanguage.json` (VS Code 1.148.0, `extensions/scss`): from atom/language-sass
   (https://github.com/atom/language-sass), MIT, Copyright (c) 2014 GitHub Inc., derived from the TextMate bundle
   alexsancho/Sass.tmbundle (https://github.com/alexsancho/Sass.tmbundle), MIT, Copyright (c) 2012 Alex Sancho, as
   atom/language-sass's `LICENSE.md` says.
-- `less.tmLanguage.json` (VS Code 1.144.0, `extensions/less`): from radium-v/Better-Less
+- `less.tmLanguage.json` (VS Code 1.148.0, `extensions/less`): from radium-v/Better-Less
   (https://github.com/radium-v/Better-Less), MIT, Copyright (c) 2017 John Kreitlow.
-- `JavaScript.tmLanguage.json` (VS Code 1.144.0, `extensions/javascript`), and `TypeScript.tmLanguage.json` and
-  `TypeScriptReact.tmLanguage.json` (VS Code 1.144.0, `extensions/typescript-basics`): from
+- `JavaScript.tmLanguage.json` (VS Code 1.148.0, `extensions/javascript`), and `TypeScript.tmLanguage.json` and
+  `TypeScriptReact.tmLanguage.json` (VS Code 1.148.0, `extensions/typescript-basics`): from
   microsoft/TypeScript-TmLanguage (https://github.com/microsoft/TypeScript-TmLanguage), MIT, Copyright (c) Microsoft
   Corporation; VS Code names textmate/javascript.tmbundle, under the TextMate bundle licence below, among the JavaScript
   grammar's sources too.
-- `shell-unix-bash.tmLanguage.json` (VS Code 1.144.0, `extensions/shellscript`): from jeff-hykin/better-shell-syntax
+- `shell-unix-bash.tmLanguage.json` (VS Code 1.148.0, `extensions/shellscript`): from jeff-hykin/better-shell-syntax
   (https://github.com/jeff-hykin/better-shell-syntax), MIT, Copyright (c) 2019 Jeff Hykin.
-- `docker.tmLanguage.json` (VS Code 1.144.0, `extensions/docker`): from moby/moby's
+- `docker.tmLanguage.json` (VS Code 1.148.0, `extensions/docker`): from moby/moby's
   `contrib/syntax/textmate/Docker.tmbundle` (https://github.com/moby/moby), under the Apache License 2.0 below, with
   Docker's NOTICE.
-- `ini.tmLanguage.json` (VS Code 1.144.0, `extensions/ini`): converted from textmate/ini.tmbundle
+- `ini.tmLanguage.json` (VS Code 1.148.0, `extensions/ini`): converted from textmate/ini.tmbundle
   (https://github.com/textmate/ini.tmbundle), under the TextMate bundle licence below; it colours .editorconfig files.
 - `java.tmLanguage.json` (VS Code 1.146.0, `extensions/java`): from redhat-developer/vscode-java
   (https://github.com/redhat-developer/vscode-java) at commit f09b712f, `language-support/java/java.tmLanguage.json`,
@@ -1073,13 +1082,13 @@ Microsoft Corporation), unchanged, from the project its header names:
 - `groovy.tmLanguage.json` (VS Code 1.146.0, `extensions/groovy`): converted from textmate/groovy.tmbundle
   (https://github.com/textmate/groovy.tmbundle) at commit 85d8f7c9, under the TextMate bundle licence below; it colours
   Groovy and Gradle's Groovy builds.
-- `MagicPython.tmLanguage.json` (VS Code 1.144.0, `extensions/python`): converted from MagicStack/MagicPython
+- `MagicPython.tmLanguage.json` (VS Code 1.148.0, `extensions/python`): converted from MagicStack/MagicPython
   (https://github.com/MagicStack/MagicPython) at commit 7d0f2b22, its 1.1.1, MIT, Copyright (c) 2015-present MagicStack
   Inc.
 
 And two that colour Razor's .razor and .cshtml files before the language server answers, files of Razor's tooling in
 dotnet/roslyn (https://github.com/dotnet/roslyn, where Razor's tooling moved from dotnet/razor; MIT, Copyright (c) .NET
-Foundation and Contributors) at the 5.11.0 server's commit (dc1db3e7), unchanged, under
+Foundation and Contributors) at the 5.13.0-1.26514.10 server's commit (d82b7f7d), unchanged, under
 `src/Razor/src/Razor/src/Microsoft.VisualStudio.RazorExtension/EmbeddedGrammars/`:
 
 - `aspnetcorerazor.tmLanguage.json`: Razor's own grammar, which embeds HTML's and C#'s.
@@ -1104,6 +1113,8 @@ And three that colour Godot's files, from the Godot Engine's own VS Code extensi
 tag 2.7.1 (commit 7317ea20), its `syntaxes/` folder, unchanged: `GDScript.tmLanguage.json` (GDScript's .gd files),
 `GDResource.tmLanguage.json` (scenes, resources and project.godot, which embeds the other two) and
 `GDShader.tmLanguage.json` (Godot's shaders).
+
+`gitattributes.tmLanguage.json`, which colours .gitattributes files, is Passenger's own, under Passenger's licence.
 
 Reading them, Passenger leaves out what VS Code's reader passes over (a capture that is not a rule) and lets a rule
 that begins with no end never end, as VS Code does, takes YAML's typed scalars (booleans, numbers, null) out of a block

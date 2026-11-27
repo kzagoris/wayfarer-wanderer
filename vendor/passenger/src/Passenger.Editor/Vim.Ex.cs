@@ -136,13 +136,19 @@ public sealed partial class Vim
                 return MovedOrCopied(name[0] == 'm', trimmed, first, end, caretLine, text, view);
             case "j" or "join":
                 // Equal ends join nothing, nor the last line: the caret goes to the range's line, in its column.
-                return (bothEnds && first == end ? null : Join(text, SelectionSet.Single(text.GetLineStart(first)), Math.Max(2, end - first + 1), spaced: !bang, Options.JoinSpaces)) is { } joined
+                return (bothEnds && first == end ? null : Join(text, SelectionSet.Single(text.GetLineStart(first)), Math.Max(2, end - first + 1), view, spaced: !bang, Options.JoinSpaces)) is { } joined
                     ? new VimResult(true, Edits: [OnFirstNonBlank(text, joined, first)])
                     : new VimResult(true, SelectionSet.Single(InColumn(text, first, selections.Primary.Caret)));
             case ">" or ">>" or ">>>" or "<" or "<<" or "<<<":
                 Stretch shifted = Whole(text, first, end, text.GetLineStart(first));
                 VimResult moved = Shift(text, SelectionSet.Single(text.GetLineStart(first)), [shifted], name[0] == '>', view, name.Length);
-                return moved.Edit is { } shift ? new VimResult(true, Edits: [OnFirstNonBlank(text, shift, end)]) : moved;
+                if (moved.Edit is { } shift)
+                {
+                    return new VimResult(true, Edits: [OnFirstNonBlank(text, shift, end)]);
+                }
+                // Lines with nothing to shift (empty ones) take the caret to the last's first non-blank all the same, the column j and k aim at set afresh.
+                wantedFor = null;
+                return new VimResult(true, SelectionSet.Single(VimMotions.FirstNonBlank(text, end, breakEnds)));
             case "norm" or "norma" or "normal":
                 return Normally(range is null ? null : (first, end), args.TrimStart(), text, selections);
             case "action":
