@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Editors/EditorGroup.cs, MIT (notices/Passenger/LICENSE): the tab strip over
+// From Passenger 494009d7 src/Passenger.App/Editors/EditorGroup.cs, MIT (notices/Passenger/LICENSE): the tab strip over
 // Wayfarer's one editor, its tabs' look (chosen mark, modified dot, close button, pin, side placement and hidden tabs
 // overflow) matching Passenger's; splits, previews and drag-to-split cut.
 using System.Collections.ObjectModel;
@@ -412,7 +412,7 @@ public sealed class EditorTabs
             OpenDocument document = tab.Document;
             name.Text = document.Name;
             icon.Data = FileIcons.ForFile(document.Path);
-            icon.Foreground = FileIcons.BrushForFile(document.Path);
+            icon.ForegroundKey = FileIcons.TintForFile(document.Path);
             ToolTip.SetTip(border, document.Path);
             border.Classes.Set(StyleClasses.Modified, document.IsModified);
             border.Classes.Set(StyleClasses.Active, tab.IsActive);

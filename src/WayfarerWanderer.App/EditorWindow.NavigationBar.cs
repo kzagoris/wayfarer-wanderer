@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/MainWindow.NavigationBar.cs, MIT (notices/Passenger/LICENSE): one bar over
+// From Passenger 494009d7 src/Passenger.App/MainWindow.NavigationBar.cs, MIT (notices/Passenger/LICENSE): one bar over
 // Wayfarer's one editor, fed the outline the status bar's path asks the Java and Kotlin servers for; without a screen
 // reader's words.
 using Avalonia;

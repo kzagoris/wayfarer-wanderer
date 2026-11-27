@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Explorer/ExplorerTree.cs, MIT (notices/Passenger/LICENSE): its File System view,
+// From Passenger 494009d7 src/Passenger.App/Explorer/ExplorerTree.cs, MIT (notices/Passenger/LICENSE): its File System view,
 // with the solution, project, dependency, nesting and version control parts cut. Wayfarer marks the folders the
 // JVM import names (modules and their source roots) in their place.
 using Avalonia;
@@ -226,6 +226,10 @@ public sealed class ExplorerTree
             {
                 reloaded.Add(node);
             }
+            else if (node.LoadedChildren is null)
+            {
+                node.ProbeAgain();
+            }
         }
         ShowAgain(reloaded);
     }
@@ -391,7 +395,7 @@ public sealed class ExplorerTree
         try
         {
             entries = [.. new DirectoryInfo(folder).EnumerateFileSystemInfos()
-                .Where(e => e.Name != GitStore && !(e is FileInfo && (FileText.IsSaving(e.Name) || PathNames.IsSystemFile(e.Name))))
+                .Where(ShownEntry)
                 .OrderBy(e => e is FileInfo)
                 .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase)];
         }
@@ -409,6 +413,25 @@ public sealed class ExplorerTree
             Mark(file);
             return file;
         })];
+    }
+
+    /// <summary>Whether a folder's listing shows an entry: all but Git's own folder, a save's temporary file and the system's
+    /// own files.</summary>
+    private static bool ShownEntry(FileSystemInfo entry) =>
+        entry.Name != GitStore && !(entry is FileInfo && (FileText.IsSaving(entry.Name) || PathNames.IsSystemFile(entry.Name)));
+
+    /// <summary>Whether a folder on disk holds an entry its listing shows, read up to the first (<see cref="ShownEntry"/>); one
+    /// that cannot be read is taken to hold something, its chevron kept.</summary>
+    internal static bool HoldsListed(string folder)
+    {
+        try
+        {
+            return new DirectoryInfo(folder).EnumerateFileSystemInfos().Any(ShownEntry);
+        }
+        catch (Exception error) when (error is UnauthorizedAccessException or IOException)
+        {
+            return true;
+        }
     }
 
     /// <summary>A node's descendants as rows, in order, through every node already open, those the filter lets through.</summary>
@@ -447,12 +470,78 @@ public sealed class ExplorerNode : Observable, ITreeRow
     /// <summary>What the JVM import says the folder is, which its icon shows.</summary>
     public JvmFolder JvmFolder { get; init; }
 
-    public bool HasChildren => load is not null;
+    /// <summary>Whether a folder holds anything its rows would show, found on the disk off the window's thread before its
+    /// children are read (<see cref="Probe"/>), found again as the folder changes; null until found, a chevron shown
+    /// meanwhile, and for every other row.</summary>
+    public bool? Holds => holds;
+
+    private bool? holds;
+
+    /// <summary>Whether the row has rows under it to open: those read, else a folder that holds anything shown, or may.</summary>
+    public bool HasChildren => load is not null && (children is { } read ? read.Count > 0 : holds != false);
+
+    /// <summary>Finds off the window's thread whether each folder on disk among the rows holds anything its listing shows,
+    /// one look at the first entry of each, so one holding nothing shows no chevron; those whose children are read are passed
+    /// over.</summary>
+    internal static void Probe(IEnumerable<ExplorerNode> rows)
+    {
+        ExplorerNode[] folders = [.. rows.Where(r => r is { Kind: NodeKind.Folder, Path: not null, children: null, holds: null })];
+        if (folders.Length > 0)
+        {
+            IdeErrors.Observe(ProbeAsync(folders));
+        }
+    }
+
+    /// <summary>A folder on disk that changed found again, its chevron kept as it was until then.</summary>
+    internal void ProbeAgain()
+    {
+        if (Kind == NodeKind.Folder && Path is not null && children is null)
+        {
+            IdeErrors.Observe(ProbeAsync([this]));
+        }
+    }
+
+    private static async Task ProbeAsync(ExplorerNode[] folders)
+    {
+        string[] paths = [.. folders.Select(f => f.Path!)];
+        bool[] found = await BackgroundWork.Run(() => paths.Select(ExplorerTree.HoldsListed).ToArray());
+        for (int i = 0; i < folders.Length; i++)
+        {
+            folders[i].Found(found[i]);
+        }
+    }
+
+    /// <summary>What a look found the folder holds, its chevron following.</summary>
+    private void Found(bool holding)
+    {
+        bool had = HasChildren;
+        holds = holding;
+        if (HasChildren != had)
+        {
+            Raise(nameof(HasChildren));
+        }
+    }
 
     bool ITreeRow.Expands => HasChildren;
 
     public bool IsFile => Kind == NodeKind.File;
-    public List<ExplorerNode>? Children => load is null ? null : children ??= load(this);
+
+    public List<ExplorerNode>? Children
+    {
+        get
+        {
+            if (load is null)
+            {
+                return null;
+            }
+            if (children is null)
+            {
+                children = load(this);
+                Probe(children);
+            }
+            return children;
+        }
+    }
 
     /// <summary>The children once read, without reading them.</summary>
     internal List<ExplorerNode>? LoadedChildren => children;
@@ -465,9 +554,15 @@ public sealed class ExplorerNode : Observable, ITreeRow
             return false;
         }
         Dictionary<string, ExplorerNode> before = children.ToDictionary(Identity);
+        bool had = HasChildren;
         List<ExplorerNode> fresh = [.. load(this).Select(c => before.TryGetValue(Identity(c), out ExplorerNode? kept) ? kept : c)];
         bool same = fresh.Count == children.Count && fresh.SequenceEqual(children);
         children = fresh;
+        Probe(fresh);
+        if (HasChildren != had)
+        {
+            Raise(nameof(HasChildren));
+        }
         return !same;
     }
 
@@ -514,7 +609,7 @@ public sealed class ExplorerNode : Observable, ITreeRow
     public Thickness Indent => new(Depth * Gaps.Indent, 0, 0, 0);
     public double Opacity => IsDimmed || IsCut ? ListRow.Dimmed : 1;
     public Geometry Icon => FileIcons.For(this);
-    public IBrush IconBrush => FileIcons.BrushFor(this);
+    public string IconTint => FileIcons.TintFor(this);
 
     /// <summary>Whether a path lies inside this node's folder.</summary>
     public bool Contains(string path) => Kind == NodeKind.Folder && Path is { } folder && PathNames.IsUnder(path, folder);

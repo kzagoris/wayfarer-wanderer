@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/MainMenu.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/MainMenu.cs, MIT (notices/Passenger/LICENSE).
 namespace WayfarerWanderer.App.Shell;
 
 /// <summary>One entry of a menu: an action (titled as it is registered), a submenu, a separator, or a submenu the window
@@ -21,7 +21,7 @@ public static class MainMenu
     public const string RecentProjects = "Recent Projects";
 
     /// <summary>The menus, in their order.</summary>
-    public static IReadOnlyList<string> Titles { get; } = ["File", "Edit", "View", "Navigate", "Code", "Refactor", "Build", "Run", "Tests", "Tools", "Git", "Window", "Help"];
+    public static IReadOnlyList<string> Titles { get; } = ["File", "Edit", "View", "Navigate", "Code", Refactor, "Build", "Run", "Tests", "Tools", "Git", "Window", "Help"];
 
     /// <summary>The submenus the window lists as each opens.</summary>
     private static readonly string[] Listed = [ToolWindows, RecentProjects];
@@ -31,11 +31,18 @@ public static class MainMenu
     [
         new("View/" + ToolWindows, 0, 0),
         new("View/Active Editor", 2, 0),
+        new("View/Appearance", 4, 0),
+        new("Code/Folding", 3, 0),
+        new("Code/Folding/Expand to Level", 0, 3),
+        new("Code/Folding/Expand All to Level", 0, 4),
         new("File/" + RecentProjects, 0, 4),
         new("File/Line Separators", 1, 2),
     ];
 
     private static readonly MenuEntry Separator = new(null);
+
+    /// <summary>The menu of the refactorings.</summary>
+    public const string Refactor = "Refactor";
 
     /// <summary>The menus the actions' places make, those with nothing in them left out.</summary>
     public static IReadOnlyList<MenuEntry> Build(IEnumerable<(string Id, MenuPlace Place)> placed)

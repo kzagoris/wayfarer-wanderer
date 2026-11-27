@@ -84,6 +84,43 @@ public class ToolDockTests
         Assert.Equal(0, clamped.BottomHeight);
     }
 
+    /// <summary>Passenger 0.4.6's frame actions: Hide Side Windows leaves the windows below the editors, Zoom steps Settings'
+    /// Display scale and says so at its end, and Code › Folding holds the levels' submenus.</summary>
+    [AvaloniaFact]
+    public void FrameActionsHideTheSidesAndZoomTheWholeWindow()
+    {
+        var window = EditorApplication.CreateWindow(new TextDocument("class Main {}"));
+        window.Width = 900;
+        window.Height = 600;
+        window.Show();
+        try
+        {
+            window.ToolDock.Show(ToolWindowIds.Explorer);
+            window.ToolDock.Show(ToolWindowIds.Build);
+            Assert.Null(window.Actions.Registry.Run(AppActions.HideSideWindows));
+            Assert.False(window.ToolDock.IsShown(ToolWindowIds.Explorer));
+            Assert.True(window.ToolDock.IsShown(ToolWindowIds.Build));
+            Assert.Null(window.Actions.Registry.Run(AppActions.HideSideWindows));
+            Assert.True(window.ToolDock.IsShown(ToolWindowIds.Explorer));
+
+            Assert.Equal(1, window.SettingsKept.Value.DisplayScale);
+            Assert.Equal("The window is as small as it goes", window.Actions.Registry.Run(AppActions.ZoomOut));
+            Assert.Null(window.Actions.Registry.Run(AppActions.ZoomIn));
+            Assert.Equal(1.25, window.SettingsKept.Value.DisplayScale);
+            Assert.Null(window.Actions.Registry.Run(AppActions.ResetZoom));
+            Assert.Equal(1, window.SettingsKept.Value.DisplayScale);
+
+            MenuEntry folding = Assert.Single(window.MainMenuEntries.Single(m => m.Title == "Code").Items!, i => i.Title == "Folding");
+            MenuEntry levels = Assert.Single(folding.Items!, i => i.Title == "Expand to Level");
+            Assert.Equal(Passenger.Editor.EditorActions.UnfoldToLevels, levels.Items!.Select(i => i.Action));
+        }
+        finally
+        {
+            window.SettingsKept.Update(_ => new App.Shell.Settings.AppSettings());
+            window.Close();
+        }
+    }
+
     private static ToggleButton StripeButton(Window window, string id) =>
         window.GetVisualDescendants().OfType<ToggleButton>().Single(b => Equals(b.Tag, id) && b.IsEffectivelyVisible);
 

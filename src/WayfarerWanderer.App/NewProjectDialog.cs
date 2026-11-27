@@ -1,4 +1,4 @@
-// After Passenger 8a1df7e4 src/Passenger.App/Templates/NewProjectDialog.cs, MIT (notices/Passenger/LICENSE): its layout
+// After Passenger 494009d7 src/Passenger.App/Templates/NewProjectDialog.cs, MIT (notices/Passenger/LICENSE): its layout
 // kept (families under a search at the left; names, where it goes and the family's choices at the right; the footer's
 // problem, progress and buttons), dotnet new, packages, Godot and set-ups cut for Wayfarer's bundled JVM starters.
 using Avalonia;
@@ -8,7 +8,10 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Passenger.Core;
+using Passenger.Vcs;
 using WayfarerWanderer.App.Shell;
+using WayfarerWanderer.App.Shell.State;
+using WayfarerWanderer.App.Shell.Vcs;
 using WayfarerWanderer.Jvm;
 
 namespace WayfarerWanderer.App;
@@ -66,8 +69,10 @@ public sealed record JdkEntry(JdkEntryKind Kind, string Text, string? Home = nul
 
 /// <summary>The New Project dialog, as IntelliJ's: the starter families down the left under a search; on the right the
 /// project's name, where it goes, the family's language and build system, the JDK (a drop-down of the JDKs kept and
-/// detected, with Download JDK… and Add JDK from Disk…), and under Advanced Settings the coordinates its build needs. Create refuses
-/// what the generator would, saying why; else it writes the starter and closes with it (<see cref="Created"/>).</summary>
+/// detected, with Download JDK… and Add JDK from Disk…), Create Git repository with the files chosen for it
+/// (<see cref="RepositoryFiles"/>), and under Advanced Settings the coordinates its build needs. Create refuses what the
+/// generator would, saying why; else it writes the starter, makes the project's folder a Git repository where asked, and
+/// closes with it (<see cref="Created"/>).</summary>
 public sealed class NewProjectDialog : IdeWindow
 {
     private const string DefaultName = "untitled";
@@ -112,6 +117,24 @@ public sealed class NewProjectDialog : IdeWindow
     private readonly StackPanel working;
     private readonly TextBlock problem = new() { Classes = { StyleClasses.Error }, TextWrapping = TextWrapping.Wrap, IsVisible = false, VerticalAlignment = VerticalAlignment.Center };
     private readonly Button create = DialogFooter.Default("Create");
+    private readonly CheckBox createRepository = new() { Content = "Create Git repository" };
+
+    /// <summary>The files the repository is given, a box each.</summary>
+    private readonly (RepositoryFile File, CheckBox Box)[] repositoryFiles;
+    private readonly StackPanel repositoryList = new() { Spacing = Gaps.Tight, Margin = new Thickness(Gaps.Wide, 0, 0, 0) };
+    private readonly TextBlock repositoryNote = FormRows.Note();
+
+    /// <summary>Whether the person wants a repository, kept while none can be made where the location is.</summary>
+    private bool repositoryWanted;
+
+    /// <summary>The Git repository the location is in, as shown, once looked for; null for none.</summary>
+    private string? inRepository;
+
+    /// <summary>Why git cannot run here, once asked; null while it can.</summary>
+    private string? gitMissing;
+
+    /// <summary>Set while the dialog checks or clears the repository's box itself, so it is not taken for the person's.</summary>
+    private bool repositorySetting;
 
     /// <summary>The build system chosen last in each family, which choosing the family again opens on.</summary>
     private readonly Dictionary<string, NewProjectBuild> buildOf = new(StringComparer.Ordinal);
@@ -133,10 +156,33 @@ public sealed class NewProjectDialog : IdeWindow
     /// <param name="jdkHome">The JDK chosen at first; JAVA_HOME's when null, else the table's first JDK new enough.</param>
     /// <param name="jdks">The JDK table the drop-down lists; <see cref="JdkRegistry.Current"/> when null.</param>
     /// <param name="recent">The starters made lately, newest first, by <see cref="KnownBy"/>: listed first, under Recent.</param>
-    public NewProjectDialog(string folder, string? jdkHome = null, JdkRegistry? jdks = null, IReadOnlyList<string>? recent = null)
+    /// <param name="repository">What New Project made for Git last, which it offers again.</param>
+    public NewProjectDialog(string folder, string? jdkHome = null, JdkRegistry? jdks = null, IReadOnlyList<string>? recent = null,
+        RepositoryChoices? repository = null)
     {
         registry = jdks ?? JdkRegistry.Current;
         Recent = recent ?? [];
+        RepositoryChoices chosen = repository ?? new RepositoryChoices();
+        repositoryWanted = chosen.Repository;
+        repositoryFiles = [.. RepositoryChoices.Offered.Select(file => (file, new CheckBox
+        {
+            Content = $"{RepositoryFiles.NameOf(file)}: {RepositoryFiles.DetailOf(file)}",
+            IsChecked = chosen.Gives(file),
+        }))];
+        foreach ((_, CheckBox box) in repositoryFiles)
+        {
+            repositoryList.Children.Add(box);
+        }
+        createRepository.IsChecked = repositoryWanted;
+        createRepository.IsCheckedChanged += (_, _) =>
+        {
+            if (!repositorySetting)
+            {
+                repositoryWanted = createRepository.IsChecked == true;
+                ShowRepository();
+            }
+        };
+        repositoryNote.IsVisible = false;
         FormRows.Scope(this);
         Title = "New Project";
         Width = DialogWidths.Workspace;
@@ -187,7 +233,11 @@ public sealed class NewProjectDialog : IdeWindow
         };
         advancedToggle.Click += (_, _) => AdvancedShown = !AdvancedShown;
         projectName.TextChanged += (_, _) => NameChanged();
-        directory.TextChanged += (_, _) => ShowWhere();
+        directory.TextChanged += (_, _) =>
+        {
+            ShowWhere();
+            IdeErrors.Observe(FollowRepositoryAsync());
+        };
         group.TextChanged += (_, _) => Derive();
         artifact.TextChanged += (_, _) => Derive();
         package.TextChanged += (_, _) => ShowWrites();
@@ -233,6 +283,8 @@ public sealed class NewProjectDialog : IdeWindow
                 languageRow,
                 Row("Build system", build, [buildNote]),
                 Row("JDK", jdk, [writes]),
+                Row(null, createRepository),
+                Row(null, repositoryList, [repositoryNote]),
                 advancedHeader,
                 advanced,
             },
@@ -249,6 +301,9 @@ public sealed class NewProjectDialog : IdeWindow
         Set(projectName, ref nameGiven, Unique(DefaultName, name => !Exists(Path.Combine(Folder, name))));
         Filter();
         NameChanged();
+        ShowRepository();
+        IdeErrors.Observe(AskGitAsync());
+        IdeErrors.Observe(FollowRepositoryAsync());
         // The name has the keys as the dialog opens, its default chosen to be typed over; again once laid out.
         void FocusName()
         {
@@ -408,6 +463,27 @@ public sealed class NewProjectDialog : IdeWindow
     /// <summary>What Create made, once it closed the dialog; null until then, and when given up.</summary>
     public ProjectGenerationResult? Created { get; private set; }
 
+    /// <summary>What New Project makes for Git as the person chose it, which the window keeps for the next.</summary>
+    public RepositoryChoices RepositoryChosen =>
+        repositoryFiles.Aggregate(new RepositoryChoices { Repository = repositoryWanted }, (choices, file) => choices.Giving(file.File, file.Box.IsChecked == true));
+
+    /// <summary>Whether Create makes the project's folder a Git repository: the person's choice, where one can be made.</summary>
+    public bool MakesRepository
+    {
+        get => createRepository.IsChecked == true;
+        set
+        {
+            repositoryWanted = value;
+            ShowRepository();
+        }
+    }
+
+    /// <summary>Why no repository is made where the location is, as the dialog says it; null where one can be.</summary>
+    public string? RepositoryNote => repositoryNote.IsVisible ? repositoryNote.Text : null;
+
+    /// <summary>Why the project Create made has no Git repository, or not every file asked for; null where it has all.</summary>
+    public string? RepositoryProblem { get; private set; }
+
     /// <summary>Chooses a family by its name, as a click on its row does; false when it is not listed.</summary>
     public bool Choose(string name)
     {
@@ -478,6 +554,11 @@ public sealed class NewProjectDialog : IdeWindow
         try
         {
             Created = await Task.Run(() => ProjectGenerator.GenerateAsync(options, cancel.Token), cancel.Token);
+            if (MakesRepository)
+            {
+                progress.Text = "Creating the Git repository…";
+                RepositoryProblem = await MakeRepositoryAsync(Created.Destination);
+            }
             creating = null;
             Close(Created);
         }
@@ -498,6 +579,75 @@ public sealed class NewProjectDialog : IdeWindow
             creating = null;
             Busy(false);
         }
+    }
+
+    /// <summary>The Git repository Create makes in the project's folder once the starter is written, given the files
+    /// chosen, each written only where the starter wrote none; why not where git could not make it or a file could not be
+    /// written, the project kept either way.</summary>
+    private async Task<string?> MakeRepositoryAsync(string folder)
+    {
+        GitResult init = await Git.InitAsync(folder);
+        if (!init.Succeeded)
+        {
+            return $"No Git repository was created: {init.Message}";
+        }
+        RepositoryFile[] given = [.. repositoryFiles.Where(f => f.Box.IsChecked == true).Select(f => f.File)];
+        return (await RepositoryFiles.WriteAsync(folder, given)).Why;
+    }
+
+    /// <summary>The repository offered as the person wants it where one can be made; off and greyed, saying why, where the
+    /// location is in a Git repository already, which takes the project, or git is not installed; its files greyed while it
+    /// is off. Greyed whole while Create runs.</summary>
+    private void ShowRepository()
+    {
+        string? why = inRepository is { } top ? $"The project goes into the Git repository at {top}: no second one is made in it" : gitMissing;
+        repositorySetting = true;
+        createRepository.IsChecked = repositoryWanted && why is null;
+        repositorySetting = false;
+        ToolButtons.Grey(createRepository, why);
+        bool busy = creating is not null;
+        createRepository.IsEnabled &= !busy;
+        repositoryList.IsEnabled = createRepository.IsChecked == true && !busy;
+        repositoryNote.Text = why;
+        repositoryNote.IsVisible = why is not null;
+    }
+
+    /// <summary>Looks for the Git repository the location is in, off the window's thread, and offers a repository or not as
+    /// it finds.</summary>
+    private async Task FollowRepositoryAsync()
+    {
+        string folder = Folder;
+        string? top = await BackgroundWork.Run(() => NearestFolder(folder) is { } there && WorkspaceTrust.RepositoryOf(PathNames.Canonical(there)) is { } found
+            ? PathNames.Shown(found, null) : null);
+        if (folder == Folder)
+        {
+            inRepository = top;
+            ShowRepository();
+        }
+    }
+
+    /// <summary>The nearest folder of a path that is on disk, or null where none is (a path that names no folder).</summary>
+    private static string? NearestFolder(string path)
+    {
+        if (!Path.IsPathFullyQualified(path))
+        {
+            return null;
+        }
+        for (string? at = path; at is not null; at = Path.GetDirectoryName(at))
+        {
+            if (Directory.Exists(at))
+            {
+                return at;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Asks whether git is installed, off the window's thread, the repository greyed saying so where it is not.</summary>
+    private async Task AskGitAsync()
+    {
+        gitMissing = await BackgroundWork.Run(Git.MissingAsync);
+        ShowRepository();
     }
 
     /// <summary>Cancel: stops a Create under way and closes the dialog.</summary>
@@ -778,6 +928,15 @@ public sealed class NewProjectDialog : IdeWindow
         foreach (Control field in (Control[])[search, projectName, directory, folderRow.Browse, language, build, jdk, advancedToggle, group, artifact, package])
         {
             field.IsEnabled = !busy;
+        }
+        if (busy)
+        {
+            createRepository.IsEnabled = false;
+            repositoryList.IsEnabled = false;
+        }
+        else
+        {
+            ShowRepository();
         }
     }
 

@@ -1,4 +1,4 @@
-// Adapted from vendored Passenger, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/Updates/Downloads.cs, MIT (notices/Passenger/LICENSE).
 using System.Security.Cryptography;
 using System.Text;
 using Passenger.Core;

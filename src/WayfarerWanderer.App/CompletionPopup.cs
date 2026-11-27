@@ -268,7 +268,7 @@ public sealed class CompletionPopup
             Height = look.RowHeight, Background = Brushes.Transparent, CornerRadius = new CornerRadius(4),
             Padding = new Thickness(RowPadding, 0), Child = content,
         };
-        ToolTip.SetTip(row, choice.Detail.Length > 0 && choice.Detail != trailing ? choice.Detail : null);
+        ToolTip.SetTip(row, choice.Described ?? (choice.Detail.Length > 0 && choice.Detail != trailing ? choice.Detail : null));
         row.PointerPressed += (_, e) =>
         {
             if (e.GetCurrentPoint(row).Properties.IsLeftButtonPressed)

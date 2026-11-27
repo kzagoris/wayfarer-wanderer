@@ -122,6 +122,60 @@ public sealed class NewProjectDialogTests : IDisposable
     }
 
     [AvaloniaFact]
+    public async Task CreatesAGitRepositoryWithTheFilesChosen()
+    {
+        string jdk = NewProjectTests.JdkHome(NewProjectLanguage.Java);
+        NewProjectDialog dialog = new(folder, jdk, repository: new App.Shell.State.RepositoryChoices { Repository = true, EditorConfig = false })
+        {
+            ProjectName = "Shared",
+        };
+        dialog.Show();
+        await Until(() => dialog.MakesRepository);
+
+        await dialog.CreateAsync();
+
+        Assert.Null(dialog.Problem);
+        Assert.Null(dialog.RepositoryProblem);
+        string made = Assert.IsType<ProjectGenerationResult>(dialog.Created).Destination;
+        Assert.True(Directory.Exists(Path.Combine(made, ".git")));
+        Assert.Equal(App.Shell.Vcs.RepositoryFiles.GitAttributes, File.ReadAllText(Path.Combine(made, ".gitattributes")));
+        Assert.False(File.Exists(Path.Combine(made, ".editorconfig")));
+        Assert.True(File.Exists(Path.Combine(made, ".gitignore")));
+        Assert.Equal(new App.Shell.State.RepositoryChoices { Repository = true, EditorConfig = false }, dialog.RepositoryChosen);
+    }
+
+    [AvaloniaFact]
+    public async Task OffersNoRepositoryInsideOne()
+    {
+        string outer = Path.Combine(folder, "outer");
+        Directory.CreateDirectory(outer);
+        using (System.Diagnostics.Process init = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("git", "init -q") { WorkingDirectory = outer })!)
+        {
+            await init.WaitForExitAsync(TestContext.Current.CancellationToken);
+        }
+        NewProjectDialog dialog = new(outer, folder, repository: new App.Shell.State.RepositoryChoices { Repository = true });
+        dialog.Show();
+
+        await Until(() => dialog.RepositoryNote is not null);
+
+        Assert.False(dialog.MakesRepository);
+        Assert.StartsWith("The project goes into the Git repository at ", dialog.RepositoryNote, StringComparison.Ordinal);
+        Assert.True(dialog.RepositoryChosen.Repository);
+        dialog.Close();
+    }
+
+    /// <summary>Waits, the UI thread turning, until <paramref name="done"/> holds or ten seconds pass.</summary>
+    private static async Task Until(Func<bool> done)
+    {
+        System.Diagnostics.Stopwatch waited = System.Diagnostics.Stopwatch.StartNew();
+        while (!done() && waited.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            await Task.Delay(25, TestContext.Current.CancellationToken);
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        }
+    }
+
+    [AvaloniaFact]
     public void JdkDropDownListsActionsKeptAndDetectedJdks()
     {
         string kept = NewProjectTests.JdkHome(NewProjectLanguage.Java);

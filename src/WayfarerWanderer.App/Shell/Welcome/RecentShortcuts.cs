@@ -1,8 +1,9 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Welcome/RecentShortcuts.cs, MIT (notices/Passenger/LICENSE): its system lists
+// From Passenger 494009d7 src/Passenger.App/Welcome/RecentShortcuts.cs, MIT (notices/Passenger/LICENSE): its system lists
 // of recent solutions, kept as Wayfarer's recent folders, each entry a start of Wayfarer of its own.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Passenger.Core;
 using Passenger.Editor;
 using WayfarerWanderer.App.Shell.State;
 
@@ -33,12 +34,14 @@ public static class RecentShortcuts
     public static RecentShortcut NewWindow { get; } = new("New Window", "A Wayfarer window with nothing open", [LaunchArguments.NewWindowFlag]);
 
     /// <summary>The window's recent list changed, or it opened on it: the system's lists follow once it rests, in the
-    /// desktop app, or where a test's recently used list stands in.</summary>
+    /// desktop app, or where a test's recently used list stands in. A portable copy writes no list the system keeps
+    /// (<see cref="ThisCopy.Data"/>): only the Dock's menu, held by its process alone, follows.</summary>
     public static void Follow(EditorWindow window, StateDocument<RecentFoldersState> recent)
     {
         UiThread.Check();
-        bool recentlyUsed = LinuxRecentlyUsed.StandIn is not null || OperatingSystem.IsLinux();
-        bool shell = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS();
+        bool registers = ThisCopy.Data is null;
+        bool recentlyUsed = LinuxRecentlyUsed.StandIn is not null || OperatingSystem.IsLinux() && registers;
+        bool shell = OperatingSystem.IsWindows() && registers || OperatingSystem.IsMacOS();
         if (!recentlyUsed && !shell)
         {
             return;

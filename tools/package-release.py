@@ -24,6 +24,13 @@ def version():
     return found.group(1).strip()
 
 
+def portable_of(output, rid):
+    """The portable build beside a package, named as Updates/Releases.cs's ThisSystemsAsset(portable: true) names it:
+    Windows' WayfarerWanderer-windows-x64-portable.zip, macOS's WayfarerWanderer-macos-arm64.zip. Linux's archive is
+    both."""
+    return output.with_name(f"{output.stem}-portable.zip") if rid.startswith("win") else output.with_suffix(".zip")
+
+
 def command(arguments, *, cwd=ROOT):
     subprocess.run([str(argument) for argument in arguments], cwd=cwd, check=True)
 
@@ -80,6 +87,16 @@ def windows(publish, output, rid):
              "--outputDir", output.parent, "--runtime", rid, "--channel", rid, "--noPortable"])
     setup, = output.parent.glob("*-Setup.exe")
     setup.replace(output)
+    # The portable build (ThisCopy.cs): the app's folder as published, nothing of Velopack's, in a WayfarerWanderer folder.
+    # A data folder made beside its executable keeps all its state there.
+    staging = output.parent / "windows-portable"
+    if staging.exists():
+        shutil.rmtree(staging)
+    shutil.copytree(publish, staging / "WayfarerWanderer")
+    # Never taken for an installed copy, whatever the publish folder holds.
+    (staging / "WayfarerWanderer" / "sq.version").unlink(missing_ok=True)
+    archive = shutil.make_archive(str(portable_of(output, rid).with_suffix("")), "zip", root_dir=staging, base_dir="WayfarerWanderer")
+    return Path(archive)
 
 
 def macos(publish, output):
@@ -115,6 +132,17 @@ def macos(publish, output):
     )
     command(["codesign", "--force", "--deep", "--sign", "-", bundle])
     command([hdiutil, "create", "-volname", "Wayfarer Wanderer", "-srcfolder", staging, "-ov", "-format", "UDZO", output])
+    # The portable build (ThisCopy.cs): the signed app in a WayfarerWanderer folder, a data folder made beside the app
+    # keeping all its state there.
+    portable_staging = output.parent / "mac-portable"
+    if portable_staging.exists():
+        shutil.rmtree(portable_staging)
+    (portable_staging / "WayfarerWanderer").mkdir(parents=True)
+    command(["ditto", bundle, portable_staging / "WayfarerWanderer" / bundle.name])
+    archive = portable_of(output, "osx")
+    archive.unlink(missing_ok=True)
+    command(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", portable_staging / "WayfarerWanderer", archive])
+    return archive
 
 
 def main():
@@ -141,12 +169,13 @@ def main():
     command([sys.executable, "tools/check-publish.py", publish, inventory])
     if arguments.rid.startswith("linux-"):
         linux(publish, output)
+        portable = output
     elif arguments.rid.startswith("win-"):
-        windows(publish, output, arguments.rid)
+        portable = windows(publish, output, arguments.rid)
     else:
-        macos(publish, output)
+        portable = macos(publish, output)
     (output.parent / f"{output.stem}-package.json").write_text(
-        json.dumps({"rid": arguments.rid, "package": str(output), "inventory": str(inventory)}, indent=2) + "\n",
+        json.dumps({"rid": arguments.rid, "package": str(output), "portable": str(portable), "inventory": str(inventory)}, indent=2) + "\n",
         encoding="utf-8",
     )
 

@@ -83,17 +83,19 @@ public sealed partial class EditorWindow
         Task<string?> encoding = Vcs.EncodingChangeAsync(path);
         Task<bool> breaksAlike = Vcs.BreaksStoredAlikeAsync(path);
         TextDocument mine = open?.Text ?? new TextDocument(ReadText(path) ?? string.Empty);
+        MergeSide? noFile = open is null && !File.Exists(path) ? MergeSide.Right : null;
         // An open file's differences are its change bars' own when they are of its text now.
         if (open is null || await Vcs.DiffAsync(open) is not { } diff)
         {
-            string head = await Vcs.HeadTextAsync(path) ?? string.Empty;
+            string? head = await Vcs.HeadTextAsync(path);
+            noFile = head is null ? MergeSide.Left : noFile;
             TextSnapshot text = mine.Snapshot;
-            diff = await BackgroundWork.Run(() => FileDiff.Compare(head, text));
+            diff = await BackgroundWork.Run(() => FileDiff.Compare(head ?? string.Empty, text));
         }
         // Line breaks git converts as it stores the file are no difference (core.autocrlf, a text or eol attribute).
         diff = diff.StoringBreaksAlike(await breaksAlike);
         string[] besides = [.. new[] { await encoding, mode?.Said }.OfType<string>()];
-        return ShowLocalDiff(path, open, mine, diff, "HEAD", note: besides.Length == 0 ? null : string.Join("; ", besides));
+        return ShowLocalDiff(path, open, mine, diff, "HEAD", note: besides.Length == 0 ? null : string.Join("; ", besides), noFile: noFile);
     }
 
     /// <summary>A version of a file beside the file as it is now: <paramref name="revision"/>'s text of it at
@@ -117,7 +119,8 @@ public sealed partial class EditorWindow
         TextSnapshot text = mine.Snapshot;
         Task<bool> breaksAlike = was is null ? Task.FromResult(false) : Vcs.BreaksStoredAlikeAsync(revision, then, was, path);
         FileDiff diff = (await BackgroundWork.Run(() => FileDiff.Compare(theirs, text))).StoringBreaksAlike(await breaksAlike);
-        return ShowLocalDiff(path, open, mine, diff, version);
+        MergeSide? noFile = was is null ? MergeSide.Left : open is null && !File.Exists(path) ? MergeSide.Right : null;
+        return ShowLocalDiff(path, open, mine, diff, version, noFile: noFile);
     }
 
     /// <summary>What a commit did to a file: its first parent's text beside its own, both read-only.</summary>
@@ -131,16 +134,19 @@ public sealed partial class EditorWindow
         string before = parent is null || file.Kind is ChangeKind.Added ? string.Empty : (await Vcs.VersionAsync(parent, file.From ?? file.Path, file.Path))?.Text ?? string.Empty;
         string after = file.Kind is ChangeKind.Deleted ? string.Empty : (await Vcs.VersionAsync(commit.Hash, file.Path, file.Path))?.Text ?? string.Empty;
         string leftTitle = parent is null ? "Before the first commit" : GitHashes.Short(parent);
+        MergeSide? noFile = parent is null || file.Kind is ChangeKind.Added ? MergeSide.Left : file.Kind is ChangeKind.Deleted ? MergeSide.Right : null;
         TextDocument mine = new(after);
         TextSnapshot text = mine.Snapshot;
         FileDiff diff = await BackgroundWork.Run(() => FileDiff.Compare(before, text));
         return ShowDiff(new DiffContent($"{file.Name}: {commit.Short} {commit.Subject}", $"{commit.Hash}\n{file.From ?? file.Path}\n{file.Path}", file.Path, null,
-            () => Diffs.ForFile(file.Name, diff, mine, null, (leftTitle, commit.Short), file.From ?? file.Path, file.Path)));
+            () => Diffs.ForFile(file.Name, diff, mine, null, (leftTitle, commit.Short), file.From ?? file.Path, file.Path, noFile)));
     }
 
     /// <summary>A version's text beside the file's, the right side the open file's own text when it is still open,
-    /// <paramref name="note"/> said after the differences; the Commit window's boxes beside each change of HEAD's diff.</summary>
-    private DiffWindow ShowLocalDiff(string path, OpenDocument? open, TextDocument mine, FileDiff diff, string version, string? note = null)
+    /// <paramref name="note"/> said after the differences, <paramref name="noFile"/> the side whose version has no such
+    /// file; the Commit window's boxes beside each change of HEAD's diff.</summary>
+    private DiffWindow ShowLocalDiff(string path, OpenDocument? open, TextDocument mine, FileDiff diff, string version, string? note = null,
+        MergeSide? noFile = null)
     {
         // Closed while the differences were read, the file's text is one nothing would save: it is shown, not edited.
         if (open is not null && !documents.ContainsValue(open))
@@ -151,7 +157,7 @@ public sealed partial class EditorWindow
         (string Left, string Right) titles = (version, open is not null ? "Your version" : "Your version (read-only)");
         return ShowDiff(new DiffContent(title, $"{version}\n{path}\n{path}", path, open, () =>
         {
-            DiffView view = Diffs.ForFile(Path.GetFileName(path), diff, mine, open, titles, path, path);
+            DiffView view = Diffs.ForFile(Path.GetFileName(path), diff, mine, open, titles, path, path, noFile);
             view.Note = note;
             // A file not open has a read-only copy for its side: a change rolled back there is written to the file on disk.
             if (open is null)

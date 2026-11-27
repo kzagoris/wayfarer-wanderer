@@ -27,6 +27,7 @@ public sealed class SyntaxColourTests
     [InlineData("gradlew", "shellscript")]
     [InlineData("mvnw", "shellscript")]
     [InlineData(".gitignore", "ignore")]
+    [InlineData(".gitattributes", "gitattributes")]
     [InlineData("notes.txt", "plaintext")]
     [InlineData("Main.class", "plaintext")]
     public void FilesAreInTheirLanguage(string path, string id) => Assert.Equal(id, Language.ForPath(path).Id);

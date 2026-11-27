@@ -31,20 +31,38 @@ public sealed record DotnetProcess(int Id, string Name, string CommandLine, stri
     /// else the executable's name without its extension.</summary>
     public string Program => IsHosted && Assembly is { } dll ? Named(dll) : Executable;
 
-    /// <summary>The program's own assembly as its command line names it, a path or a name in its working folder: the
-    /// first .dll after the dotnet host or Passenger's helper host (<see cref="ChildProcesses.HelperHost"/>) but the
-    /// helper host's own, else the .dll beside its apphost; null where the host names none.</summary>
+    /// <summary>The program's own assembly as its command line names it, a path or a name in its working folder: the .dll
+    /// the dotnet host or Passenger's helper host (<see cref="ChildProcesses.HelperHost"/>) runs, the one the helper host
+    /// runs where the dotnet host runs it, else the .dll beside its apphost; null where the host runs a command of the
+    /// SDK's (<c>dotnet run -e DOTNET_STARTUP_HOOKS=….dll</c>, as dotnet watch starts a program).</summary>
     public string? Assembly
     {
         get
         {
             List<string> words = Words(CommandLine);
-            if (IsHosted)
+            if (!IsHosted)
             {
-                return words.Skip(1).FirstOrDefault(word => word.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && Named(word) != ChildProcesses.HelperHost);
+                return words.Count == 0 ? null : (words[0].EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? words[0][..^4] : words[0]) + ".dll";
             }
-            return words.Count == 0 ? null : (words[0].EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? words[0][..^4] : words[0]) + ".dll";
+            int ran = Ran(words, 1);
+            return ran < 0 ? null : Named(words[ran]) == ChildProcesses.HelperHost && Ran(words, ran + 1) is >= 0 and int helped ? words[helped] : words[ran];
         }
+    }
+
+    /// <summary>The options the dotnet host takes before the program it runs, each with a value after it.</summary>
+    private static readonly string[] HostOptions = ["--additionalprobingpath", "--additional-deps", "--depsfile", "--fx-version", "--roll-forward",
+        "--roll-forward-on-no-candidate-fx", "--runtimeconfig"];
+
+    /// <summary>Where the .dll is that a host's words from <paramref name="at"/> run, past <c>exec</c> and the host's own
+    /// options, as the dotnet host reads them; -1 where the first word left is no .dll, a command of the SDK's.</summary>
+    private static int Ran(List<string> words, int at)
+    {
+        int word = at < words.Count && words[at] == "exec" ? at + 1 : at;
+        while (word < words.Count && words[word].StartsWith('-'))
+        {
+            word += HostOptions.Contains(words[word], StringComparer.OrdinalIgnoreCase) ? 2 : 1;
+        }
+        return word < words.Count && words[word].EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? word : -1;
     }
 
     /// <summary>The command line's words, the program first, each as it was given.</summary>
@@ -576,22 +594,55 @@ public static partial class DotnetProcesses
 
     /// <summary>Each process whose runtime has its files (<see cref="RuntimeFiles"/>) in this process's temporary folder, its
     /// diagnostic socket or its debugger's pipe, with the start they are named for: asked by those names, as
-    /// <see cref="Candidates"/> asks, so the folder's other files are never read. None on Windows.</summary>
-    internal static IEnumerable<(int Id, long Started)> WithRuntimeFiles()
+    /// <see cref="Candidates"/> asks, so the folder's other files are never read, and of each process only while it is new
+    /// to the looks (<see cref="RuntimeFileLooks"/>), so a look costs the listing alone. None on Windows.</summary>
+    internal static IReadOnlyList<(int Id, long Started)> WithRuntimeFiles()
     {
         if (OperatingSystem.IsWindows())
         {
-            yield break;
+            return [];
         }
-        string folder = Path.GetTempPath();
-        foreach (int id in Listed())
+        List<(int Id, long Started)> found = [];
+        lock (FileLooks)
         {
-            if (StartKey(id) is long started
-                && (File.Exists(Path.Combine(folder, string.Create(CultureInfo.InvariantCulture, $"dotnet-diagnostic-{id}-{started}-socket")))
-                    || File.Exists(Path.Combine(folder, string.Create(CultureInfo.InvariantCulture, $"clr-debug-pipe-{id}-{started}-in")))))
-            {
-                yield return (id, started);
-            }
+            FileLooks.Look(ListedInto(ref listing), found);
+        }
+        return found;
+    }
+
+    private static readonly RuntimeFileLooks FileLooks = new(StartKey, HoldsRuntimeFiles);
+
+    /// <summary>The buffer each look lists the processes into, made larger as the machine runs more (under <see cref="FileLooks"/>).</summary>
+    private static int[] listing = [];
+
+    /// <summary>Whether a process's runtime has its diagnostic socket or its debugger's pipe in the temporary folder.</summary>
+    private static bool HoldsRuntimeFiles(int id, long started)
+    {
+        string folder = Path.GetTempPath();
+        return File.Exists(Path.Combine(folder, string.Create(CultureInfo.InvariantCulture, $"dotnet-diagnostic-{id}-{started}-socket")))
+            || File.Exists(Path.Combine(folder, string.Create(CultureInfo.InvariantCulture, $"clr-debug-pipe-{id}-{started}-in")));
+    }
+
+    /// <summary>Every process the system lists now, on macOS and Linux, in <paramref name="into"/>, made larger where it
+    /// cannot hold them; on macOS the listing makes nothing once it can.</summary>
+    private static unsafe ReadOnlySpan<int> ListedInto(ref int[] into)
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            into = [.. Listed()];
+            return into;
+        }
+        const int AllProcesses = 1;
+        // Room for those started since the system said how many there are.
+        int needed = ProcListPids(AllProcesses, 0, null, 0) / sizeof(int) + 64;
+        if (into.Length < needed)
+        {
+            into = new int[needed * 2];
+        }
+        fixed (int* buffer = into)
+        {
+            int bytes = ProcListPids(AllProcesses, 0, buffer, into.Length * sizeof(int));
+            return bytes <= 0 ? [] : into.AsSpan(0, Math.Min(bytes / sizeof(int), into.Length));
         }
     }
 

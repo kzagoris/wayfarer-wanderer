@@ -17,6 +17,13 @@ public sealed record GodotFound(string Executable, string From)
     /// <summary>Its version ("4.7.2"), as its packages, its bundle or its file's name say it; null where none does.</summary>
     public string? Version { get; init; }
 
+    /// <summary>The oldest .NET its C# runs on, as a target framework's major: the one its .NET plugins target (8 for Godot
+    /// 4.7, 10 for 4.8), from which they roll forward; <see cref="EarliestDotnet"/> where its build says none.</summary>
+    public int OldestDotnet { get; init; } = EarliestDotnet;
+
+    /// <summary>The .NET a Godot is taken to run its C# on from where its build says none: Godot 4.4 to 4.7's.</summary>
+    public const int EarliestDotnet = 8;
+
     /// <summary>The folder of the Godot packages its build carries (Godot.NET.Sdk, GodotSharp), which its editor gives a
     /// restore as a feed; null for a build without .NET.</summary>
     public string? Packages => Sharp is null ? null : Path.Combine(Sharp, "Tools", "nupkgs");
@@ -118,14 +125,24 @@ public static partial class GodotExecutables
     /// <summary>What <see cref="HidGamepads"/> says of a driver turned off.</summary>
     public const string HidGamepadsOff = "0";
 
-    /// <summary>The environment of a Godot given these arguments, for a start that passes it on itself: as it stands, with
-    /// <see cref="HidGamepads"/> off where they run it headless and it does not say.</summary>
-    public static IReadOnlyDictionary<string, string> EnvironmentOf(IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string> environment) =>
-        !RunsHeadless(arguments) || environment.ContainsKey(HidGamepads) ? environment
-        : new Dictionary<string, string>(environment, StringComparer.Ordinal) { [HidGamepads] = HidGamepadsOff };
+    /// <summary>The environment of a Godot given these arguments, for its start: as it stands, with <see cref="HidGamepads"/>
+    /// off where they run it headless and it does not say, and where they run its editor (<see cref="RunsEditor"/>), whose
+    /// builds of a C# game inherit it, with the telemetry switches neither it nor this process sets
+    /// (<see cref="ChildProcesses.SendingNoTelemetry(IReadOnlyDictionary{string, string}?, Func{string, string?}?)"/>).</summary>
+    public static IReadOnlyDictionary<string, string> EnvironmentOf(IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string> environment)
+    {
+        IReadOnlyDictionary<string, string> given = RunsEditor(arguments) ? ChildProcesses.SendingNoTelemetry(environment) : environment;
+        return !RunsHeadless(arguments) || given.ContainsKey(HidGamepads) ? given
+            : new Dictionary<string, string>(given, StringComparer.Ordinal) { [HidGamepads] = HidGamepadsOff };
+    }
 
     /// <summary>Whether Godot given these arguments opens its editor on the project rather than its game.</summary>
     public static bool OpensEditor(IReadOnlyList<string> arguments) => EngineArguments(arguments).Any(IsEditorFlag);
+
+    /// <summary>Whether Godot given these arguments runs its editor, which builds a C# game itself: opening it, or an import,
+    /// an export or a build of the project's solutions, each of which Godot's command line runs in its editor.</summary>
+    public static bool RunsEditor(IReadOnlyList<string> arguments) =>
+        EngineArguments(arguments).Any(a => IsEditorFlag(a) || a is "--import" or "--build-solutions" or "--export-release" or "--export-debug" or "--export-pack" or "--export-patch");
 
     /// <summary>Godot's arguments without its flags that open the editor, for a launch that opens it itself, the game's own kept.</summary>
     public static IReadOnlyList<string> WithoutEditorFlags(IReadOnlyList<string> arguments) =>
@@ -200,14 +217,22 @@ public static partial class GodotExecutables
     /// downloads' (<see cref="Downloaded"/>).</summary>
     private static readonly string[] Names = ["godot", "godot4", "godot-mono", "godot4-mono", "godot-dotnet", "godot4-dotnet"];
 
+    /// <summary>How many times this thread looked for Godot as this computer has it (<see cref="Find((string, string)?)"/>),
+    /// each a walk of the PATH's folders and the Applications folders: read to hold the window's thread to none.</summary>
+    public static int SearchedOnThisThread => searchedOnThread;
+
+    [ThreadStatic]
+    private static int searchedOnThread;
+
     /// <summary>Godot as this computer has it: <paramref name="chosen"/> (a path, with the words for where it is chosen) when
     /// given, else as GODOT or GODOT4, the PATH and Applications offer it; null when nothing does.</summary>
     public static GodotFound? Find((string Path, string From)? chosen)
     {
+        searchedOnThread++;
         ShellEnvironment.Ready();
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         return Find(chosen, Named(Environment.GetEnvironmentVariable(Variable), Environment.GetEnvironmentVariable(Variable4)),
-            Programs.PathFolders(),
+            [.. Programs.PathFolders()],
             OperatingSystem.IsMacOS() ? ["/Applications", Path.Combine(home, "Applications")] : [], OperatingSystem.IsWindows());
     }
 
@@ -361,8 +386,13 @@ public static partial class GodotExecutables
         {
             version = "3";
         }
-        return found with { Sharp = dotnet ? sharp : null, Version = version ?? NamedVersion(name) };
+        return found with { Sharp = dotnet ? sharp : null, Version = version ?? NamedVersion(name), OldestDotnet = (dotnet ? PluginsDotnet(sharp) : null) ?? GodotFound.EarliestDotnet };
     }
+
+    /// <summary>The .NET a .NET build's plugins target, as Api/Debug/GodotPlugins.runtimeconfig.json names it (10 of
+    /// net10.0); null where it names none.</summary>
+    private static int? PluginsDotnet(string sharp) =>
+        FrameworkNames.Major(RuntimeConfig.Read(Path.Combine(sharp, "Api", "Debug", "GodotPlugins.dll"))?.TargetFramework);
 
     /// <summary>The version of GodotSharp's package in a .NET build's packages (GodotSharp.4.7.2.nupkg), or null.</summary>
     private static string? PackagedVersion(string packages)

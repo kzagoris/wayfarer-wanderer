@@ -1,4 +1,4 @@
-// Adapted from vendored Passenger, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.Core/UpdateFolders.cs, MIT (notices/Passenger/LICENSE): Wayfarer's folder names.
 using System.Text.Json;
 
 namespace WayfarerWanderer.App.Updates;

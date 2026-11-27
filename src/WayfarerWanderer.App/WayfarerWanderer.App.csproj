@@ -28,7 +28,8 @@
                                ../../vendor/passenger/src/Passenger.Languages/TextMate/Grammars/ini.tmLanguage.json;
                                ../../vendor/passenger/src/Passenger.Languages/TextMate/Grammars/JSON.tmLanguage.json;
                                ../../vendor/passenger/src/Passenger.Languages/TextMate/Grammars/markdown.tmLanguage.json;
-                               ../../vendor/passenger/src/Passenger.Languages/TextMate/Grammars/shell-unix-bash.tmLanguage.json"
+                               ../../vendor/passenger/src/Passenger.Languages/TextMate/Grammars/shell-unix-bash.tmLanguage.json;
+                               ../../vendor/passenger/src/Passenger.Languages/TextMate/Grammars/gitattributes.tmLanguage.json"
                       LogicalName="Grammars/%(Filename)%(Extension)" Link="Shell/Languages/Grammars/%(Filename)%(Extension)" />
     <None Include="Shell/Languages/NOTICES.md;../../vendor/passenger/tools/Passenger.Notices/Licenses/MIT.txt;../../vendor/passenger/tools/Passenger.Notices/Licenses/Apache-2.0.txt;../../vendor/passenger/tools/Passenger.Notices/Licenses/EPL-2.0.txt"
           Link="notices/SyntaxColours/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

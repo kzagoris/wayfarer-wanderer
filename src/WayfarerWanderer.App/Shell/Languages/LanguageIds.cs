@@ -7,5 +7,6 @@ public static class LanguageIds
     public static IReadOnlyList<string> All { get; } =
     [
         "plaintext", "java", "kotlin", "groovy", "xml", "yaml", "json", "properties", "markdown", "shellscript", "dockerfile", "ignore",
+        "gitattributes",
     ];
 }

@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Navigation/SymbolPopup.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/Navigation/SymbolPopup.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -192,7 +192,7 @@ public sealed class SymbolPopup : SearchPopup<SymbolRow>
             if (file)
             {
                 icon.Data = FileIcons.ForFile(symbol.Path);
-                icon.Foreground = FileIcons.BrushForFile(symbol.Path);
+                icon.ForegroundKey = FileIcons.TintForFile(symbol.Path);
             }
             else
             {

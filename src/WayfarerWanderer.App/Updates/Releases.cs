@@ -1,4 +1,5 @@
-// Adapted from vendored Passenger, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/Updates/Releases.cs, MIT (notices/Passenger/LICENSE): Wayfarer's feed and
+// asset names.
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -83,9 +84,15 @@ public static partial class Releases
     private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
 
     /// <summary>The download the release workflow names for this system and processor ("WayfarerWanderer-macos-arm64.dmg"), the
-    /// same in every release, or null for one it builds none for. The system's processor, not the process's: x64 Wayfarer
-    /// under Rosetta or Windows' emulation is offered the native build.</summary>
-    public static string? ThisSystemsAsset()
+    /// same in every release, or null for one it builds none for: a portable copy's, its portable build
+    /// (<see cref="ThisCopy.Data"/>). The system's processor, not the process's: x64 Wayfarer under Rosetta or Windows'
+    /// emulation is offered the native build.</summary>
+    public static string? ThisSystemsAsset() => ThisSystemsAsset(portable: ThisCopy.Data is not null);
+
+    /// <summary>This system's download, the installed build's (an installer, a disk image, the archive install.sh installs)
+    /// or the <paramref name="portable"/> one, which runs where it is unpacked: Windows' zip of the app's folder, macOS's
+    /// zip of the app, and Linux's archive, which is both.</summary>
+    public static string? ThisSystemsAsset(bool portable)
     {
         string? processor = RuntimeInformation.OSArchitecture switch
         {
@@ -94,8 +101,8 @@ public static partial class Releases
             _ => null,
         };
         return processor is null ? null
-            : OperatingSystem.IsMacOS() ? $"WayfarerWanderer-macos-{processor}.dmg"
-            : OperatingSystem.IsWindows() ? $"WayfarerWanderer-windows-{processor}.exe"
+            : OperatingSystem.IsMacOS() ? $"WayfarerWanderer-macos-{processor}.{(portable ? "zip" : "dmg")}"
+            : OperatingSystem.IsWindows() ? (portable ? $"WayfarerWanderer-windows-{processor}-portable.zip" : $"WayfarerWanderer-windows-{processor}.exe")
             : OperatingSystem.IsLinux() ? $"WayfarerWanderer-linux-{processor}.tar.gz"
             : null;
     }

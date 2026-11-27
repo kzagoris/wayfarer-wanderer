@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/State/StateStore.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/State/StateStore.cs, MIT (notices/Passenger/LICENSE).
 using System.Text.Json.Nodes;
 using Passenger.Core;
 using WayfarerWanderer.App.Shell.Settings;
@@ -14,6 +14,9 @@ public sealed class StateStore
 
     /// <summary>The file of the starters New Project made something from lately (<see cref="Templates"/>).</summary>
     public const string TemplatesFile = "recentTemplates.json";
+
+    /// <summary>The file of what New Project made for Git with the last project (<see cref="NewProject"/>).</summary>
+    public const string NewProjectFile = "newProject.json";
 
     private static readonly Dictionary<string, StateStore> Shared = new(StringComparer.Ordinal);
 
@@ -31,6 +34,7 @@ public sealed class StateStore
         Recent = new(Path.Combine(root, "recentFolders.json"));
         Trust = new(Path.Combine(root, "trust.json"));
         Templates = new(Path.Combine(root, TemplatesFile));
+        NewProject = new(Path.Combine(root, NewProjectFile));
         // Before this process writes any: a change is written a moment after it is made, and only through this store.
         UsedBefore = File.Exists(Path.Combine(root, SettingsFile)) || File.Exists(Recent.Path) || Directory.Exists(Path.Combine(root, "workspaces"));
     }
@@ -41,9 +45,29 @@ public sealed class StateStore
     /// <summary>A state folder other than the person's, for a test or a second, separate setup.</summary>
     public const string Variable = "WAYFARER_SETTINGS";
 
-    public static string DefaultRoot => Named ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Passenger.Core.Product.Name);
+    /// <summary>The folder: WAYFARER_SETTINGS names it, else a portable copy's data folder (<see cref="ThisCopy.Data"/>),
+    /// else the user's local application data.</summary>
+    public static string DefaultRoot => Named ?? ThisCopy.Data ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Passenger.Core.Product.Name);
 
-    public static string? Named => Environment.GetEnvironmentVariable(Variable) is { Length: > 0 } folder ? folder : null;
+    /// <summary>The folder WAYFARER_SETTINGS names, or null where it names none or this portable copy's own data folder,
+    /// which it gave the programs it starts (<see cref="NameWhole"/>).</summary>
+    public static string? Named => Environment.GetEnvironmentVariable(Variable) is { Length: > 0 } folder
+        && !(ThisCopy.Data is { } data && PathNames.Same(folder, data)) ? folder : null;
+
+    /// <summary>Makes a folder WAYFARER_SETTINGS names by a relative path the one it names from the folder Wayfarer was
+    /// started in, and names a portable copy's data folder where it names none: this process and every program it starts
+    /// (a terminal's shell, another Wayfarer) then take the same folder.</summary>
+    public static void NameWhole()
+    {
+        if (Named is { } named && !Path.IsPathFullyQualified(named))
+        {
+            OwnEnvironment.Set(Variable, Path.GetFullPath(named));
+        }
+        else if (Named is null && ThisCopy.Data is { } data)
+        {
+            OwnEnvironment.Set(Variable, data);
+        }
+    }
 
     public string Root { get; }
 
@@ -62,6 +86,9 @@ public sealed class StateStore
 
     /// <summary>The starters New Project made something from lately, which its list shows first.</summary>
     public StateDocument<RecentTemplatesState> Templates { get; }
+
+    /// <summary>What New Project made for Git with the last project, which it offers next.</summary>
+    public StateDocument<RepositoryChoices> NewProject { get; }
 
     public static StateStore Open(string root)
     {
@@ -125,6 +152,7 @@ public sealed class StateStore
         Recent.Flush();
         Trust.Flush();
         Templates.Flush();
+        NewProject.Flush();
         foreach ((ProjectState documents, _) in projects.Values)
         {
             documents.Flush();

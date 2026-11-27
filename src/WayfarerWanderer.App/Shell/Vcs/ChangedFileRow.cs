@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Vcs/ChangedFileRow.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/Vcs/ChangedFileRow.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -49,7 +49,7 @@ public sealed class ChangedFileRow
     public void Show(string path, ChangeKind kind, string where)
     {
         icon.Data = FileIcons.ForFile(path);
-        icon.Foreground = FileIcons.BrushForFile(path);
+        icon.ForegroundKey = FileIcons.TintForFile(path);
         name.Text = Path.GetFileName(path);
         name.Resource(TextBlock.ForegroundProperty, ref colour, KindToken(kind));
         name.TextDecorations = kind is ChangeKind.Deleted ? TextDecorations.Strikethrough : null;

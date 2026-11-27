@@ -19,12 +19,12 @@ Reuse [the packager](../../../tools/package-release.py), [payload inventory](../
 
 | Target | Proposed public files |
 | --- | --- |
-| Windows | `WayfarerWanderer-windows-<arch>.exe`, `releases.win-<arch>.json`, and the exact versioned full package named in that feed |
-| macOS | `WayfarerWanderer-macos-<arch>.dmg` |
-| Linux | `WayfarerWanderer-linux-<arch>.tar.gz` |
+| Windows | `WayfarerWanderer-windows-<arch>.exe`, `releases.win-<arch>.json`, the exact versioned full package named in that feed, and the portable `WayfarerWanderer-windows-<arch>-portable.zip` |
+| macOS | `WayfarerWanderer-macos-<arch>.dmg` and the portable `WayfarerWanderer-macos-<arch>.zip` |
+| Linux | `WayfarerWanderer-linux-<arch>.tar.gz`, which is also the portable build |
 | All | `SHA256SUMS` covering every public download above, plus release notes as the GitHub Release body |
 
-Suppress portable Windows packages during rehearsal and publication. Shipping a Velopack feed establishes the distribution format. In-app update UI and behavior require separate acceptance criteria.
+Velopack's own portable package stays suppressed (`--noPortable`): the portable builds are Wayfarer's (Passenger #2153, `ThisCopy.cs`), the app's folder or bundle in a `WayfarerWanderer` folder, made portable by a `data` folder beside the executable (beside the `.app` on macOS). A portable copy never updates itself: it names its portable build for the person to put in its place. Each package job checks its portable build refuses a `data` file with exit code 2, so the copy finds its folder from the packaged layout. Shipping a Velopack feed establishes the installed distribution format. In-app update UI and behavior require separate acceptance criteria.
 
 ## Implementation sequence
 

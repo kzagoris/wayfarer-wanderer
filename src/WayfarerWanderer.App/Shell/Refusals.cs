@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Refusals.cs, MIT (notices/Passenger/LICENSE): the refusals of what Wayfarer
+// From Passenger 494009d7 src/Passenger.App/Refusals.cs, MIT (notices/Passenger/LICENSE): the refusals of what Wayfarer
 // has (Git's views and commands, the search, the editor's files, the tool windows, the Welcome screen's list); .NET's,
 // Godot's, Aspire's, the debugger's, the agents' and the other refusals of what Wayfarer cut, cut with them.
 using System.Globalization;
@@ -130,6 +130,9 @@ public static class Refusals
     /// <summary>Add to .gitignore on a file Git tracks, where only an unversioned one is ignored.</summary>
     public const string Tracked = "Git tracks this file: only an unversioned file is added to .gitignore";
 
+    /// <summary>Add to .gitignore on what the Commit window does not list as unversioned: tracked, or ignored already.</summary>
+    public const string NotUnversioned = "Git tracks it or ignores it already: only an unversioned file or folder is added to .gitignore";
+
     /// <summary>Compare with Local on a file the commit deleted.</summary>
     public const string DeletedByCommit = "The commit deleted this file, so it holds none to compare";
 
@@ -150,6 +153,18 @@ public static class Refusals
 
     /// <summary>Clear Filters while the list is shown whole as at first.</summary>
     public const string NotNarrowed = "The list is neither narrowed nor ordered otherwise";
+
+    /// <summary>No tool window's view has had the keys yet, for Jump to Last Tool Window.</summary>
+    public const string NoToolWindowHadKeys = "No tool window has had the keys yet";
+
+    /// <summary>What has the keys holds no tabs, for Close Tool Window Tab.</summary>
+    public const string NoToolTabs = "No tool window with tabs has the keys";
+
+    /// <summary>The tab shown has no ×, for Close Tool Window Tab.</summary>
+    public const string ToolTabStays = "The tab shown has no close: it stays open";
+
+    /// <summary>The window's scale is at the end of Settings' Display scale, for Zoom In and Zoom Out.</summary>
+    public static string ZoomedAsFarAsItGoes(bool up) => up ? "The window is as large as it goes" : "The window is as small as it goes";
 
     /// <summary>Maximize of a tool window that floats or is shown over the editors for a moment.</summary>
     public const string Unmaximized = "Only a docked tool window is maximized";

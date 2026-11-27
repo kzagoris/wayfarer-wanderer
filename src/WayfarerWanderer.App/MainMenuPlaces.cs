@@ -47,6 +47,14 @@ public static class MainMenuPlaces
         [AppActions.IncreaseFontSize] = [new("View/Active Editor", 1, 0)],
         [AppActions.DecreaseFontSize] = [new("View/Active Editor", 1, 1)],
         [AppActions.ResetFontSize] = [new("View/Active Editor", 1, 2)],
+        // View's tool windows (3) and Appearance (4, 0): the whole window's scale, Full Screen.
+        [AppActions.HideSideWindows] = [new("View", 3, 0)],
+        [AppActions.LastToolWindow] = [new("View", 3, 1)],
+        [AppActions.CloseToolTab] = [new("View", 3, 2)],
+        [AppActions.FullScreen] = [new("View/Appearance", 0, 0)],
+        [AppActions.ZoomIn] = [new("View/Appearance", 1, 0)],
+        [AppActions.ZoomOut] = [new("View/Appearance", 1, 1)],
+        [AppActions.ResetZoom] = [new("View/Appearance", 1, 2)],
 
         // Navigate: Back and Forward, the Go to popups, the recent files.
         [AppActions.Back] = [new("Navigate", 0, 0)],
@@ -63,6 +71,27 @@ public static class MainMenuPlaces
 
         // Code and Refactor: the language servers'.
         [EditorWindow.CompleteAction] = [new("Code", 0, 0)],
+        // Code's Folding (3, 0), its levels' submenus at (0, 3) and (0, 4).
+        [EditorKeys.Unfold] = [new("Code/Folding", 0, 0)],
+        [EditorKeys.UnfoldAll] = [new("Code/Folding", 0, 1)],
+        [EditorKeys.UnfoldRecursively] = [new("Code/Folding", 0, 2)],
+        [EditorKeys.Fold] = [new("Code/Folding", 1, 0)],
+        [EditorKeys.FoldToDefinitions] = [new("Code/Folding", 1, 1)],
+        [EditorKeys.FoldAll] = [new("Code/Folding", 1, 2)],
+        [EditorKeys.FoldRecursively] = [new("Code/Folding", 1, 3)],
+        [EditorKeys.UnfoldDocComments] = [new("Code/Folding", 2, 0)],
+        [EditorKeys.FoldDocComments] = [new("Code/Folding", 2, 1)],
+        [EditorKeys.ToggleFold] = [new("Code/Folding", 3, 0)],
+        [EditorKeys.UnfoldToLevel1] = [new("Code/Folding/Expand to Level", 0, 0)],
+        [EditorKeys.UnfoldToLevel2] = [new("Code/Folding/Expand to Level", 0, 1)],
+        [EditorKeys.UnfoldToLevel3] = [new("Code/Folding/Expand to Level", 0, 2)],
+        [EditorKeys.UnfoldToLevel4] = [new("Code/Folding/Expand to Level", 0, 3)],
+        [EditorKeys.UnfoldToLevel5] = [new("Code/Folding/Expand to Level", 0, 4)],
+        [EditorKeys.UnfoldAllToLevel1] = [new("Code/Folding/Expand All to Level", 0, 0)],
+        [EditorKeys.UnfoldAllToLevel2] = [new("Code/Folding/Expand All to Level", 0, 1)],
+        [EditorKeys.UnfoldAllToLevel3] = [new("Code/Folding/Expand All to Level", 0, 2)],
+        [EditorKeys.UnfoldAllToLevel4] = [new("Code/Folding/Expand All to Level", 0, 3)],
+        [EditorKeys.UnfoldAllToLevel5] = [new("Code/Folding/Expand All to Level", 0, 4)],
         [EditorWindow.RenameAction] = [new("Refactor", 0, 0)],
         [EditorWindow.UndoRenameAction] = [new("Refactor", 0, 1)],
 
@@ -104,6 +133,8 @@ public static class MainMenuPlaces
         [AppActions.ResolveConflicts] = [new("Git", 2, 5)],
         [AppActions.Stage] = [new("Git", 2, 6)],
         [AppActions.Unstage] = [new("Git", 2, 7)],
+        [AppActions.AddToGitIgnore] = [new("Git", 2, 8)],
+        [AppActions.GoToIgnoringLine] = [new("Git", 2, 9)],
         [AppActions.CreateRepository] = [new("Git", 3, 0)],
         [AppActions.CommitSigning] = [new("Git", 3, 1)],
 

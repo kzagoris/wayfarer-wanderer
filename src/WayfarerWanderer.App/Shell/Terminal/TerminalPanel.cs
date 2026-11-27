@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/ToolWindows/TerminalPanel.cs, MIT (notices/Passenger/LICENSE): its shells
+// From Passenger 494009d7 src/Passenger.App/ToolWindows/TerminalPanel.cs, MIT (notices/Passenger/LICENSE): its shells
 // alone, without run configurations' programs, the agents' shell or a .NET installation's PATH.
 using System.Collections.ObjectModel;
 using Avalonia;
@@ -29,8 +29,9 @@ public sealed class TerminalTab(TerminalSession session, string name) : Observab
 
 /// <summary>The Terminal window: a shell per tab in the open folder, the first started when the window is first shown, +
 /// for another; a tab whose shell ends closes, and the window hides with its last. Shown, it takes the keys only as asked
-/// (<see cref="FocusView"/>, a tab started or chosen), never because a layout shows it.</summary>
-public sealed class TerminalPanel : DockPanel
+/// (<see cref="FocusView"/>, a tab started or chosen, stepped to by Next Tab or Previous Tab), never because a layout shows
+/// it; Close Tool Window Tab closes the shell shown as its × does.</summary>
+public sealed class TerminalPanel : DockPanel, ToolTabs.ITabbed
 {
     private readonly ObservableCollection<TerminalTab> tabs = [];
     // Refusals.NothingSelected's words, until Refusals is caught up with v0.4.2.
@@ -148,6 +149,16 @@ public sealed class TerminalPanel : DockPanel
         return Task.WhenAll(closing.Select(tab => tab.Session.DisposeAsync().AsTask()));
     }
 
+    public bool StepTab(int step)
+    {
+        if (tabs.Count < 2 || ActiveTab is not { } shown)
+        {
+            return false;
+        }
+        Show(tabs[(((tabs.IndexOf(shown) + step) % tabs.Count) + tabs.Count) % tabs.Count]);
+        return true;
+    }
+
     private void Show(TerminalTab tab, bool focus = true)
     {
         foreach (TerminalTab each in tabs)
@@ -164,6 +175,16 @@ public sealed class TerminalPanel : DockPanel
 
     /// <summary>The keys to the shell, once the view is laid out (a control not yet arranged cannot take the focus).</summary>
     public void FocusView() => Avalonia.Threading.Dispatcher.UIThread.Post(() => view.Focus(), Avalonia.Threading.DispatcherPriority.Loaded);
+
+    public bool CloseTab()
+    {
+        if (ActiveTab is not { } shown)
+        {
+            return false;
+        }
+        Close(shown);
+        return true;
+    }
 
     private void Close(TerminalTab tab)
     {

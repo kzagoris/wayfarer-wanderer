@@ -32,7 +32,7 @@ public partial class EditorApplication : Application
         // The shell's look as Passenger's App sets it up: the accent from the tokens, the fonts, the scale and the caret.
         Themes.TakeAccentFromTokens(this);
         FallbackFonts.Install(PlatformFallback.Named, FaceTracking.Set);
-        CodeFonts.Install(PlatformWidths.Monospaced);
+        CodeFonts.Install(PlatformWidths.Monospaced, PlatformWidths.Readable);
         CodeFonts.Use(this, CodeEditor.CodeFont);
         WindowFonts.Use(this, WindowFonts.Carried);
         InterfaceScale.Use(this, 1);
@@ -138,6 +138,18 @@ internal static class Program
         {
             return signed;
         }
+        // What the copy's place says, before anything reads the state folder it may be: fatal where a marker is malformed.
+        try
+        {
+            ThisCopy.Read();
+        }
+        catch (FormatException error)
+        {
+            Console.Error.WriteLine($"wayfarer: {error.Message}");
+            return 2;
+        }
+        // Before anything reads the state folder, so the programs Wayfarer starts take the same one.
+        StateStore.NameWhole();
         if (OperatingSystem.IsWindows() && File.Exists(Path.Combine(AppContext.BaseDirectory, "sq.version")))
         {
             VelopackApp.Build().SetArgs(args).SetAutoApplyOnStartup(false).Run();

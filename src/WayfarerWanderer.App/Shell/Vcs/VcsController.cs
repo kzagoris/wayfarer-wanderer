@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Vcs/VcsController.cs, MIT (notices/Passenger/LICENSE): without agents' calls,
+// From Passenger 494009d7 src/Passenger.App/Vcs/VcsController.cs, MIT (notices/Passenger/LICENSE): without agents' calls,
 // containers' secrets or .NET's gitignore, its Git folders watched by Wayfarer's own GitWatcher,
 // its change bars' typing pause its own (Wayfarer has no TypingPauses).
 using WayfarerWanderer.App.Shell.Workspace;
@@ -46,6 +46,9 @@ public sealed class VcsController : IDisposable
     /// wherever it was made (git mv in a terminal, a move here in an earlier session), which its bars, diff and rollback
     /// compare with.</summary>
     private Dictionary<string, string> renamed = new(PathNames.Comparer);
+
+    /// <summary>The files the last status lists as untracked, which the last commit has nowhere, whatever was moved here.</summary>
+    private HashSet<string> untracked = new(PathNames.Comparer);
 
     private Git? git;
     private int opened;
@@ -340,6 +343,7 @@ public sealed class VcsController : IDisposable
         textsRead = false;
         moves.Clear();
         renamed = new(PathNames.Comparer);
+        untracked = new(PathNames.Comparer);
     }
 
     /// <summary>Watches Git's folders the folder watcher does not: Git's folder and its common folder, wherever they are but
@@ -392,6 +396,7 @@ public sealed class VcsController : IDisposable
         textsRead = false;
         moves.Clear();
         renamed = new(PathNames.Comparer);
+        untracked = new(PathNames.Comparer);
         return RefreshAsync();
     }
 
@@ -416,7 +421,7 @@ public sealed class VcsController : IDisposable
     public string? WhyNotCreate => lookIn is null ? Refusals.NoFolder : git is not null ? Refusals.InRepository : Refused;
 
     /// <summary>Create Git Repository: the open folder made a working tree and read as it is when a folder opens, given
-    /// first a .gitignore of Maven's, Gradle's and IntelliJ's output where it has none (<see cref="JvmIgnored"/>), so build
+    /// first a .gitignore of Maven's, Gradle's and IntelliJ's output where it has none (<see cref="RepositoryFiles.GitIgnore"/>), so build
     /// output is never offered for its first commit. A .gitignore that could not be written is said with the repository made; one written for a
     /// repository git then could not make is taken away again.</summary>
     public async Task<VcsOutcome> InitAsync()
@@ -441,7 +446,7 @@ public sealed class VcsController : IDisposable
         {
             try
             {
-                await File.WriteAllTextAsync(ignore, JvmIgnored);
+                await File.WriteAllTextAsync(ignore, RepositoryFiles.GitIgnore);
                 wrote = true;
             }
             catch (Exception refused) when (refused is IOException or UnauthorizedAccessException)
@@ -464,37 +469,6 @@ public sealed class VcsController : IDisposable
         return git is null ? Report(false, NoRepository)
             : Report(true, unwritten is null ? created : $"{created}, with no .gitignore: {unwritten}");
     }
-
-    /// <summary>The .gitignore Create Git Repository writes: what Maven, Gradle, IntelliJ and the JVM leave behind.</summary>
-    public const string JvmIgnored = """
-        # Build output
-        target/
-        build/
-        out/
-        bin/
-        *.class
-
-        # Gradle
-        .gradle/
-        !gradle/wrapper/gradle-wrapper.jar
-
-        # Kotlin
-        .kotlin/
-
-        # IntelliJ IDEA
-        .idea/
-        *.iml
-        *.iws
-
-        # Logs and crash files
-        *.log
-        hs_err_pid*
-
-        # Operating systems
-        .DS_Store
-        Thumbs.db
-
-        """;
 
     /// <summary>Create Git Repository's stage as git makes the repository.</summary>
     private const string Creating = "Creating the Git repository…";
@@ -665,11 +639,12 @@ public sealed class VcsController : IDisposable
             if (!textsRead || status.Head != textsOf)
             {
                 renamed = Renames(status.Changes);
+                untracked = Untracked(status.Changes);
                 ReadTexts(repository, status.Head);
             }
             else
             {
-                TakeRenames(Renames(status.Changes));
+                TakeRenames(Renames(status.Changes), Untracked(status.Changes));
             }
         }
         Changed?.Invoke(this, EventArgs.Empty);
@@ -1589,9 +1564,11 @@ public sealed class VcsController : IDisposable
             : Report(pushed.Succeeded, pushed.Succeeded ? $"Pushed {branch.Name}" : $"Push failed: {pushed.Message}");
     }
 
-    /// <summary>The files that differ between a branch or tag and the working tree.</summary>
-    public async Task<IReadOnlyList<FileChange>> ChangesSinceAsync(BranchInfo branch) =>
-        git is { } repository ? await repository.ChangesSinceAsync(branch.Ref.FullName) : [];
+    /// <summary>The files a Show Diff with Working Tree tab lists: those that differ between a branch or tag and the
+    /// working tree, or those a stash holds.</summary>
+    public async Task<IReadOnlyList<FileChange>> ChangesSinceAsync(WorkingTreeComparison compared) => git is not { } repository ? []
+        : compared.Stash is { } stash ? await repository.StashFilesAsync(stash)
+        : await repository.ChangesSinceAsync(compared.Revision);
 
     /// <summary>The commits of one revision another lacks ("main..feature"), newest first.</summary>
     public async Task<IReadOnlyList<CommitInfo>> LogAsync(IReadOnlyList<string> revisions) =>
@@ -1646,14 +1623,14 @@ public sealed class VcsController : IDisposable
         : changes.FirstOrDefault(c => c.Kind is ChangeKind.Conflicted) is { } conflicted ? $"{conflicted.Name} is in conflict: resolve it first"
         : null;
 
-    /// <summary>Stages files whole (<see cref="Git.StageAsync"/>), or unstages them (<see cref="Git.UnstageAsync"/>), a
-    /// rename's old name with it, every open file saved first, then reads the status again.</summary>
+    /// <summary>Stages files whole (<see cref="Git.StageAsync"/>), a rename's old name with it, or unstages them (<see
+    /// cref="Git.UnstageAsync"/>), a rename keeping its move in the index, every open file saved first, then reads the
+    /// status again.</summary>
     public Task<VcsOutcome> StageAsync(IReadOnlyList<FileChange> changes, bool stage) =>
-        IndexChangeAsync(stage, repository =>
-        {
-            string[] paths = [.. changes.SelectMany(c => c.From is { } from ? new[] { c.Path, from } : [c.Path])];
-            return stage ? repository.StageAsync(paths) : repository.UnstageAsync(paths);
-        }, Plural.Of(changes.Count, "file"));
+        IndexChangeAsync(stage, repository => stage
+            ? repository.StageAsync([.. changes.SelectMany(c => c.From is { } from ? new[] { c.Path, from } : [c.Path])])
+            : repository.UnstageAsync([.. changes.Where(c => c.From is null).Select(c => c.Path)], [.. changes.Where(c => c.From is not null).Select(c => (c.From!, c.Path))]),
+            Plural.Of(changes.Count, "file"));
 
     /// <summary>Stages some of a file's changes (<see cref="Git.StageChangesAsync"/>), then reads the status again.</summary>
     public Task<VcsOutcome> StageChangesAsync(string path, PartialCommit chosen) =>
@@ -1693,15 +1670,13 @@ public sealed class VcsController : IDisposable
     /// <summary>What git's index holds at each path (its mode and blob, or none), for putting it back as it was.</summary>
     public async Task<IReadOnlyList<(string Path, (string Mode, string Blob)? Entry)>> IndexEntriesAsync(IReadOnlyList<string> paths)
     {
-        List<(string, (string, string)?)> entries = [];
-        if (git is { } repository)
+        if (git is not { } repository)
         {
-            foreach (string path in paths.Distinct(PathNames.Comparer))
-            {
-                entries.Add((path, await repository.IndexEntryAsync(path)));
-            }
+            return [];
         }
-        return entries;
+        string[] distinct = [.. paths.Distinct(PathNames.Comparer)];
+        IReadOnlyList<(string Mode, string Blob)?> held = await repository.IndexEntriesAsync(distinct);
+        return [.. distinct.Select((path, i) => (path, held[i]))];
     }
 
     /// <summary>Puts git's index's entries back as <paramref name="entries"/> has them, then reads the status again: null
@@ -1715,16 +1690,9 @@ public sealed class VcsController : IDisposable
         }
         VcsOutcome put = await OneAtATimeAsync(async () =>
         {
-            foreach ((string path, (string Mode, string Blob)? entry) in entries)
-            {
-                if (await repository.PutIndexEntryAsync(path, entry) is { Succeeded: false } refused)
-                {
-                    await RefreshAsync();
-                    return new VcsOutcome(false, refused.Message);
-                }
-            }
+            GitResult written = await repository.PutIndexEntriesAsync(entries);
             await RefreshAsync();
-            return new VcsOutcome(true, string.Empty);
+            return new VcsOutcome(written.Succeeded, written.Succeeded ? string.Empty : written.Message);
         }, refused => refused);
         return put.Succeeded ? null : put.Message;
     }
@@ -2127,12 +2095,21 @@ public sealed class VcsController : IDisposable
         await bytes is { } read ? await BackgroundWork.Run(() => FileVersion.Read(read, encoding, path)) : null;
 
     /// <summary>A file or folder moved here (a rename, a code fix): until a commit has its files at their new paths,
-    /// their change bars, diff and rollback compare with what the last commit has where they were. What the index has of
-    /// it moves with it, as git mv moves it, so the status shows a rename; the next read waits for that. The moves made
+    /// their change bars, diff and rollback compare with what the last commit has where they were. A move back where it
+    /// came from (Undo's) takes the move out, so what comes at the name it left has no origin. What the index has of it
+    /// moves with it, as git mv moves it, so the status shows a rename; the next read waits for that. The moves made
     /// together (a refactoring's, an Undo's) go to the index together, in one write.</summary>
     public void Moved(string from, string to)
     {
-        moves.Add((from, to));
+        int brought = moves.FindLastIndex(m => PathNames.Same(m.To, from));
+        if (brought >= 0 && PathNames.Same(moves[brought].From, to))
+        {
+            moves.RemoveAt(brought);
+        }
+        else
+        {
+            moves.Add((from, to));
+        }
         heads.Clear();
         if (git is not { } repository)
         {
@@ -2190,12 +2167,17 @@ public sealed class VcsController : IDisposable
     }
 
     /// <summary>Where a file is in the last commit: where the status found it renamed from, else where it was before every
-    /// move made here since the folder opened (or where that was renamed from, until the status reads those moves).</summary>
+    /// move made here since the folder opened (or where that was renamed from, until the status reads those moves); a file
+    /// the status lists as untracked is where it is, new, whatever was moved to its name before.</summary>
     public string Origin(string path)
     {
         if (renamed.TryGetValue(path, out string? from))
         {
             return from;
+        }
+        if (untracked.Contains(path))
+        {
+            return path;
         }
         for (int i = moves.Count - 1; i >= 0; i--)
         {
@@ -2203,6 +2185,9 @@ public sealed class VcsController : IDisposable
         }
         return renamed.GetValueOrDefault(path) ?? path;
     }
+
+    private static HashSet<string> Untracked(IReadOnlyList<FileChange> changes) =>
+        new(changes.Where(c => c.Kind is ChangeKind.Unversioned).Select(c => c.Path), PathNames.Comparer);
 
     private static Dictionary<string, string> Renames(IReadOnlyList<FileChange> changes)
     {
@@ -2217,17 +2202,20 @@ public sealed class VcsController : IDisposable
         return found;
     }
 
-    /// <summary>A status's renames taken in: each file whose place in the last commit they move is read there again, an
-    /// open one's bars worked out again; none is when they move nothing (a move here the status has caught up with).</summary>
-    private void TakeRenames(Dictionary<string, string> now)
+    /// <summary>A status's renames and untracked files taken in: each file whose place in the last commit they move is read
+    /// there again, an open one's bars worked out again; none is when they move nothing (a move here the status has caught
+    /// up with).</summary>
+    private void TakeRenames(Dictionary<string, string> now, HashSet<string> nowUntracked)
     {
-        if (now.Count == renamed.Count && now.All(r => renamed.TryGetValue(r.Key, out string? was) && PathNames.Same(was, r.Value)))
+        if (now.Count == renamed.Count && now.All(r => renamed.TryGetValue(r.Key, out string? was) && PathNames.Same(was, r.Value))
+            && nowUntracked.SetEquals(untracked))
         {
             return;
         }
         string[] read = [.. heads.Keys];
         string[] before = [.. read.Select(Origin)];
         renamed = now;
+        untracked = nowUntracked;
         for (int i = 0; i < read.Length; i++)
         {
             if (PathNames.Same(before[i], Origin(read[i])))

@@ -1,7 +1,7 @@
-// The Explorer's row menu, its keys and its drags, after Passenger 8a1df7e4 src/Passenger.App/MainWindow.ExplorerActions.cs,
+// The Explorer's row menu, its keys and its drags, after Passenger 494009d7 src/Passenger.App/MainWindow.ExplorerActions.cs,
 // MainWindow.Files.cs and MainWindow.FileMoves.cs, MIT (notices/Passenger/LICENSE): the solution, project, NuGet, Docker,
-// Aspire, Godot, nesting, Local History and Git parts cut, Undo kept only for a Delete, and C#'s Class/Interface made
-// Java's and Kotlin's.
+// Aspire, Godot, nesting and Local History parts cut, Git's kept to Add to .gitignore and Go to Ignoring Line, Undo kept
+// only for a Delete, and C#'s Class/Interface made Java's and Kotlin's.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -182,8 +182,9 @@ public sealed partial class EditorWindow
         e.Handled = true;
     }
 
-    /// <summary>A row's menu, as Passenger's Explorer makes it for a folder on disk: a module's Build, Add, Edit (the
-    /// clipboard's actions, Delete and Rename), the path, and Open In.</summary>
+    /// <summary>A row's menu, as Passenger's Explorer makes it for a folder on disk: a module's Build, Add (with a folder's
+    /// .editorconfig, .gitignore and .gitattributes), Edit (the clipboard's actions, Delete and Rename), the path, Open In,
+    /// and in a repository Git's Add to .gitignore and Go to Ignoring Line.</summary>
     private IReadOnlyList<Control>? ExplorerMenu(ExplorerNode node)
     {
         ActionContext context = ExplorerContext();
@@ -194,7 +195,8 @@ public sealed partial class EditorWindow
         }
         if (node.Into is not null)
         {
-            items.AddRange([Sub("Add", Item(A.NewFile), Item(A.NewFolder), Item(A.NewType)), new Separator()]);
+            items.AddRange([Sub("Add", Item(A.NewFile), Item(A.NewFolder), Item(A.NewType), new Separator(), Item(A.NewEditorConfig), Item(A.NewGitIgnore),
+                Item(A.NewGitAttributes)), new Separator()]);
         }
         List<Control> edit = [];
         if (node.IsMovable)
@@ -208,6 +210,10 @@ public sealed partial class EditorWindow
         }
         items.Add(Sub("Edit", [.. edit]));
         items.AddRange([Item(A.CopyPath), Sub("Open In", Item(A.RevealInFileManager))]);
+        if (node.Path is { } versioned && Vcs.Repository?.IsInside(versioned) == true)
+        {
+            items.AddRange([new Separator(), Sub("Git", Item(A.AddToGitIgnore), Item(A.GoToIgnoringLine))]);
+        }
         return items;
 
         MenuItem Item(string id)
@@ -348,7 +354,9 @@ public sealed partial class EditorWindow
     private static Control TypeBadge(string kind)
     {
         string file = kind.StartsWith("Java", StringComparison.Ordinal) ? "A.java" : "A.kt";
-        return new PathIcon { Width = 14, Height = 14, Data = FileIcons.ForFile(file), Foreground = FileIcons.BrushForFile(file) };
+        PathIcon icon = new() { Width = 14, Height = 14, Data = FileIcons.ForFile(file) };
+        icon.Bind(PathIcon.ForegroundProperty, icon.GetResourceObservable(FileIcons.TintForFile(file)));
+        return icon;
     }
 
     // Making and renaming.

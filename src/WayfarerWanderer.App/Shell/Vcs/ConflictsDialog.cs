@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Vcs/ConflictsDialog.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/Vcs/ConflictsDialog.cs, MIT (notices/Passenger/LICENSE).
 using System.Collections.ObjectModel;
 using System.Globalization;
 using Avalonia;
@@ -197,7 +197,7 @@ public sealed class ConflictsDialog : IdeWindow
         return line.Showing<ConflictRow>(row =>
         {
             icon.Data = Explorer.FileIcons.ForFile(row.Conflict.Path);
-            icon.Foreground = Explorer.FileIcons.BrushForFile(row.Conflict.Path);
+            icon.ForegroundKey = Explorer.FileIcons.TintForFile(row.Conflict.Path);
             name.Text = row.Conflict.Name;
             folder.Text = row.Folder;
             yours.Text = row.Yours;

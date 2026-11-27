@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/MainWindow.ActiveEditor.cs and MainWindow.Settings.cs's ApplyTo, MIT
+// From Passenger 494009d7 src/Passenger.App/MainWindow.ActiveEditor.cs and MainWindow.Settings.cs's ApplyTo, MIT
 // (notices/Passenger/LICENSE): over Wayfarer's one editor, each file's soft wrap and whitespace kept with its view.
 using Avalonia.Threading;
 using WayfarerWanderer.App.Shell;

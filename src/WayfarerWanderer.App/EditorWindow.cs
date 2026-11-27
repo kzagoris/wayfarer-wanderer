@@ -57,10 +57,12 @@ public sealed partial class EditorWindow : Window
         AddQuickDocumentation();
         AddReadAsText();
         AddActiveEditor();
+        AddFrameActions();
         AddFindInFiles();
         AddAccessibility();
         AddToolWindows(new Grid { Children = { EditorWithBar(), Welcome } });
         AddExplorerActions();
+        AddGitIgnoreActions();
         DockPanel.SetDock(TrustBanner, Dock.Top);
         DockPanel.SetDock(asking, Dock.Top);
         Control bar = Toolbar();

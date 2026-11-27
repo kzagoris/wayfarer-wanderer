@@ -1,4 +1,5 @@
-// Adapted from vendored Passenger, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/Updates/Updater.cs, MIT (notices/Passenger/LICENSE): cut to the updaters
+// Wayfarer ships.
 using System.Diagnostics;
 using Passenger.Core;
 using Velopack.Locators;
@@ -21,6 +22,10 @@ public abstract class Updater
     /// <summary>Why the last <see cref="Install"/> left the copy as it was, for the next start to say; null when it
     /// installed, or had nothing to install.</summary>
     public string? NotInstalled { get; protected set; }
+
+    /// <summary>Why a version that was to install as the last session ended did not, in the installer's own words, read
+    /// off the window's thread at the next start: null where the installer keeps none, or said nothing.</summary>
+    public virtual string? WhyNotInstalled(string version) => null;
 
     /// <summary>Whether this copy leaves a newer release to something else after all (a package manager), found off the
     /// caller's thread before anything is downloaded: null when it installs the release itself.</summary>
@@ -171,8 +176,33 @@ public abstract class Updater
         }
     }
 
+    /// <summary>What a copy that never installs a release itself, whatever put it in place, says of a newer one: a portable
+    /// one (<see cref="ThisCopy.Data"/>), its new build put in its place by hand, and one a package manager installed
+    /// (<see cref="ThisCopy.PackageManager"/>), that manager's to update. Null for any other.</summary>
+    public static UpdatedElsewhere? LeftElsewhere() =>
+        ThisCopy.Data is { } data ? Portable(data, Releases.ThisSystemsAsset(portable: true))
+        : ThisCopy.PackageManager is { } manager ? Packaged(manager)
+        : null;
+
+    /// <summary>What a portable copy keeping its state in <paramref name="data"/> says of a newer release.</summary>
+    public static UpdatedElsewhere Portable(string data, string? asset) =>
+        new($"This copy of Wayfarer is portable, keeping its state in {data}, so it never replaces itself: "
+            + $"put the release's {asset ?? "portable build"} in its place, keeping its {ThisCopy.DataName} folder.", Download: false);
+
+    /// <summary>What a copy a package manager installed says of a newer release.</summary>
+    public static UpdatedElsewhere Packaged(PackageManagerMark manager) =>
+        new($"This copy of Wayfarer is {manager.Said}: {manager.Updates}.", Download: false);
+
+    /// <summary>The updater of the running copy, or null with why it cannot update itself: portable or a package manager's
+    /// (<see cref="LeftElsewhere"/>), not where Wayfarer's installer, disk image or archive put it, or where it cannot
+    /// replace itself.</summary>
     public static Updater? OfThisCopy(string stateFolder, out string why)
     {
+        if (LeftElsewhere() is { } elsewhere)
+        {
+            why = elsewhere.Why;
+            return null;
+        }
         if (OperatingSystem.IsMacOS())
         {
             return DiskImageUpdater.OfThisBundle(Path.Combine(stateFolder, "updates"), out why);

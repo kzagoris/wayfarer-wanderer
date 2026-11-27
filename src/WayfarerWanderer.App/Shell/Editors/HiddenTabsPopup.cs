@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Editors/HiddenTabsPopup.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/Editors/HiddenTabsPopup.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -33,7 +33,7 @@ public sealed class HiddenTabsPopup : SearchPopup<HiddenTab>
     protected override Control Row() => TabRow<HiddenTab>((tab, icon, name, folder) =>
     {
         icon.Data = tab.Icon;
-        icon.Foreground = tab.IconBrush;
+        icon.ForegroundKey = tab.IconTint;
         name.Text = tab.Name;
         folder.Text = tab.Folder;
     });
@@ -56,5 +56,5 @@ public sealed record HiddenTab(OpenDocument Document, string Folder)
 {
     public string Name => Document.Name;
     public Geometry Icon => FileIcons.ForFile(Document.Path);
-    public IBrush IconBrush => FileIcons.BrushForFile(Document.Path);
+    public string IconTint => FileIcons.TintForFile(Document.Path);
 }

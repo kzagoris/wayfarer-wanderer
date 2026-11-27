@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/OptionToggles.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/OptionToggles.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;

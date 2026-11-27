@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/MainWindow.axaml (GitBranchButton), MainWindow.GitStatus.cs and
+// From Passenger 494009d7 src/Passenger.App/MainWindow.axaml (GitBranchButton), MainWindow.GitStatus.cs and
 // MainWindow.Vcs.cs (ShowBranchesAsync, Listed), MIT (notices/Passenger/LICENSE): the branch widget alone, without the
 // sync and changed-files widgets beside it.
 using Avalonia.Automation;

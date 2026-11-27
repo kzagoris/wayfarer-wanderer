@@ -8,6 +8,10 @@ namespace WayfarerWanderer.App;
 /// list shows, and what typing narrows and orders it by.</summary>
 public sealed record CompletionChoice(JsonElement Item, string Label, string Detail, string Filter, string Sort, int Kind, int Index)
 {
+    /// <summary>What the suggestion's tooltip says of it, where its source says more than its detail (a file's own help:
+    /// <see cref="Shell.Vcs.IFileAssist"/>); null for the detail alone.</summary>
+    public string? Described { get; init; }
+
     /// <summary>The short mark the list shows before a suggestion for its LSP kind, as every badge marks that kind
     /// (<see cref="Shell.KindBadges"/>).</summary>
     public string Badge => Shell.KindBadges.Of(Shell.KindBadges.OfCompletion(Kind)).Letter;

@@ -1,4 +1,4 @@
-// From Passenger 2044e49b src/Passenger.App/Run/LaunchProfile.cs (CommandLine), MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/Run/LaunchProfile.cs (CommandLine), MIT (notices/Passenger/LICENSE).
 using System.Text;
 
 namespace WayfarerWanderer.App.Shell.Terminal;

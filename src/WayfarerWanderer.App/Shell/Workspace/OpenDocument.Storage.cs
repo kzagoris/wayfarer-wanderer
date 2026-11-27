@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Workspace/OpenDocument.cs, MIT (notices/Passenger/LICENSE): how the file is
+// From Passenger 494009d7 src/Passenger.App/Workspace/OpenDocument.cs, MIT (notices/Passenger/LICENSE): how the file is
 // stored and indented, as the status bar's widgets show and change it. Its .editorconfig is read for what it says, but a
 // save here keeps how the file was read, so the tips say what it asks rather than what the next save does.
 using Passenger.Core;

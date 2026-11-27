@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/ToolWindows/CommitView.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/ToolWindows/CommitView.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -926,6 +926,8 @@ public sealed class CommitView : DockPanel, IOwnKeys
         List<CommitGroup> filled = [];
         List<CommitBranch> under = [];
         staging = vcs.HoldsStaged;
+        // Set before the rows' depths move, as a row shown hears its depth change and shows its folder by it.
+        grouped = vcs.GroupsByDirectory;
         Group(MergeConflicts, [.. changes.Where(c => c.Kind is ChangeKind.Conflicted).OrderBy(c => c.Path, StringComparer.Ordinal).Select(c => Row(c, false))]);
         IEnumerable<FileChange> tracked = changes.Where(c => c.Kind is not (ChangeKind.Unversioned or ChangeKind.Conflicted)).OrderBy(c => c.Path, StringComparer.Ordinal);
         if (staging)
@@ -942,7 +944,6 @@ public sealed class CommitView : DockPanel, IOwnKeys
 
         groups = filled;
         branches = under;
-        grouped = vcs.GroupsByDirectory;
         foreach (CommitBranch branch in branches)
         {
             branch.IsExpanded = !closed.Contains(branch.Key);
@@ -1259,7 +1260,7 @@ public sealed class CommitView : DockPanel, IOwnKeys
                 {
                     string last = folder.Name[(folder.Name.LastIndexOf('/') + 1)..];
                     folderIcon.Data = Explorer.FileIcons.ForFolder(last, branch.IsExpanded);
-                    folderIcon.Foreground = Explorer.FileIcons.BrushForFolder(last);
+                    folderIcon.ForegroundKey = Explorer.FileIcons.TintForFolder(last);
                 }
                 branchName.Text = folder?.Name ?? ((CommitGroup)branch).Name;
                 branchName.Classes.Set(StyleClasses.Strong, folder is null);

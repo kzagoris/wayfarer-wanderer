@@ -66,8 +66,26 @@ jobs:
           mkdir downloads
           cp "artifacts/package/$file" downloads/
           if [[ "$RID" == win-x64 ]]; then
-            cp artifacts/package/releases.win-x64.json artifacts/package/*-full.nupkg downloads/
+            cp artifacts/package/releases.win-x64.json artifacts/package/*-full.nupkg artifacts/package/WayfarerWanderer-windows-x64-portable.zip downloads/
+          elif [[ "$RID" == osx-arm64 ]]; then
+            cp artifacts/package/WayfarerWanderer-macos-arm64.zip downloads/
           fi
+      - name: Check the portable build reads its place
+        shell: pwsh
+        run: |
+          # A file named data where the portable copy's state folder goes must end the start with exit code 2
+          # (ThisCopy.cs), which proves the copy finds its folder from the packaged layout.
+          $portable = Join-Path $env:RUNNER_TEMP portable
+          New-Item -ItemType Directory -Force $portable | Out-Null
+          switch ($env:RID) {
+            'win-x64' { Expand-Archive downloads/WayfarerWanderer-windows-x64-portable.zip $portable; $folder = "$portable/WayfarerWanderer"; $exe = "$folder/WayfarerWanderer.App.exe" }
+            'osx-arm64' { ditto -x -k downloads/WayfarerWanderer-macos-arm64.zip $portable; $folder = "$portable/WayfarerWanderer"; $exe = "$folder/WayfarerWanderer.app/Contents/MacOS/WayfarerWanderer" }
+            'linux-x64' { tar -xzf downloads/WayfarerWanderer-linux-x64.tar.gz -C $portable; $folder = "$portable/WayfarerWanderer"; $exe = "$folder/WayfarerWanderer.App" }
+          }
+          Set-Content "$folder/data" 'not a folder'
+          $run = Start-Process $exe -Wait -PassThru -RedirectStandardError "$portable/stderr.txt"
+          Get-Content "$portable/stderr.txt"
+          if ($run.ExitCode -ne 2 -or !(Select-String -Quiet -Path "$portable/stderr.txt" -Pattern 'is no folder')) { throw "The portable build exited with $($run.ExitCode), not refusing its data file" }
       - name: Check the packaged version and project host
         shell: pwsh
         run: |
@@ -139,7 +157,7 @@ jobs:
           version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' ../Directory.Build.props)
           file="WayfarerWanderer-$version-win-x64-full.nupkg"
           jq -e --arg v "$version" --arg f "$file" --arg hash "$(sha256sum "$file" | cut -d' ' -f1)" '.Assets | length == 1 and .[0].Version == $v and .[0].FileName == $f and (.[0].SHA256 | ascii_downcase) == $hash' releases.win-x64.json
-          diff <(printf '%s\n' "$file" releases.win-x64.json WayfarerWanderer-{windows-x64.exe,macos-arm64.dmg,linux-x64.tar.gz} | sort) <(ls -1 | sort)
+          diff <(printf '%s\n' "$file" releases.win-x64.json WayfarerWanderer-{windows-x64.exe,windows-x64-portable.zip,macos-arm64.dmg,macos-arm64.zip,linux-x64.tar.gz} | sort) <(ls -1 | sort)
           sha256sum * > ../SHA256SUMS
           mv ../SHA256SUMS .
           sha256sum -c SHA256SUMS

@@ -1,4 +1,5 @@
-// Adapted from vendored Passenger, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/Updates/DiskImageUpdater.cs, MIT (notices/Passenger/LICENSE): Wayfarer's
+// bundle, its app in Contents/Resources/app.
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;

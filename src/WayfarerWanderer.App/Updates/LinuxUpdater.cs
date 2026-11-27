@@ -1,4 +1,5 @@
-// Adapted from vendored Passenger, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/Updates/LinuxUpdater.cs, MIT (notices/Passenger/LICENSE): only the per-user
+// archive install, Wayfarer's layout.
 using System.Formats.Tar;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
@@ -12,7 +13,6 @@ using WayfarerWanderer.App.Shell;
 [SupportedOSPlatform("linux")]
 public sealed partial class LinuxUpdater : InPlaceUpdater
 {
-    private const string PackageMarker = "package-manager";
     private static readonly TimeSpan AskLimit = TimeSpan.FromSeconds(10);
     private readonly string Folder;
     private readonly string Staging;
@@ -47,17 +47,31 @@ public sealed partial class LinuxUpdater : InPlaceUpdater
         return packageOwner;
     }
 
-    private async Task<UpdatedElsewhere?> FindPackageOwnerAsync(CancellationToken cancel) =>
-        await PackageOfAsync(Path.Combine(Folder, Program.ProgramName), cancel).ConfigureAwait(false) is { } package
-            ? new UpdatedElsewhere($"Updated by {package}", false) : null;
+    private async Task<UpdatedElsewhere?> FindPackageOwnerAsync(CancellationToken cancel)
+    {
+        string executable = Path.Combine(Folder, Program.ProgramName);
+        if (await MarkOfAsync(executable, cancel).ConfigureAwait(false) is { } mark)
+        {
+            return Packaged(mark);
+        }
+        return await PackageOfAsync(executable, cancel).ConfigureAwait(false) is { } package
+            ? new UpdatedElsewhere($"This copy of Wayfarer is {package}: the system's package manager updates it.", false) : null;
+    }
+
+    /// <summary>The package manager the file a package writes beside the app names (<see cref="ThisCopy.PackageManagerName"/>),
+    /// or null where there is none; a file that reads as none is still a package manager's, unnamed.</summary>
+    private static async Task<PackageManagerMark?> MarkOfAsync(string executable, CancellationToken cancel)
+    {
+        string marker = Path.Combine(Path.GetDirectoryName(executable)!, ThisCopy.PackageManagerName);
+        return File.Exists(marker)
+            ? ThisCopy.MarkOf(await File.ReadAllBytesAsync(marker, cancel).ConfigureAwait(false)) ?? new PackageManagerMark(null, null)
+            : null;
+    }
+
+    /// <summary>The package a package manager installed the app from, as the person would name it, or null: the answer of
+    /// each package database on the PATH for the app's path.</summary>
     private static async Task<string?> PackageOfAsync(string executable, CancellationToken cancel)
     {
-        string marker = Path.Combine(Path.GetDirectoryName(executable)!, PackageMarker);
-        if (File.Exists(marker))
-        {
-            string manager = (await File.ReadAllTextAsync(marker, cancel).ConfigureAwait(false)).Split('\n')[0].Trim();
-            return $"a package {(manager.Length > 0 ? manager : "a package manager")} installed";
-        }
         (string Tool, string Manager, string[] Arguments)[] databases =
         [
             ("dpkg-query", "dpkg", ["-S", executable]),

@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Explorer/ExplorerView.axaml.cs, MIT (notices/Passenger/LICENSE): the Solution
+// From Passenger 494009d7 src/Passenger.App/Explorer/ExplorerView.axaml.cs, MIT (notices/Passenger/LICENSE): the Solution
 // view, single-click opening and file nesting cut. Wayfarer reads the folder's files for the filter itself, as it has
 // no index, and watches the folder so the rows follow what the build and other programs write.
 using Avalonia;
@@ -514,7 +514,7 @@ public partial class ExplorerView : UserControl
             glyphs.HasChevron = node.HasChildren;
             glyphs.Turned = node.IsExpanded;
             glyphs.Icon = node.Icon;
-            glyphs.IconBrush = node.IconBrush;
+            glyphs.IconTint = node.IconTint;
             name.Text = node.Name;
             detail.Text = node.Detail;
         });
