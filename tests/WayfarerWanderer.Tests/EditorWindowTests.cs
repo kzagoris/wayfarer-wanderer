@@ -96,8 +96,8 @@ public class EditorWindowTests
 
     private static void CheckResources(CodeEditor editor, string theme)
     {
-        // Compare with the source at the selected pin, including its optional syntax styles.
-        using var stream = typeof(EditorWindowTests).Assembly.GetManifestResourceStream("PassengerTheme")!;
+        // Compare with the theme the window loads (Wayfarer's Shell/Theme/Tokens.axaml), including its optional syntax styles.
+        using var stream = typeof(EditorWindowTests).Assembly.GetManifestResourceStream("WayfarerTheme")!;
         XName key = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml") + "Key";
         var variant = XDocument.Load(stream).Descendants().Single(e => (string?)e.Attribute(key) == theme);
         foreach (var entry in variant.Elements())
