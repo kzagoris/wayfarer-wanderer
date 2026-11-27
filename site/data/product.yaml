@@ -6,7 +6,7 @@ releases: https://github.com/kzagoris/wayfarer-wanderer/releases
 passenger: https://github.com/Zaneris/passenger
 jdtls: https://github.com/eclipse-jdtls/eclipse.jdt.ls
 kotlinLsp: https://github.com/Kotlin/kotlin-lsp/releases
-releaseNote: First release pending. Download links go live with v0.1.0 on GitHub Releases.
+releaseNote: Pre-built binaries for v0.1.0 are coming soon on GitHub Releases.
 
 downloads:
   - id: linux
@@ -26,7 +26,7 @@ downloads:
     url: https://github.com/kzagoris/wayfarer-wanderer/releases/latest/download/WayfarerWanderer-macos-arm64.dmg
 
 source:
-  needs: .NET SDK 11.0.100, Python 3 and a JDK 21
+  needs: .NET SDK 11.0.100, Python 3, and JDK 21
   commands:
     - git clone https://github.com/kzagoris/wayfarer-wanderer.git
     - cd wayfarer-wanderer
@@ -35,7 +35,7 @@ source:
     - dotnet run --project src/WayfarerWanderer.App --no-restore
 
 servers:
-  java: Eclipse JDT LS, from WAYFARER_JDTLS_HOME or VS Code's redhat.java extension
+  java: Eclipse JDT LS, detected via WAYFARER_JDTLS_HOME or VS Code's redhat.java extension
   kotlin: JetBrains' standalone kotlin-lsp, unpacked into ~/.local/share/wayfarer/kotlin-lsp/<version>/
 
 keys:
@@ -71,17 +71,3 @@ themes:
     name: Cubicle
   - id: high-contrast
     name: High Contrast
-
-shipped:
-  - date: 2026-11-25
-    what: IDEA-style Quick Documentation and symbol hover cards
-  - date: 2026-11-25
-    what: Parameter and type name hints from the Java and Kotlin servers
-  - date: 2026-11-25
-    what: Build Current Module compiles and reports in the Build window
-  - date: 2026-11-25
-    what: Editor tabs, and Settings pages for the editor and terminal
-  - date: 2026-11-23
-    what: Ctrl+click Go to Declaration for Java and Kotlin
-  - date: 2026-11-23
-    what: High Contrast theme at WCAG AAA, sound cues, colour-blind safe states

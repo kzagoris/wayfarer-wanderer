@@ -9,127 +9,133 @@
   <a href="#get-started"><b>Get started</b></a> ·
   <a href="#features">Features</a> ·
   <a href="#how-it-works">How it works</a> ·
-  <a href="#questions">FAQ</a> ·
+  <a href="#faq">FAQ</a> ·
   <a href="#development">Development</a>
 </p>
 
-<p align="center"><sub>v0.1.0 · Windows, macOS and Linux · First release pending. Download links go live with v0.1.0 on
+<p align="center"><sub>Windows, macOS, and Linux · First release (v0.1.0) coming soon on
 <a href="https://github.com/kzagoris/wayfarer-wanderer/releases">GitHub Releases</a>.</sub></p>
 
 ## Features
 
-### Your Java calls Kotlin. Your IDE should follow it there.
+### Mixed Java and Kotlin projects
 
-Mixed repositories are normal. Each file goes to the language server that owns it: JDT LS for Java,
-kotlin-lsp for Kotlin. On Maven, Wayfarer compiles your Kotlin with the project's wrapper so Java sees
-its declarations. <kbd>Ctrl</kbd> <kbd>B</kbd> crosses the line.
+Java and Kotlin files are handled by their own language servers: Eclipse JDT LS for Java and
+`kotlin-lsp` for Kotlin. In Maven projects, Wayfarer compiles Kotlin sources using the project's wrapper
+so Java code can resolve Kotlin declarations, letting you jump between languages with
+<kbd>Ctrl</kbd>+<kbd>B</kbd>.
 
 <p align="center">
   <img src="docs/readme/java-calls-kotlin.webp" width="760" alt="Main.java calls GreetingKt.message. Quick Documentation shows the Kotlin function as Java sees it: example.GreetingKt, String message(@NotNull String name).">
 </p>
-<p align="center"><sub>Quick Documentation (<kbd>Ctrl</kbd> <kbd>Q</kbd>) on a Kotlin function, called from Java. The project is
-<code>tests/fixtures/jvm/maven</code>, the one Wayfarer's tests open, with a loop added for the picture.</sub></p>
+<p align="center"><sub>Quick Documentation (<kbd>Ctrl</kbd>+<kbd>Q</kbd>) on a Kotlin function called from Java (using the
+<code>tests/fixtures/jvm/maven</code> fixture).</sub></p>
 
-### Opening a stranger's repository shouldn't run their build.
+### Safe opening with Workspace Trust
 
-Wayfarer reads and edits straight away, and runs nothing until you trust the workspace: no wrapper, no
-build daemon, no language-server import. Unsaved edits survive the import, and a failed one.
+When you open an unfamiliar repository, you can browse and edit files immediately without running
+anything from the project. Wayfarer holds off on running Maven or Gradle wrappers, build daemons, and
+language-server imports until you explicitly trust the folder. Any unsaved edits stay intact when the
+import runs, even if the import fails.
 
-| | What happens when you open a repository |
+| Step | What happens |
 |---|---|
-| `open` | Files readable, editable, highlighted |
-| **`trust?`** | **Nothing in the repository has run yet.** You decide. |
-| `import` | Your wrapper imports modules, packages, production and test sources |
-| `work` | Build, test, run and debug |
+| **Open** | Files open right away with syntax highlighting and editing |
+| **Trust** | Nothing in the repository runs until you click **Trust Workspace** |
+| **Import** | Your Maven or Gradle wrapper imports modules, packages, and source/test roots |
+| **Work** | Build, test, run, and debug as usual |
 
 <p align="center">
   <img src="docs/readme/restricted-mode.webp" width="100%" alt="A freshly opened Maven project in Restricted mode. A banner says build scripts and code in this folder won't run until you trust it, with a Trust Workspace button.">
 </p>
 
-### Your hands already know the keymap
+### Familiar keymaps
 
-Pick IntelliJ IDEA in **Settings › Keymap**. Visual Studio and VS Code keymaps are there too.
+Select **IntelliJ IDEA** in **Settings › Keymap** if you want the standard JetBrains shortcuts. Visual
+Studio and VS Code keymaps are included as well.
 
 | Action | Keys | Action | Keys |
 |---|---|---|---|
-| Search Everywhere | <kbd>Shift</kbd> <kbd>Shift</kbd> | Build | <kbd>Ctrl</kbd> <kbd>F9</kbd> |
-| Go to Declaration | <kbd>Ctrl</kbd> <kbd>B</kbd> | Run | <kbd>Shift</kbd> <kbd>F10</kbd> |
-| Quick Documentation | <kbd>Ctrl</kbd> <kbd>Q</kbd> | Debug | <kbd>Shift</kbd> <kbd>F9</kbd> |
-| Rename | <kbd>Shift</kbd> <kbd>F6</kbd> | Toggle Breakpoint | <kbd>Ctrl</kbd> <kbd>F8</kbd> |
-| Show Intention Actions | <kbd>Alt</kbd> <kbd>Enter</kbd> | Step Over | <kbd>F8</kbd> |
-| Terminal | <kbd>Alt</kbd> <kbd>F12</kbd> | Step Into | <kbd>F7</kbd> |
+| Search Everywhere | <kbd>Shift</kbd> <kbd>Shift</kbd> | Build | <kbd>Ctrl</kbd>+<kbd>F9</kbd> |
+| Go to Declaration | <kbd>Ctrl</kbd>+<kbd>B</kbd> | Run | <kbd>Shift</kbd>+<kbd>F10</kbd> |
+| Quick Documentation | <kbd>Ctrl</kbd>+<kbd>Q</kbd> | Debug | <kbd>Shift</kbd>+<kbd>F9</kbd> |
+| Rename | <kbd>Shift</kbd>+<kbd>F6</kbd> | Toggle Breakpoint | <kbd>Ctrl</kbd>+<kbd>F8</kbd> |
+| Show Intention Actions | <kbd>Alt</kbd>+<kbd>Enter</kbd> | Step Over | <kbd>F8</kbd> |
+| Terminal | <kbd>Alt</kbd>+<kbd>F12</kbd> | Step Into | <kbd>F7</kbd> |
 
 <p align="center">
   <img src="docs/readme/keymap.webp" width="560" alt="Settings, Keymap page with IntelliJ IDEA chosen: Build Current Module is Ctrl+F9, Back is Ctrl+Alt+Left, Branches is Ctrl+Shift+backtick.">
 </p>
 
-### Debug like you're used to
+### Debugging with inline values
 
-<kbd>Ctrl</kbd> <kbd>F8</kbd> for a breakpoint, <kbd>Shift</kbd> <kbd>F9</kbd> to start, <kbd>F8</kbd> and
-<kbd>F7</kbd> to step. The Debug tab shows the paused stack and locals, and the editor shows each value
-beside the line that set it.
+Set a breakpoint with <kbd>Ctrl</kbd>+<kbd>F8</kbd>, start a debug session with
+<kbd>Shift</kbd>+<kbd>F9</kbd>, and step through code using <kbd>F8</kbd> and <kbd>F7</kbd>. When
+execution pauses, the Debug tab lists the call stack and local variables while the editor displays
+variable values inline next to each line.
 
 <p align="center">
   <img src="docs/readme/debugger.webp" width="100%" alt="Paused at a breakpoint on line 10 of Main.java. Inline values show name = Wanderer and line = Hello, Wanderer. The Debug tab lists the frame main:10 and the locals args, travellers, name and line.">
 </p>
 
-### New project without the yak shaving
+### New project wizard
 
-Java with an IntelliJ, Maven or Gradle build; Kotlin with Maven or Gradle. Pick a JDK or choose
-**Download JDK…**. The project is published only when every file has landed.
+Create Java projects using IntelliJ, Maven, or Gradle, or Kotlin projects using Maven or Gradle. You can
+pick a detected JDK, add one from disk, or download one directly from the dialog. New projects are staged
+first and moved into place only after every file is generated, so you won't be left with a partial
+directory if creation fails.
 
 <p align="center">
   <img src="docs/readme/new-project.webp" width="640" alt="New Project dialog: Kotlin with a Gradle build. The JDK list is open, offering Download JDK…, Add JDK from Disk… and a detected JDK 27.">
 </p>
 
-### Tests that can't lie
+### JUnit test runner
 
-JUnit runs through your Maven or Gradle build. Every run writes a fresh report, so an old pass can never
-turn a failed build green.
+JUnit tests run through your project's Maven or Gradle build. Each run writes to a fresh report directory
+so stale results from an earlier pass can't mask a failed build.
 
-### Made to be read by everyone
+### Themes and accessibility
 
-Three themes in light and dark, including High Contrast at WCAG AAA. Sound cues for what the caret
-reaches, and states that never rely on colour alone. The pictures below follow your GitHub appearance.
+Wayfarer includes three themes in light and dark variants, including a WCAG AAA High Contrast theme.
+Optional sound cues announce what the caret lands on, and UI states never rely on colour alone. The
+previews below automatically match your GitHub appearance.
 
 <table>
   <tr>
     <td width="33%" align="center">
       <picture>
         <source media="(prefers-color-scheme: light)" srcset="site/static/img/wayfarer-light.webp">
-        <img src="site/static/img/wayfarer-dark.webp" alt="The Wayfarer theme: roomy and rounded, in deep blues">
+        <img src="site/static/img/wayfarer-dark.webp" alt="The Wayfarer theme: spacious layout in deep blues">
       </picture>
-      <br><b>Wayfarer</b><br><sub>Roomy and rounded, in deep blues</sub>
+      <br><b>Wayfarer</b><br><sub>Spacious layout in deep blues</sub>
     </td>
     <td width="33%" align="center">
       <picture>
         <source media="(prefers-color-scheme: light)" srcset="site/static/img/cubicle-light.webp">
-        <img src="site/static/img/cubicle-dark.webp" alt="The Cubicle theme: calm and dense for long working days">
+        <img src="site/static/img/cubicle-dark.webp" alt="The Cubicle theme: compact layout for dense workspaces">
       </picture>
-      <br><b>Cubicle</b><br><sub>Calm and dense for long working days</sub>
+      <br><b>Cubicle</b><br><sub>Compact layout for dense workspaces</sub>
     </td>
     <td width="33%" align="center">
       <picture>
         <source media="(prefers-color-scheme: light)" srcset="site/static/img/high-contrast-light.webp">
-        <img src="site/static/img/high-contrast-dark.webp" alt="The High Contrast theme: every word and edge at its clearest">
+        <img src="site/static/img/high-contrast-dark.webp" alt="The High Contrast theme: WCAG AAA contrast for text and borders">
       </picture>
-      <br><b>High Contrast</b><br><sub>Every word and edge at its clearest</sub>
+      <br><b>High Contrast</b><br><sub>WCAG AAA contrast for text and borders</sub>
     </td>
   </tr>
 </table>
 
 ## How it works
 
-### It doesn't reinvent the toolchain. It drives it.
+Wayfarer focuses on the desktop IDE shell and delegates language intelligence and builds to standard tools:
 
-Three layers, each owned by the tool that does it best.
-
-| Layer | What it does |
+| Component | Role |
 |---|---|
-| **Wayfarer Wanderer** | The window, actions, keymaps, run configurations, tests and debugger UI. .NET and Avalonia, on the editor, terminal, Git and debugger-protocol libraries of [Passenger](https://github.com/Zaneris/passenger). |
-| **Java** | [Eclipse JDT LS](https://github.com/eclipse-jdtls/eclipse.jdt.ls): completion, declarations, hovers, rename, hints. |
-| **Kotlin** | [JetBrains kotlin-lsp](https://github.com/Kotlin/kotlin-lsp/releases), the standalone server. |
-| **Your build** | Maven and Gradle through the repository's own wrapper, the same build your team and CI already run. |
+| **Wayfarer Wanderer** | Window chrome, actions, keymaps, run configurations, test runner, and debugger UI. Built with .NET and Avalonia on top of the editor, terminal, Git, and DAP libraries from [Passenger](https://github.com/Zaneris/passenger). |
+| **Java** | [Eclipse JDT LS](https://github.com/eclipse-jdtls/eclipse.jdt.ls) for completion, navigation, hover docs, rename, and inlay hints. |
+| **Kotlin** | [JetBrains kotlin-lsp](https://github.com/Kotlin/kotlin-lsp/releases) standalone language server. |
+| **Build system** | Maven and Gradle invoked through your repository's own wrapper, matching what your team and CI run. |
 
 ## Get started
 
@@ -140,11 +146,12 @@ Three layers, each owned by the tool that does it best.
 | x64 | x64 | Apple Silicon |
 | [`WayfarerWanderer-linux-x64.tar.gz`](https://github.com/kzagoris/wayfarer-wanderer/releases/latest/download/WayfarerWanderer-linux-x64.tar.gz) | [`WayfarerWanderer-windows-x64.exe`](https://github.com/kzagoris/wayfarer-wanderer/releases/latest/download/WayfarerWanderer-windows-x64.exe) | [`WayfarerWanderer-macos-arm64.dmg`](https://github.com/kzagoris/wayfarer-wanderer/releases/latest/download/WayfarerWanderer-macos-arm64.dmg) |
 
-First release pending. Download links go live with v0.1.0 on GitHub Releases.
+Pre-built binaries will be published with v0.1.0 on GitHub Releases. In the meantime, you can build from
+source below.
 
 ### Build from source
 
-Needs the .NET SDK 11.0.100, Python 3 and a JDK 21.
+Requires .NET SDK 11.0.100, Python 3, and JDK 21.
 
 ```sh
 git clone https://github.com/kzagoris/wayfarer-wanderer.git
@@ -156,77 +163,60 @@ dotnet run --project src/WayfarerWanderer.App --no-restore
 
 ### Language servers
 
-Wayfarer ships no language server.
+Wayfarer does not bundle language servers, so you'll need them installed separately:
 
-- **Java:** Eclipse JDT LS, from `WAYFARER_JDTLS_HOME` or VS Code's `redhat.java` extension.
-- **Kotlin:** JetBrains' standalone kotlin-lsp. Download it from
+- **Java:** Eclipse JDT LS, detected via `WAYFARER_JDTLS_HOME` or VS Code's `redhat.java` extension.
+- **Kotlin:** JetBrains' standalone `kotlin-lsp`. Download it from
   [kotlin-lsp releases](https://github.com/Kotlin/kotlin-lsp/releases) and unpack it into
   `~/.local/share/wayfarer/kotlin-lsp/<version>/` (`%LOCALAPPDATA%\wayfarer\kotlin-lsp\<version>\` on
-  Windows). Wayfarer uses the highest version there that contains `bin/intellij-server`.
-  `WAYFARER_KOTLIN_LSP_HOME` overrides that folder, and an installed VS Code Kotlin extension is the last
-  resort.
+  Windows). Wayfarer picks the newest version in that directory containing `bin/intellij-server`. You can
+  override the path with `WAYFARER_KOTLIN_LSP_HOME`, or fall back to an installed VS Code Kotlin
+  extension.
 
-## Shipping
-
-| | |
-|---|---|
-| Nov 25, 2026 | IDEA-style Quick Documentation and symbol hover cards |
-| Nov 25, 2026 | Parameter and type name hints from the Java and Kotlin servers |
-| Nov 25, 2026 | Build Current Module compiles and reports in the Build window |
-| Nov 25, 2026 | Editor tabs, and Settings pages for the editor and terminal |
-| Nov 23, 2026 | Ctrl+click Go to Declaration for Java and Kotlin |
-| Nov 23, 2026 | High Contrast theme at WCAG AAA, sound cues, colour-blind safe states |
-
-[All commits →](https://github.com/kzagoris/wayfarer-wanderer/commits/main)
-
-## Questions
+## FAQ
 
 <details>
 <summary><b>Is it free?</b></summary>
 
-Yes. Wayfarer Wanderer is open source and needs no subscription or licence server. The open language
-backend is the default.
+Yes. Wayfarer Wanderer is free and open source under the MIT licence, with no subscription or licence
+server required.
 </details>
 
 <details>
 <summary><b>Is it a fork of IntelliJ IDEA?</b></summary>
 
-No. It follows IntelliJ IDEA's workflow and offers its keymap, but it is a .NET and Avalonia application
-built on the open-source Passenger editor libraries. Java and Kotlin understanding comes from Eclipse JDT
-LS and JetBrains' kotlin-lsp.
+No. It follows IntelliJ IDEA's workflow and includes its keymap, but it's a separate .NET and Avalonia
+application built on the open-source Passenger editor libraries. Java and Kotlin support comes from Eclipse
+JDT LS and JetBrains' `kotlin-lsp`.
 </details>
 
 <details>
 <summary><b>Which projects can it open?</b></summary>
 
-Maven reactors, Gradle builds in Groovy or Kotlin DSL, and folders whose only build file is an IntelliJ
-`.iml`. Mixed Java and Kotlin repositories are the normal case.
+Maven multi-module builds, Gradle builds (Groovy or Kotlin DSL), and folders whose only project file is
+an IntelliJ `.iml`. Mixed Java and Kotlin repositories are supported out of the box.
 </details>
 
 <details>
 <summary><b>Does it create Spring Boot projects?</b></summary>
 
-Not in this version. New Project offers Java and Kotlin applications; the Spring Boot starter returns in
-a later release.
+Not yet. The New Project wizard currently covers Java and Kotlin applications; Spring Boot templates are
+planned for a future release.
 </details>
 
 <details>
 <summary><b>Can I use JetBrains' own language server?</b></summary>
 
-Not yet. A later release adds an IntelliJ backend that runs with your own JetBrains licence. The open
-backend stays the default.
+Not yet. Support for an optional IntelliJ backend (using your own JetBrains licence) is planned for a
+future release, while the open-source language servers will remain the default.
 </details>
 
 <details>
-<summary><b>Which platforms?</b></summary>
+<summary><b>Which platforms are supported?</b></summary>
 
-Windows x64, Linux x64 and macOS on Apple Silicon. Until the first release is published, build it from
-source on any of them.
+Windows (x64), Linux (x64), and macOS (Apple Silicon). Until v0.1.0 is published, you can build from
+source on any of these platforms.
 </details>
-
-<br>
-
-<p align="center"><b>Open your project. Keep your keymap.</b></p>
 
 ## Development
 
@@ -384,8 +374,8 @@ executable line and choose **Run > Debug**. The Debug tab shows the paused
 stack and the top frame's locals. Use the Run menu to step into, over or out,
 continue, or stop. Set `JAVA_HOME` to a full JDK compatible with the build.
 
-Wayfarer ships no language server: see [Language servers](#language-servers)
-for where it finds JDT LS and kotlin-lsp.
+Wayfarer does not bundle language servers: see [Language servers](#language-servers)
+for where it finds JDT LS and `kotlin-lsp`.
 
 See [JVM backend validation](docs/validation/jvm-backends.md) for the
 mixed-language fixture results.
