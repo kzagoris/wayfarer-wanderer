@@ -167,3 +167,11 @@ mixed-language fixture results.
 
 See [release validation](docs/validation/release.md) for packaged application
 checks and the required platform evidence.
+
+## Licence
+
+Wayfarer Wanderer is under the [MIT License](LICENSE). The Passenger copy in
+`vendor/passenger` and the files adapted from it keep Passenger's own MIT
+licence ([`vendor/passenger/LICENSE`](vendor/passenger/LICENSE)), and the
+third-party parts they carry are listed in
+[`vendor/passenger/THIRD_PARTY_NOTICES.md`](vendor/passenger/THIRD_PARTY_NOTICES.md).
