@@ -151,6 +151,18 @@ public static class Refusals
     /// <summary>Clear Filters while the list is shown whole as at first.</summary>
     public const string NotNarrowed = "The list is neither narrowed nor ordered otherwise";
 
+    /// <summary>No tool window's view has had the keys yet, for Jump to Last Tool Window.</summary>
+    public const string NoToolWindowHadKeys = "No tool window has had the keys yet";
+
+    /// <summary>What has the keys holds no tabs, for Close Tool Window Tab.</summary>
+    public const string NoToolTabs = "No tool window with tabs has the keys";
+
+    /// <summary>The tab shown has no ×, for Close Tool Window Tab.</summary>
+    public const string ToolTabStays = "The tab shown has no close: it stays open";
+
+    /// <summary>The window's scale is at the end of Settings' Display scale, for Zoom In and Zoom Out.</summary>
+    public static string ZoomedAsFarAsItGoes(bool up) => up ? "The window is as large as it goes" : "The window is as small as it goes";
+
     /// <summary>Maximize of a tool window that floats or is shown over the editors for a moment.</summary>
     public const string Unmaximized = "Only a docked tool window is maximized";
 }

@@ -52,6 +52,7 @@ public sealed partial class EditorWindow
         AddEdit(EditorKeys.Undo, "Undo", box => box.Undo(), redo: false);
         AddEdit(EditorKeys.Redo, "Redo", box => box.Redo(), redo: true);
         AddEdit(EditorKeys.SelectAll, "Select All", box => box.SelectAll());
+        AddFolding();
 
         // Undo and Redo take the Explorer's last Delete back, or do it again, where its rows have the keys.
         void AddEdit(string id, string title, Action<TextBox> inBox, bool? redo = null) =>
@@ -66,6 +67,30 @@ public sealed partial class EditorWindow
                 WhyNot = context => (redo is { } again ? WhyNotUndoInExplorer(context, again) : null) ?? WhyNotEditText(context),
                 InEditor = true,
             });
+    }
+
+    /// <summary>Code › Folding: the editor's folding actions, by level and recursively too, run on the editor shown, which
+    /// takes the keys back (<see cref="MainMenuPlaces"/> places them).</summary>
+    private void AddFolding()
+    {
+        HashSet<string> folding =
+        [
+            EditorKeys.Unfold, EditorKeys.UnfoldAll, EditorKeys.UnfoldRecursively, EditorKeys.Fold, EditorKeys.FoldToDefinitions,
+            EditorKeys.FoldAll, EditorKeys.FoldRecursively, EditorKeys.UnfoldDocComments, EditorKeys.FoldDocComments, EditorKeys.ToggleFold,
+            .. EditorKeys.UnfoldToLevels, .. EditorKeys.UnfoldAllToLevels,
+        ];
+        foreach ((string id, string title) in EditorKeys.All.Where(a => folding.Contains(a.Id)))
+        {
+            Actions.Registry.Add(new IdeAction(id, title, "Editor", _ =>
+            {
+                Editor.Focus();
+                Editor.TryExecute(id);
+            })
+            {
+                WhyNot = _ => Editor.IsVisible ? null : Refusals.NoFile,
+                InEditor = true,
+            });
+        }
     }
 
     /// <summary>An editing action run where the keys were: on the text box that had them (a filter, a dialog's field), else

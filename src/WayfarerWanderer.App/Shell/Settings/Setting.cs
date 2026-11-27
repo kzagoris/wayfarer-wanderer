@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Settings/Setting.cs, MIT (notices/Passenger/LICENSE): .editorconfig cut.
+// From Passenger 494009d7 src/Passenger.App/Settings/Setting.cs, MIT (notices/Passenger/LICENSE): .editorconfig cut.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -54,6 +54,10 @@ public abstract class Setting
     /// <summary>The settings with this one at another value it takes, which tells what it is kept as (<see cref="Member"/>).</summary>
     public abstract AppSettings Other(AppSettings settings);
 
+    /// <summary>The values an .editorconfig key saying over it takes (<see cref="SettingRow.Over"/>) where they are few, as
+    /// its reader takes them; none for a number's or a text's.</summary>
+    public virtual IReadOnlyList<string> EditorConfigValues => [];
+
     /// <summary>Its name in settings.json, as the agents' settings tool names it: the member <see cref="Other"/> changes.</summary>
     public string Member => member ??= SettingMembers.Changed(new AppSettings(), Other(new AppSettings()))[0].Split('.')[0];
 
@@ -73,6 +77,8 @@ public sealed class ToggleSetting(Func<AppSettings, bool> get, Func<AppSettings,
     public override AppSettings Clamp(AppSettings settings) => settings;
 
     public override AppSettings Other(AppSettings settings) => set(settings, !get(settings));
+
+    public override IReadOnlyList<string> EditorConfigValues => ["true", "false"];
 }
 
 /// <summary>A number held between <paramref name="min"/> and <paramref name="max"/>, edited by a spin box in steps of
@@ -148,6 +154,18 @@ public sealed class SizeSetting(Func<AppSettings, double> get, Func<AppSettings,
     public override AppSettings Clamp(AppSettings settings) => set(settings, Math.Clamp(get(settings), sizes[0], sizes[^1]));
 
     public override AppSettings Other(AppSettings settings) => set(settings, get(settings) == sizes[0] ? sizes[^1] : sizes[0]);
+
+    /// <summary>The settings at the next size of the list above the one set (<paramref name="up"/>), or below it, a size off
+    /// the list stepping to the nearest on that side; null where none is.</summary>
+    public AppSettings? Stepped(AppSettings settings, bool up)
+    {
+        double now = get(settings);
+        double[] beyond = [.. sizes.Where(size => up ? size > now : size < now)];
+        return beyond.Length == 0 ? null : set(settings, up ? beyond.Min() : beyond.Max());
+    }
+
+    /// <summary>The settings at the size set by nobody.</summary>
+    public AppSettings Unset(AppSettings settings) => set(settings, get(new AppSettings()));
 }
 
 /// <summary>One of an enum's values, edited by a drop-down of the names Settings gives them, in <paramref name="choices"/>'
@@ -187,10 +205,28 @@ public sealed class ChoiceSetting<T> : Setting where T : struct, Enum
 
     public override AppSettings Other(AppSettings settings) =>
         set(settings, choices.Select(c => c.Value).FirstOrDefault(v => !EqualityComparer<T>.Default.Equals(v, get(settings))));
+
+    /// <summary>Its values' names with their words parted by underscores (<c>do_not_touch</c>), which a reader taking a name
+    /// with or without them takes.</summary>
+    public override IReadOnlyList<string> EditorConfigValues => [.. choices.Select(c => Parted(c.Value.ToString()))];
+
+    private static string Parted(string name)
+    {
+        System.Text.StringBuilder parted = new();
+        for (int i = 0; i < name.Length; i++)
+        {
+            if (i > 0 && char.IsUpper(name[i]) && !char.IsUpper(name[i - 1]))
+            {
+                parted.Append('_');
+            }
+            parted.Append(char.ToLowerInvariant(name[i]));
+        }
+        return parted.ToString();
+    }
 }
 
-/// <summary>A program to start, by its command line (its path, then its arguments), or null for the one found: a line
-/// naming no program is refused.</summary>
+/// <summary>A program to start, by its command line (its path, then its arguments), or null for the one found, which an
+/// empty box shows once found off the UI thread: a line naming no program is refused.</summary>
 public sealed class ProgramSetting(Func<AppSettings, string?> get, Func<AppSettings, string?, AppSettings> set, Func<string> found, SettingRow row) : Setting(row)
 {
     /// <summary>Why a line naming no program is refused.</summary>
@@ -198,9 +234,10 @@ public sealed class ProgramSetting(Func<AppSettings, string?> get, Func<AppSetti
 
     public override Control Editor(AppSettings now, Action<Func<AppSettings, AppSettings>> change)
     {
-        TextBox line = new() { Text = get(now) ?? string.Empty, PlaceholderText = found() };
+        TextBox line = new() { Text = get(now) ?? string.Empty };
         TextBlock problem = new() { TextWrapping = TextWrapping.Wrap, HorizontalAlignment = HorizontalAlignment.Left };
         problem.Classes.Add(StyleClasses.Error);
+        IdeErrors.Observe(FoundAsync());
         Said();
         line.TextChanged += (_, _) =>
         {
@@ -208,6 +245,9 @@ public sealed class ProgramSetting(Func<AppSettings, string?> get, Func<AppSetti
             Said();
         };
         return new StackPanel { Spacing = Gaps.Tight, MaxWidth = OptionRow.EditorWidth, Children = { line, problem } };
+
+        // The program an empty line runs, looked for off the window's thread: a search may walk every PATH folder.
+        async Task FoundAsync() => line.PlaceholderText = await BackgroundWork.Run(found);
 
         void Said()
         {
@@ -391,7 +431,8 @@ public abstract class FontChoices
 
         public override string? WhyNot(string name) => CodeFonts.WhyNot(name);
 
-        public override string Unusable(string name) => CodeFonts.IsInstalled(name) ? "not monospaced" : "not installed";
+        public override string Unusable(string name) => !CodeFonts.IsInstalled(name) ? "not installed"
+            : CodeFonts.IsReadable(name.Trim()) ? "not monospaced" : "unreadable";
     }
 
     private sealed class WindowChoices : FontChoices
@@ -409,6 +450,6 @@ public abstract class FontChoices
 
         public override string? WhyNot(string name) => WindowFonts.WhyNot(name);
 
-        public override string Unusable(string name) => "not installed";
+        public override string Unusable(string name) => WindowFonts.Choice(name) is { Kind: WindowFontKind.Installed } ? "unreadable" : "not installed";
     }
 }

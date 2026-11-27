@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/ChoiceRow.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/ChoiceRow.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
@@ -61,6 +61,22 @@ public abstract class ChoiceRow<TKey> : WrapPanel
 
     /// <summary>A key's toggle.</summary>
     public ToggleButton this[TKey key] => toggles.First(t => EqualityComparer<TKey>.Default.Equals(t.Key, key)).Toggle;
+
+    /// <summary>Chooses the toggle <paramref name="step"/> places on from the chosen one among those shown, round at the
+    /// ends, as a press on it does; false where no other is shown.</summary>
+    protected bool StepChoice(int step)
+    {
+        List<(TKey Key, ToggleButton Toggle)> shown = [.. toggles.Where(t => t.Toggle.IsVisible)];
+        int at = shown.FindIndex(t => t.Toggle.IsChecked == true);
+        if (shown.Count < (at < 0 ? 1 : 2))
+        {
+            return false;
+        }
+        int next = at < 0 ? (step > 0 ? 0 : shown.Count - 1) : (((at + step) % shown.Count) + shown.Count) % shown.Count;
+        Choice = shown[next].Key;
+        Chosen?.Invoke(this, shown[next].Key);
+        return true;
+    }
 
     /// <summary>Takes every toggle away, for a view listing its choices again.</summary>
     public void Clear()

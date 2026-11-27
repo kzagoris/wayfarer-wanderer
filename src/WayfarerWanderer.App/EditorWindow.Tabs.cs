@@ -1,8 +1,9 @@
-// From Passenger 8a1df7e4 src/Passenger.App/MainWindow.Tabs.cs, MIT (notices/Passenger/LICENSE): the editor's tab strip
+// From Passenger 494009d7 src/Passenger.App/MainWindow.Tabs.cs, MIT (notices/Passenger/LICENSE): the editor's tab strip
 // over Wayfarer's one editor, its actions (Next/Previous Tab, Pin Tab, Close Tab / Others / All / Unpinned / Left /
 // Right, Reopen Closed Tab), its context menu and its hidden tabs overflow popup.
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.VisualTree;
 using Passenger.Core;
 using Passenger.Text;
 using WayfarerWanderer.App.Shell;
@@ -15,8 +16,9 @@ using A = WayfarerWanderer.App.Shell.AppActions;
 namespace WayfarerWanderer.App;
 
 /// <summary>The editor's tab strip (<see cref="Shell.Editors.EditorTabs"/>): open files as tabs over (or beside) the
-/// editor, each with its icon, name, modified dot, close button, pin and context menu; plus Next/Previous Tab, Pin Tab,
-/// the close actions, Reopen Closed Tab, and the hidden tabs overflow popup.</summary>
+/// editor, each with its icon, name, modified dot, close button, pin and context menu; plus Next/Previous Tab (a tool
+/// window's tabs or the Terminal's shells while they have the keys), Pin Tab, the close actions, Reopen Closed Tab, and the
+/// hidden tabs overflow popup.</summary>
 public sealed partial class EditorWindow
 {
     private const string TabsGroup = "Editor Tabs";
@@ -45,8 +47,9 @@ public sealed partial class EditorWindow
         EditorTabs.MenuOpening += (_, opening) => FillTabMenu(opening);
         EditorTabs.MaximizeRequested += (_, _) => ToolDock.ToggleHideAll();
 
-        AddTab(A.NextTab, "Next Tab", _ => CycleTab(1), NeedsOpenTab);
-        AddTab(A.PreviousTab, "Previous Tab", _ => CycleTab(-1), NeedsOpenTab);
+        // Run from the terminal too, as its shells are tabs of their own.
+        Actions.Registry.Add(new IdeAction(A.NextTab, "Next Tab", TabsGroup, c => StepTab(c, 1)) { WhyNot = c => WhyNotStepTab(c, NeedsOpenTab), FromTerminal = true });
+        Actions.Registry.Add(new IdeAction(A.PreviousTab, "Previous Tab", TabsGroup, c => StepTab(c, -1)) { WhyNot = c => WhyNotStepTab(c, NeedsOpenTab), FromTerminal = true });
         Actions.Registry.Add(new IdeAction(A.PinTab, "Pin Tab", TabsGroup, _ =>
         {
             if (ShownFile is { } shown)
@@ -127,6 +130,41 @@ public sealed partial class EditorWindow
             OpenSource(next.Path);
             Editor.Focus();
         }
+    }
+
+    /// <summary>Next Tab (1) or Previous Tab (-1): the tabs of what has the keys stepped (<see cref="TabsWithKeys"/>), the
+    /// keys kept in its window, else the editor's.</summary>
+    private void StepTab(ActionContext context, int step)
+    {
+        if (TabsWithKeys(context) is not { } tabs)
+        {
+            CycleTab(step);
+            return;
+        }
+        // What had the keys may have gone with the tab it was on: the window's view takes them again.
+        if (tabs.StepTab(step) && context.ToolWindow is { } tool && FocusManager?.GetFocusedElement() is not Visual { IsEffectivelyVisible: true })
+        {
+            tool.TakeKeys();
+        }
+    }
+
+    private static string? WhyNotStepTab(ActionContext context, Func<ActionContext, string?> editors) => TabsWithKeys(context) is null ? editors(context) : null;
+
+    /// <summary>The tabs of what has the keys: those of the nearest part holding them (the Terminal's shells), else the
+    /// first of the tool window with them, its header's before its view's; null where the editor has them.</summary>
+    public static ToolTabs.ITabbed? TabsWithKeys(ActionContext context)
+    {
+        for (Visual? at = context.Focused as Visual; at is not null; at = at.GetVisualParent())
+        {
+            if (at is ToolTabs.ITabbed tabbed)
+            {
+                return tabbed;
+            }
+        }
+        return context.ToolWindow is { IsBuilt: true } tool
+            ? new[] { tool.HeaderTools, tool.Content }.OfType<Control>().SelectMany(part => part.GetVisualDescendants().Prepend(part)).OfType<ToolTabs.ITabbed>()
+                .FirstOrDefault(tabs => tabs is Visual { IsEffectivelyVisible: true })
+            : null;
     }
 
     /// <summary>Closes a tab, saving unsaved edits first as Passenger does; false if saving failed and the tab stays open.</summary>

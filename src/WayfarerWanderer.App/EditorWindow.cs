@@ -57,6 +57,7 @@ public sealed partial class EditorWindow : Window
         AddQuickDocumentation();
         AddReadAsText();
         AddActiveEditor();
+        AddFrameActions();
         AddFindInFiles();
         AddAccessibility();
         AddToolWindows(new Grid { Children = { EditorWithBar(), Welcome } });

@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/ToolWindows/ToolTabs.cs, MIT (notices/Passenger/LICENSE), with the tab
+// From Passenger 494009d7 src/Passenger.App/ToolWindows/ToolTabs.cs, MIT (notices/Passenger/LICENSE), with the tab
 // made open or closed kept for the windows not yet caught up.
 using Avalonia;
 using Avalonia.Controls;
@@ -16,13 +16,50 @@ namespace WayfarerWanderer.App.Shell.ToolWindows;
 /// which the list makes and its model keeps one open.</summary>
 public static class ToolTabs
 {
-    /// <summary>A tool window's row of tabs, one open: <see cref="ChoiceRow{TKey}"/>'s tabs, each standing for what it opens.</summary>
-    public sealed class Strip<TKey> : ChoiceRow<TKey>
+    /// <summary>Tabs Next Tab and Previous Tab step through, and Close Tool Window Tab closes the one shown of, while what
+    /// holds them has the keys: a tool window's (<see cref="Strip{TKey}"/>), the Terminal's shells.</summary>
+    public interface ITabbed
+    {
+        /// <summary>Shows the tab <paramref name="step"/> places on from the one shown (back for a negative step), round at
+        /// the ends, as a press on it shows it; false where no other tab shows.</summary>
+        bool StepTab(int step);
+
+        /// <summary>Closes the tab shown as its × does; false where it has none.</summary>
+        bool CloseTab();
+    }
+
+    /// <summary>A tool window's row of tabs, one open: <see cref="ChoiceRow{TKey}"/>'s tabs, each standing for what it opens,
+    /// which Next Tab and Previous Tab step through while the window has the keys.</summary>
+    public sealed class Strip<TKey> : ChoiceRow<TKey>, ITabbed
         where TKey : notnull
     {
+        private readonly Dictionary<TKey, Action> closes = [];
+
+        public bool StepTab(int step) => StepChoice(step);
+
+        public bool CloseTab()
+        {
+            if (!HasChoice || !closes.TryGetValue(Choice!, out Action? close))
+            {
+                return false;
+            }
+            close();
+            return true;
+        }
+
         /// <summary>Adds a tab for <paramref name="key"/>, closed, as <see cref="Tab"/> makes it, named <paramref name="name"/>.</summary>
-        public ToggleButton Add(TKey key, object title, Action? close = null, string closeTip = "Close", string? name = null) =>
-            Join(key, Tab(title, close, closeTip), name);
+        public ToggleButton Add(TKey key, object title, Action? close = null, string closeTip = "Close", string? name = null)
+        {
+            if (close is null)
+            {
+                closes.Remove(key);
+            }
+            else
+            {
+                closes[key] = close;
+            }
+            return Join(key, Tab(title, close, closeTip), name);
+        }
     }
 
     /// <summary>A tab open or closed as made, for the windows not yet caught up with v0.4.2 that keep their tabs' choice

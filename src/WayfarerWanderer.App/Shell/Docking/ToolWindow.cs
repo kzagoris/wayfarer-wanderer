@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Docking/ToolWindow.cs, MIT (notices/Passenger/LICENSE): what it serves is
+// From Passenger 494009d7 src/Passenger.App/Docking/ToolWindow.cs, MIT (notices/Passenger/LICENSE): what it serves is
 // asked of DockHost.WhyUnserved, without ToolWindowServes' kinds of .NET project, and with no agents' calls.
 using Avalonia;
 using Avalonia.Controls;
@@ -76,6 +76,7 @@ public sealed class ToolWindow(string id, string title, string icon, Func<Contro
         {
             hadKeys = e.Source as Control;
             hadRow = RowWithKeys.Of(hadKeys);
+            GotKeys?.Invoke(this, EventArgs.Empty);
         }, RoutingStrategies.Bubble, handledEventsToo: true);
 
     /// <summary>Gives its view the keys, as its action does once it shows: back to what in it had them last, still shown (a
@@ -139,6 +140,9 @@ public sealed class ToolWindow(string id, string title, string icon, Func<Contro
 
     /// <summary>Its view was built, as it was first shown or asked for.</summary>
     public event EventHandler? Built;
+
+    /// <summary>Something in its view took the keys.</summary>
+    public event EventHandler? GotKeys;
 
     /// <summary>Controls of its own for its header, after its title (the Explorer's view switch).</summary>
     public Control? HeaderTools
