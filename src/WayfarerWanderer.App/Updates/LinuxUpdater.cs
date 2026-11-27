@@ -1,4 +1,5 @@
-// Adapted from vendored Passenger, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/Updates/LinuxUpdater.cs, MIT (notices/Passenger/LICENSE): only the per-user
+// archive install, Wayfarer's layout.
 using System.Formats.Tar;
 using System.IO.Compression;
 using System.Runtime.InteropServices;

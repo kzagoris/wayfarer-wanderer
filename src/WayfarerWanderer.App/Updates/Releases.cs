@@ -1,4 +1,5 @@
-// Adapted from vendored Passenger, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/Updates/Releases.cs, MIT (notices/Passenger/LICENSE): Wayfarer's feed and
+// asset names.
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;

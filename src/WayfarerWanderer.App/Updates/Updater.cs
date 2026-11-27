@@ -1,4 +1,5 @@
-// Adapted from vendored Passenger, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/Updates/Updater.cs, MIT (notices/Passenger/LICENSE): cut to the updaters
+// Wayfarer ships.
 using System.Diagnostics;
 using Passenger.Core;
 using Velopack.Locators;
@@ -21,6 +22,10 @@ public abstract class Updater
     /// <summary>Why the last <see cref="Install"/> left the copy as it was, for the next start to say; null when it
     /// installed, or had nothing to install.</summary>
     public string? NotInstalled { get; protected set; }
+
+    /// <summary>Why a version that was to install as the last session ended did not, in the installer's own words, read
+    /// off the window's thread at the next start: null where the installer keeps none, or said nothing.</summary>
+    public virtual string? WhyNotInstalled(string version) => null;
 
     /// <summary>Whether this copy leaves a newer release to something else after all (a package manager), found off the
     /// caller's thread before anything is downloaded: null when it installs the release itself.</summary>

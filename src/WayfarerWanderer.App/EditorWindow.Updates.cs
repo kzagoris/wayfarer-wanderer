@@ -96,8 +96,11 @@ public sealed partial class EditorWindow
                 if (File.Exists(receipt))
                 {
                     string expected = await File.ReadAllTextAsync(receipt, cancel);
+                    // Why it did not, in the installer's own words where it kept them (Velopack's log on Windows).
+                    string? why = expected == OwnVersion.Shown || installer is not { } updater ? null
+                        : await Task.Run(() => updater.WhyNotInstalled(expected), cancel);
                     StatusText = expected == OwnVersion.Shown ? $"Updated to version {expected}."
-                        : $"Update to {expected} did not finish. Running version {OwnVersion.Shown}.";
+                        : $"Update to {expected} did not finish{(why is null ? string.Empty : $": {why}")}. Running version {OwnVersion.Shown}.";
                     IdeErrors.Write(StatusText!);
                     File.Delete(receipt);
                 }
