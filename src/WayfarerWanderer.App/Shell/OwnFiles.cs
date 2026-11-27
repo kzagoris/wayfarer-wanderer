@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Containers/ContainerRun.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/Containers/ContainerRun.cs, MIT (notices/Passenger/LICENSE).
 using Passenger.Core;
 
 namespace WayfarerWanderer.App.Shell;
@@ -52,7 +52,7 @@ internal static class OwnFiles
         foreach (FileSystemInfo entry in new DirectoryInfo(folder).EnumerateFileSystemInfos("*", everything))
         {
             UnixFileMode own = entry is DirectoryInfo ? OwnersFolder : OwnersFile;
-            if (!entry.Attributes.HasFlag(FileAttributes.ReparsePoint) && entry.UnixFileMode != own)
+            if (!FileLinks.Is(entry) && entry.UnixFileMode != own)
             {
                 entry.UnixFileMode = own;
             }

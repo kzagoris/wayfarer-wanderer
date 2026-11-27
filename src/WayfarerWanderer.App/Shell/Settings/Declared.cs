@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Settings/Declared.cs, MIT (notices/Passenger/LICENSE): the settings Wayfarer's
+// From Passenger 494009d7 src/Passenger.App/Settings/Declared.cs, MIT (notices/Passenger/LICENSE): the settings Wayfarer's
 // Settings shows, its Code Folding page XML's and JSON's two; the rest cut.
 using Passenger.Core;
 using Passenger.Vcs;

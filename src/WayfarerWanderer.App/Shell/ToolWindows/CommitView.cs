@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/ToolWindows/CommitView.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/ToolWindows/CommitView.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -1260,7 +1260,7 @@ public sealed class CommitView : DockPanel, IOwnKeys
                 {
                     string last = folder.Name[(folder.Name.LastIndexOf('/') + 1)..];
                     folderIcon.Data = Explorer.FileIcons.ForFolder(last, branch.IsExpanded);
-                    folderIcon.Foreground = Explorer.FileIcons.BrushForFolder(last);
+                    folderIcon.ForegroundKey = Explorer.FileIcons.TintForFolder(last);
                 }
                 branchName.Text = folder?.Name ?? ((CommitGroup)branch).Name;
                 branchName.Classes.Set(StyleClasses.Strong, folder is null);

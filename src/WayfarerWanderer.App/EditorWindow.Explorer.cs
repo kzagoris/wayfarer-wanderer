@@ -1,4 +1,4 @@
-// The Explorer's row menu, its keys and its drags, after Passenger 8a1df7e4 src/Passenger.App/MainWindow.ExplorerActions.cs,
+// The Explorer's row menu, its keys and its drags, after Passenger 494009d7 src/Passenger.App/MainWindow.ExplorerActions.cs,
 // MainWindow.Files.cs and MainWindow.FileMoves.cs, MIT (notices/Passenger/LICENSE): the solution, project, NuGet, Docker,
 // Aspire, Godot, nesting, Local History and Git parts cut, Undo kept only for a Delete, and C#'s Class/Interface made
 // Java's and Kotlin's.
@@ -348,7 +348,9 @@ public sealed partial class EditorWindow
     private static Control TypeBadge(string kind)
     {
         string file = kind.StartsWith("Java", StringComparison.Ordinal) ? "A.java" : "A.kt";
-        return new PathIcon { Width = 14, Height = 14, Data = FileIcons.ForFile(file), Foreground = FileIcons.BrushForFile(file) };
+        PathIcon icon = new() { Width = 14, Height = 14, Data = FileIcons.ForFile(file) };
+        icon.Bind(PathIcon.ForegroundProperty, icon.GetResourceObservable(FileIcons.TintForFile(file)));
+        return icon;
     }
 
     // Making and renaming.

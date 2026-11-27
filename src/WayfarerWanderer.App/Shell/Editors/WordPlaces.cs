@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/CSharp/UsageHighlighting.cs, MIT (notices/Passenger/LICENSE): a word's places
+// From Passenger 494009d7 src/Passenger.App/CSharp/UsageHighlighting.cs, MIT (notices/Passenger/LICENSE): a word's places
 // alone, for Wayfarer's one editor; the language server's uses of a symbol and Highlight Usages in File are cut, as
 // Wayfarer asks its Java and Kotlin servers for neither yet.
 using Passenger.Core;

@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.Languages/Language.cs, MIT (notices/Passenger/LICENSE), cut to Wayfarer's languages.
+// From Passenger 494009d7 src/Passenger.Languages/Language.cs, MIT (notices/Passenger/LICENSE), cut to Wayfarer's languages.
 using Passenger.Editor;
 using Passenger.Text;
 
@@ -78,6 +78,10 @@ public sealed class Language
     public static readonly Language PlainText = new("plaintext", "Text", ["*.txt", "*.text", "*.log"]);
 
     public static readonly Language Ignore = new("ignore", "Ignore", [".*ignore", "*.gitignore"], line: "#");
+
+    /// <summary>Git's attributes files, coloured by Passenger's own grammar: a pattern, then its attributes.</summary>
+    public static readonly Language GitAttributes = new("gitattributes", "Git Attributes", [".gitattributes"], line: "#",
+        grammar: new("source.gitattributes", "gitattributes.tmLanguage.json"));
 
     public static readonly Language Java = new("java", "Java", ["*.java"], line: "//", block: ("/*", "*/"),
         grammar: new("source.java", "java.tmLanguage.json"));

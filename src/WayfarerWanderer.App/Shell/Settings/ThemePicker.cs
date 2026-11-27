@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Settings/ThemePicker.cs, MIT (notices/Passenger/LICENSE).
+// From Passenger 494009d7 src/Passenger.App/Settings/ThemePicker.cs, MIT (notices/Passenger/LICENSE).
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -32,7 +32,8 @@ public sealed class ThemeSetting(bool code, Func<AppSettings, SourcedTheme?> get
 /// read it lists what is kept from it; opened, it reads each source not read yet in this process, saying which it reads and
 /// why one could not be. A choice from a source is kept as it is chosen, so the preview and every later start draw it
 /// without the source; Add from File reads a file of the person's (a Passenger theme, a VS Code theme's JSON or a .vsix),
-/// says why one is refused and changes nothing then.</summary>
+/// says why one is refused and changes nothing then. Its list is made from what was read off the window's thread, once for
+/// each read that lands however many land in a turn.</summary>
 public sealed class ThemePicker : StackPanel
 {
     private readonly ThemeSetting setting;
@@ -42,6 +43,12 @@ public sealed class ThemePicker : StackPanel
     private readonly TextBlock problems = new() { Classes = { StyleClasses.Error }, TextWrapping = TextWrapping.Wrap, MaxWidth = OptionRow.EditorWidth, HorizontalAlignment = HorizontalAlignment.Left };
     private bool filling;
     private string? said;
+
+    /// <summary>The listing's version (<see cref="ThemeListing.Version"/>) the list was last made at.</summary>
+    private int filledAt = -1;
+
+    /// <summary>Whether the list is to be made again once the turn is over.</summary>
+    private bool fillAsked;
 
     public ThemePicker(ThemeSetting setting, Func<AppSettings> working, Action<Func<AppSettings, AppSettings>> change)
     {
@@ -60,7 +67,11 @@ public sealed class ThemePicker : StackPanel
                 source.Text = choice.Source;
             });
         });
-        Box.DropDownOpened += (_, _) => ThemeListing.Look(Sources());
+        Box.DropDownOpened += (_, _) =>
+        {
+            ThemeListing.Look(Sources());
+            LookKept();
+        };
         Box.SelectionChanged += (_, _) =>
         {
             if (!filling && Box.SelectedItem is Choice choice)
@@ -78,10 +89,14 @@ public sealed class ThemePicker : StackPanel
         AttachedToVisualTree += (_, _) =>
         {
             ThemeListing.Changed += SourcesRead;
-            Fill();
+            if (filledAt != ThemeListing.Version)
+            {
+                FillSoon();
+            }
         };
         DetachedFromVisualTree += (_, _) => ThemeListing.Changed -= SourcesRead;
         Fill();
+        LookKept();
     }
 
     /// <summary>The drop-down.</summary>
@@ -126,6 +141,7 @@ public sealed class ThemePicker : StackPanel
             return why;
         }
         Themes.Reload();
+        await ThemeListing.LookKeptAsync([ThemeSource.Added]);
         Say(problems.Count == 0 ? null : string.Join("\n", problems));
         change(s => setting.Set(s, new SourcedTheme(ThemeSource.Added.Name, first)));
         Fill();
@@ -251,6 +267,13 @@ public sealed class ThemePicker : StackPanel
     private IEnumerable<ThemeSource> Sources() =>
         [ThemeSource.Repository, .. working().ThemeSources.Select(s => ThemeSource.Of(s, out _)).OfType<ThemeSource>()];
 
+    /// <summary>The sources a theme may be kept from: those listed, the files added and Open VSX.</summary>
+    private IEnumerable<ThemeSource> KeptSources() => Sources().Append(ThemeSource.Added).Append(ThemeSource.OpenVsx);
+
+    /// <summary>What is kept from each source looked at again off the window's thread, the list made again as it lands where
+    /// anything came, went or changed.</summary>
+    private void LookKept() => IdeErrors.Observe(ThemeListing.LookKeptAsync(KeptSources()));
+
     private async Task ChooseAsync(Choice choice)
     {
         if (choice is { Value: { } theme, Listed: { Bytes: not null } listed } && theme.From is { } source && !KeptThemes.Holds(source, setting.Code, theme.Name))
@@ -268,10 +291,29 @@ public sealed class ThemePicker : StackPanel
         Say(null);
     }
 
-    /// <summary>The list made again, as the sources listed changed.</summary>
-    public void Refill() => Fill();
+    /// <summary>The list made again, as the sources listed changed, and what is kept from them looked at again.</summary>
+    public void Refill()
+    {
+        Fill();
+        LookKept();
+    }
 
-    private void SourcesRead(object? sender, EventArgs args) => Fill();
+    private void SourcesRead(object? sender, EventArgs args) => FillSoon();
+
+    /// <summary>The list made again once the turn is over, however many reads land in it.</summary>
+    private void FillSoon()
+    {
+        if (fillAsked)
+        {
+            return;
+        }
+        fillAsked = true;
+        UiThread.Post(() =>
+        {
+            fillAsked = false;
+            Fill();
+        });
+    }
 
     private void Say(string? why)
     {
@@ -282,6 +324,7 @@ public sealed class ThemePicker : StackPanel
     /// <summary>The list as the sources stand: each read one's, else what is kept from it, the chosen one always.</summary>
     private void Fill()
     {
+        filledAt = ThemeListing.Version;
         bool code = setting.Code;
         SourcedTheme? chosen = setting.Get(working());
         List<Choice> choices = [new(null, code ? "Same as theme" : Themes.OwnName, string.Empty, null)];
@@ -289,7 +332,7 @@ public sealed class ThemePicker : StackPanel
         List<string> underWay = [];
         SourceRead builtIn = BuiltInThemes.Listed(ThemeResources.Kinds);
         Add(ThemeSource.BuiltIn, builtIn.Listed);
-        foreach (ThemeSource source in Sources().Append(ThemeSource.Added).Append(ThemeSource.OpenVsx))
+        foreach (ThemeSource source in KeptSources())
         {
             if (ThemeListing.IsReading(source))
             {
@@ -311,7 +354,9 @@ public sealed class ThemePicker : StackPanel
         }
         if (chosen is not null && !choices.Any(c => c.Value == chosen))
         {
-            choices.Add(new(chosen, chosen.Name, $"{chosen.From?.Shown ?? chosen.Source}, not kept yet", null));
+            // Not said to be unkept before what is kept from its source was read.
+            bool unkept = chosen.From is not { } from || from == ThemeSource.BuiltIn || ThemeListing.KnowsKept(from);
+            choices.Add(new(chosen, chosen.Name, unkept ? $"{chosen.From?.Shown ?? chosen.Source}, not kept yet" : chosen.From!.Shown, null));
         }
         filling = true;
         Box.ItemsSource = choices;

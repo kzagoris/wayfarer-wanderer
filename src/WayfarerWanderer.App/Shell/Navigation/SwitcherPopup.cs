@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Navigation/SwitcherPopup.cs, MIT (notices/Passenger/LICENSE): a file's row
+// From Passenger 494009d7 src/Passenger.App/Navigation/SwitcherPopup.cs, MIT (notices/Passenger/LICENSE): a file's row
 // names its path rather than its tab (Wayfarer's one editor shows the files open in turn), and nothing is told a screen
 // reader (Wayfarer has no announcer yet).
 using Avalonia;
@@ -19,7 +19,7 @@ public sealed record SwitcherRow(string Name, string After, string? Path, ToolWi
 {
     public Geometry? Icon => Path is { } file ? FileIcons.ForFile(file) : null;
 
-    public IBrush? IconBrush => Path is { } file ? FileIcons.BrushForFile(file) : null;
+    public string? IconTint => Path is { } file ? FileIcons.TintForFile(file) : null;
 
     /// <summary>The theme's key of a tool window's icon.</summary>
     public string? IconKey => Window?.Icon;
@@ -61,7 +61,7 @@ public sealed class SwitcherPopup : SearchPopup<SwitcherRow>, IOwnKeys
     {
         icon.Data = shown.Icon;
         icon.DataKey = shown.IconKey;
-        icon.Foreground = shown.IconBrush;
+        icon.ForegroundKey = shown.IconTint;
         name.Text = shown.Name;
         after.Text = shown.After;
     });

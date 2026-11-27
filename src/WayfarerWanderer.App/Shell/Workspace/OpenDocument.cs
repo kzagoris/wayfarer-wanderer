@@ -1,4 +1,4 @@
-// What Git needs of Passenger 8a1df7e4 src/Passenger.App/Workspace/OpenDocument.cs, MIT (notices/Passenger/LICENSE): a file
+// What Git needs of Passenger 494009d7 src/Passenger.App/Workspace/OpenDocument.cs, MIT (notices/Passenger/LICENSE): a file
 // open in the editor, its text, how it was read, its change bars and blame, and taking what is on disk again.
 using System.Text;
 using Passenger.Editor;

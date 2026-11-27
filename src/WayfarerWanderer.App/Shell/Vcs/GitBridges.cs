@@ -1,5 +1,5 @@
-// From Passenger 8a1df7e4 src/Passenger.App/ToolWindows/ListMenus.cs, ToolButtons.cs, Refusals.cs, DialogFooter.cs,
-// BrowseRow.cs and Explorer/FileIcons.cs, MIT (notices/Passenger/LICENSE): only the members the Git views call.
+// From Passenger 494009d7 src/Passenger.App/ToolWindows/ListMenus.cs, ToolButtons.cs, Refusals.cs, DialogFooter.cs and
+// BrowseRow.cs, MIT (notices/Passenger/LICENSE): only the members the Git views call.
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -159,23 +159,4 @@ internal static class GitBridges
         /// <summary>The Browse… button.</summary>
         public Button Browse => row.Children.OfType<Button>().Single();
     }
-
-    extension(FileIcons)
-    {
-        /// <summary>A folder's icon by its name, as the Explorer draws a folder on disk.</summary>
-        public static Geometry ForFolder(string name, bool open) => FileIconSet.ForFolder(name) is { } look
-            ? Find<Geometry>($"FileIcon.{look.Shape}")
-            : Find<Geometry>(open ? IconKeys.FolderOpen : IconKeys.Explorer);
-
-        /// <summary>A folder's colour by its name.</summary>
-        public static IBrush BrushForFolder(string name) => FileIconSet.ForFolder(name) is { Colour: { } colour }
-            ? Find<IBrush>($"Passenger.FileIcon.{colour}")
-            : Find<IBrush>(TokenKeys.File_Folder);
-    }
-
-    private static T Find<T>(string key)
-        where T : class =>
-        Application.Current is { } app && app.TryFindResource(key, app.ActualThemeVariant, out object? value) && value is T found
-            ? found
-            : throw new InvalidOperationException($"The theme has no {key}.");
 }

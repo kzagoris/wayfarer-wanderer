@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Settings/SettingsDialog.cs, MIT (notices/Passenger/LICENSE): its Appearance,
+// From Passenger 494009d7 src/Passenger.App/Settings/SettingsDialog.cs, MIT (notices/Passenger/LICENSE): its Appearance,
 // System Settings, Trusted Folders, Editor, Code Folding, Terminal, Version Control, Keymap and Diagnostics pages; the
 // .NET, MCP, template, code style and tool pages cut.
 using Avalonia;

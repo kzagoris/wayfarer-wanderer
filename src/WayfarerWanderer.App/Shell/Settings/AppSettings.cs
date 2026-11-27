@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Settings/AppSettings.cs, MIT (notices/Passenger/LICENSE): the .NET, web, Godot,
+// From Passenger 494009d7 src/Passenger.App/Settings/AppSettings.cs, MIT (notices/Passenger/LICENSE): the .NET, web, Godot,
 // agent and Discord settings cut, with C#'s FormatOnType, WhenDebuggerStops, AskBeforeRerun and the Browser (and its
 // former debugBrowser name) that came with 0.4.2.
 using System.Text.Json.Nodes;

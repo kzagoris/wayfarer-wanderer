@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Editors/NavigationBar.cs, MIT (notices/Passenger/LICENSE): over Wayfarer's one
+// From Passenger 494009d7 src/Passenger.App/Editors/NavigationBar.cs, MIT (notices/Passenger/LICENSE): over Wayfarer's one
 // editor rather than each group's; its outline is the one the status bar's path asks the Java and Kotlin servers for
 // (EditorWindow.Breadcrumbs) rather than a file's own parse; without a screen reader's words, which Wayfarer has no
 // announcer for yet.

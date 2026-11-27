@@ -1,4 +1,4 @@
-// From Passenger 8a1df7e4 src/Passenger.App/Refusals.cs, MIT (notices/Passenger/LICENSE): the refusals of what Wayfarer
+// From Passenger 494009d7 src/Passenger.App/Refusals.cs, MIT (notices/Passenger/LICENSE): the refusals of what Wayfarer
 // has (Git's views and commands, the search, the editor's files, the tool windows, the Welcome screen's list); .NET's,
 // Godot's, Aspire's, the debugger's, the agents' and the other refusals of what Wayfarer cut, cut with them.
 using System.Globalization;
