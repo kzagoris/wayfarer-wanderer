@@ -1,11 +1,11 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<TestRun id="c9204929-feb9-4eb4-9c69-811bb5bb1e2c" name="@omarchy 2026-11-18 16:34:04" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+<TestRun id="c9204929-feb9-4eb4-9c69-811bb5bb1e2c" name="@workstation2026-11-18 16:34:04" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
   <Times creation="2026-11-18T16:34:04.1505611+02:00" queuing="2026-11-18T16:34:04.1505611+02:00" start="2026-11-18T16:34:01.2162952+02:00" finish="2026-11-18T16:34:04.1543184+02:00" />
   <TestSettings name="default" id="b0e561e3-a65b-4a8e-934b-aa9834838357">
-    <Deployment runDeploymentRoot="_omarchy_2026-11-18_16_34_04" />
+    <Deployment runDeploymentRoot="_workstation_2026-11-18_16_34_04" />
   </TestSettings>
   <Results>
-    <UnitTestResult executionId="06514df8-0686-4715-ab63-705304190df3" testId="bde9c02e-3a7d-3d38-c13c-56b707792406" testName="WayfarerWanderer.Tests.EditorPinUpgradeTests.BarRemembersRequestedColumnOnNextLine" computerName="omarchy" duration="00:00:00.9577217" startTime="2026-11-18T16:34:03.0732005+02:00" endTime="2026-11-18T16:34:04.0406456+02:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="06514df8-0686-4715-ab63-705304190df3" />
+    <UnitTestResult executionId="06514df8-0686-4715-ab63-705304190df3" testId="bde9c02e-3a7d-3d38-c13c-56b707792406" testName="WayfarerWanderer.Tests.EditorPinUpgradeTests.BarRemembersRequestedColumnOnNextLine" computerName="workstation" duration="00:00:00.9577217" startTime="2026-11-18T16:34:03.0732005+02:00" endTime="2026-11-18T16:34:04.0406456+02:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="06514df8-0686-4715-ab63-705304190df3" />
   </Results>
   <TestDefinitions>
     <UnitTest name="WayfarerWanderer.Tests.EditorPinUpgradeTests.BarRemembersRequestedColumnOnNextLine" storage="/var/tmp/wayfarer-m1.mk1ks3sl/wayfarer/artifacts/bin/wayfarerwanderer.tests/debug/wayfarerwanderer.tests.dll" id="bde9c02e-3a7d-3d38-c13c-56b707792406">

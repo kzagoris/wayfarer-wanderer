@@ -1,13 +1,13 @@
 # Milestone 2 handoff
 
-Start with the `milestone-1` branch of Wayfarer Wanderer. The verified app and test baseline is `8b31399`. The gitlink at `vendor/passenger` selects `2044e49b52742eea87acbf6a5901a108d2778719`. The existing workstation worktree is `/home/kzagoris/Projects/wayfarer-wanderer/.worktrees/milestone-1`.
+Start with the `milestone-1` branch of Wayfarer Wanderer. The verified app and test baseline is `8b31399`. The gitlink at `vendor/passenger` selects `2044e49b52742eea87acbf6a5901a108d2778719`. The existing workstation worktree is `~/Projects/wayfarer-wanderer/.worktrees/milestone-1`.
 
 ## Establish the baseline
 
 Read the [Milestone 1 verification record](../validation/milestone-1/README.md), the [product specification](../initial-spec.md), and tasks 4–6 of the [implementation plan](../superpowers/plans/2026-11-18-wayfarer-wanderer-implementation.md). The [README](../../README.md) gives the locked Debug build and self-contained publish commands. These commands create a fresh checkout of the local branch on this workstation.
 
 ```sh
-git clone --branch milestone-1 --recurse-submodules /home/kzagoris/Projects/wayfarer-wanderer wayfarer-m2
+git clone --branch milestone-1 --recurse-submodules ~/Projects/wayfarer-wanderer wayfarer-m2
 cd wayfarer-m2
 git switch -c milestone-2
 export PATH="$(mise where dotnet@11.0.100):$PATH"

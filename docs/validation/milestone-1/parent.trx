@@ -1,11 +1,11 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<TestRun id="dd7a8d70-3e5e-4c52-8d9f-356cc627b6e5" name="@omarchy 2026-11-18 16:33:04" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+<TestRun id="dd7a8d70-3e5e-4c52-8d9f-356cc627b6e5" name="@workstation2026-11-18 16:33:04" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
   <Times creation="2026-11-18T16:33:04.0026690+02:00" queuing="2026-11-18T16:33:04.0026690+02:00" start="2026-11-18T16:33:01.4902381+02:00" finish="2026-11-18T16:33:04.0085881+02:00" />
   <TestSettings name="default" id="63f7a135-c3cc-4410-8255-c7e3b111bdc2">
-    <Deployment runDeploymentRoot="_omarchy_2026-11-18_16_33_04" />
+    <Deployment runDeploymentRoot="_workstation_2026-11-18_16_33_04" />
   </TestSettings>
   <Results>
-    <UnitTestResult executionId="eece2e4d-decc-473a-b236-e6abc9d23548" testId="bde9c02e-3a7d-3d38-c13c-56b707792406" testName="WayfarerWanderer.Tests.EditorPinUpgradeTests.BarRemembersRequestedColumnOnNextLine" computerName="omarchy" duration="00:00:00.9998032" startTime="2026-11-18T16:33:02.8185606+02:00" endTime="2026-11-18T16:33:03.8420739+02:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="eece2e4d-decc-473a-b236-e6abc9d23548">
+    <UnitTestResult executionId="eece2e4d-decc-473a-b236-e6abc9d23548" testId="bde9c02e-3a7d-3d38-c13c-56b707792406" testName="WayfarerWanderer.Tests.EditorPinUpgradeTests.BarRemembersRequestedColumnOnNextLine" computerName="workstation" duration="00:00:00.9998032" startTime="2026-11-18T16:33:02.8185606+02:00" endTime="2026-11-18T16:33:03.8420739+02:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="eece2e4d-decc-473a-b236-e6abc9d23548">
       <Output>
         <ErrorInfo>
           <Message>Assert.Equal() Failure: Values differ
@@ -49,7 +49,7 @@ Actual:   TextPosition { Line = 1, Column = 1 }</Message>
 </StdOut>
     </Output>
     <RunInfos>
-      <RunInfo computerName="omarchy" outcome="Error" timestamp="2026-11-18T16:33:03.8522578+02:00">
+      <RunInfo computerName="workstation" outcome="Error" timestamp="2026-11-18T16:33:03.8522578+02:00">
         <Text>[xUnit.net 00:00:02.03]     WayfarerWanderer.Tests.EditorPinUpgradeTests.BarRemembersRequestedColumnOnNextLine [FAIL]</Text>
       </RunInfo>
     </RunInfos>
