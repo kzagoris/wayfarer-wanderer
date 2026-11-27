@@ -9,6 +9,8 @@ else upstream has (its tests, site, docs, scripts) is never copied.
   update [REF]  bring the copy from the recorded commit to REF (default: upstream main), three-way merging upstream's
                 changes into Wayfarer's; conflicting files are left with conflict markers to resolve by hand
   prune         delete files of the recorded commit that the keep rules no longer keep
+  fill          copy in files of the recorded commit that the keep rules keep but the copy lacks (after adding a
+                project to the keep rules; update only copies what upstream changed)
   copies        list Wayfarer's hand-copied files whose Passenger originals changed upstream since they were copied
                 (--to REF; default: the recorded commit); --diff FILE shows upstream's change to FILE's originals,
                 --restamp FILE marks FILE as ported to REF
@@ -257,6 +259,20 @@ def prune(args):
     if not args.dry_run:
         prune_empty()
     print(f"{'Would delete' if args.dry_run else 'Deleted'} {len(gone)} file(s) the keep rules do not keep.")
+
+
+def fill(args):
+    manifest = load()
+    ensure_cache(manifest, fetch=False)
+    missing = {p: b for p, b in tree(manifest["commit"], manifest).items() if not (COPY / p).is_file()}
+    for path, blob_id in missing.items():
+        print(f"  {path}")
+        if not args.dry_run:
+            target = COPY / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(blob(blob_id))
+    print(f"{'Would copy' if args.dry_run else 'Copied'} {len(missing)} kept file(s) the copy lacked, "
+          f"as upstream {manifest['commit'][:12]} has them.")
 
 
 def stamped_files():
@@ -513,6 +529,9 @@ def main():
     prune_parser = commands.add_parser("prune", help="delete files the keep rules do not keep")
     prune_parser.add_argument("--dry-run", action="store_true")
     prune_parser.set_defaults(run=prune)
+    fill_parser = commands.add_parser("fill", help="copy in kept files the copy lacks")
+    fill_parser.add_argument("--dry-run", action="store_true")
+    fill_parser.set_defaults(run=fill)
     copies_parser = commands.add_parser("copies", help="list Wayfarer's hand-copied files behind their originals")
     copies_parser.add_argument("--to", metavar="REF", help="upstream branch, tag or commit (default: the recorded commit)")
     copies_mode = copies_parser.add_mutually_exclusive_group()

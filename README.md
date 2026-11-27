@@ -27,7 +27,10 @@ python3 tools/check-trx.py artifacts/test-results/editorhost.trx \
 
 `vendor/passenger` is an ordinary folder of Wayfarer's history, not a
 submodule. It keeps only the parts of
-[Passenger](https://github.com/Zaneris/passenger) that Wayfarer's build uses.
+[Passenger](https://github.com/Zaneris/passenger) that Wayfarer's build uses:
+the Core, Text, Editor, Dap, Terminal, Vcs and Analyzers projects, the four
+theme files Editor reads from Passenger.App, the TextMate grammars Wayfarer
+embeds, and the licences and root build files.
 [`vendor/passenger.json`](vendor/passenger.json) names the upstream commit it
 was copied from and the paths it keeps. Nothing is pushed back to Passenger.
 Wayfarer's own changes to the copy are edited and committed in place.
@@ -44,7 +47,8 @@ are. Files Wayfarer changed are three-way merged, and any conflict is left with
 markers and listed. Afterwards run
 `dotnet restore WayfarerWanderer.slnx --force-evaluate --configfile vendor/passenger/nuget.config`
 to refresh the lock files, then build, test and commit. After editing the keep
-rules, `prune` deletes what they no longer keep.
+rules, `prune` deletes what they no longer keep and `fill` copies in what they
+now keep, such as a Passenger project Wayfarer starts to reference.
 
 ### Shell copies
 

@@ -12,15 +12,20 @@
     "THIRD_PARTY_NOTICES.md",
     "global.json",
     "nuget.config",
-    "docs/release-notes/",
-    "src/",
-    "tools/Passenger.NodePackages/",
-    "tools/Passenger.Notices/",
-    "tools/Passenger.RoslynPatch/",
-    "tools/Shared/"
+    "src/BannedSymbols.txt",
+    "src/Passenger.Analyzers/",
+    "src/Passenger.Core/",
+    "src/Passenger.Dap/",
+    "src/Passenger.Editor/",
+    "src/Passenger.Terminal/",
+    "src/Passenger.Text/",
+    "src/Passenger.Vcs/",
+    "src/Passenger.App/Theme/ControlThemes.axaml",
+    "src/Passenger.App/Theme/Icons.axaml",
+    "src/Passenger.App/Theme/Shell.axaml",
+    "src/Passenger.App/Theme/Tokens.axaml",
+    "src/Passenger.Languages/TextMate/Grammars/",
+    "tools/Passenger.Notices/Licenses/"
   ],
-  "drop": [
-    "src/Passenger.ContainerTools/",
-    "src/Passenger.DebugRelay/"
-  ]
+  "drop": []
 }
